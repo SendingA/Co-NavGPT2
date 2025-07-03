@@ -6,5 +6,5 @@ envs/
 mobile_sam.pt
 yolov8l-world.pt
 .history
-exp*
+exp_*
 human.py
