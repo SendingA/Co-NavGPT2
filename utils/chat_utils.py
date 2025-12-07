@@ -12,6 +12,7 @@ import ast
 import cv2
 
 import utils.visualization as vu
+import os
 
 client = OpenAI()
 
@@ -26,6 +27,14 @@ def transform_rgb_bgr(image):
 
 
 args = get_args()
+
+def has_display() -> bool:
+    """Return True when a display is available for OpenCV GUI windows.
+
+    On Unix-like systems this checks the DISPLAY env var. On Windows
+    we assume a display is available.
+    """
+    return os.name == 'nt' or bool(os.environ.get('DISPLAY'))
 
 def get_all_candidate_maps(target_edge_map, top_view_map, pose):
     # show paths in map
@@ -45,8 +54,9 @@ def get_all_candidate_maps(target_edge_map, top_view_map, pose):
         
         opencv_image = np.array(map_with_pose)
         opencv_image = cv2.cvtColor(opencv_image, cv2.COLOR_RGB2BGR)
-        cv2.imshow("candidate_{}".format(i), opencv_image)
-        cv2.waitKey(1)
+        if args.visualize and has_display():
+            cv2.imshow("candidate_{}".format(i), opencv_image)
+            cv2.waitKey(1)
         
     return candidate_map_list
 
@@ -91,8 +101,9 @@ def get_all_candidate_full_maps(image_id, target_edge_map, top_view_map, pose):
         
         map_with_pose = vu.write_number_full(combined_image, pose, i)
         
-        cv2.imshow("map_with_pose_"+str(i), transform_rgb_bgr(np.asarray(map_with_pose)))
-        cv2.waitKey(1)
+        if args.visualize and has_display():
+            cv2.imshow("map_with_pose_"+str(i), transform_rgb_bgr(np.asarray(map_with_pose)))
+            cv2.waitKey(1)
         buffered = BytesIO()
         map_with_pose.save(buffered, format="JPEG")
         candidate_map_list.append(buffered)
