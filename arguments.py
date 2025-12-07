@@ -30,7 +30,7 @@ def get_args():
     parser.add_argument('-fh', '--frame_height', type=int, default=480,
                         help='Frame height (default:120)')
     parser.add_argument("--task_config", type=str,
-                        default="objectnav_hm3d.yaml",
+                        default="multi_objectnav_hm3d.yaml",
                         help="path to config yaml containing task information")
     parser.add_argument('--hfov', type=float, default=79.0,
                         help="horizontal field of view in degrees")
