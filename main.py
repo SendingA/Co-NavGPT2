@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.functio
 import threading
 from multiprocessing import Process, Queue
 import multiprocessing as mp
-
+·
 # Gui
 import open3d.visualization.gui as gui
 
@@ -40,7 +40,152 @@ from utils.vis_gui import ReconstructionWindow
 
 def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
+
+# def simulate_fire(observations, fire_mask_prev=None, spread_prob=0.3):
+#     """
+#     给 observations 添加火焰和蔓延效果，同时更新 RGB 和 Depth。
     
+#     Args:
+#         observations: list of dict，每个 dict 包含 'rgb' 和 'depth'
+#         fire_mask_prev: 上一步火焰位置 mask，shape = (H, W)
+#         spread_prob: 火焰蔓延概率
+    
+#     Returns:
+#         new_fire_mask: 当前火焰 mask
+#         observations: 修改后的 RGB 和 Depth
+#     """
+#     H, W, _ = observations[0]["rgb"].shape
+    
+#     # 初始化火焰 mask
+#     if fire_mask_prev is None:
+#         fire_mask = np.zeros((H, W), dtype=bool)
+#         # 随机点火源，10 个点
+#         for _ in range(10):
+#             x = np.random.randint(0, W)
+#             y = np.random.randint(0, H)
+#             fire_mask[y, x] = True
+#     else:
+#         fire_mask = fire_mask_prev.copy()
+    
+#     # 火焰蔓延：卷积扩散 + 随机概率
+#     kernel = np.ones((3, 3), dtype=np.uint8)
+#     dilated = cv2.dilate(fire_mask.astype(np.uint8), kernel)
+#     new_cells = (dilated.astype(bool)) & (~fire_mask)
+    
+#     random_mask = np.random.rand(H, W) < spread_prob
+#     fire_mask |= new_cells & random_mask
+    
+#     # RGB 渲染火焰
+#     fire_color = np.array([255, 100, 0], dtype=np.uint8)  # 火焰橙色
+#     for obs in observations:
+#         rgb = obs["rgb"]
+#         rgb[fire_mask] = np.clip(rgb[fire_mask] + fire_color, 0, 255)
+#         # Depth 前景遮挡
+#         depth = obs["depth"]
+#         depth[fire_mask] = 0
+#         obs["rgb"] = rgb
+#         obs["depth"] = depth
+    
+#     return fire_mask, observations
+
+def simulate_fire_with_blindspots(observations, fire_mask_prev=None, spread_prob=0.3, blind_prob=0.7):
+    """
+    火灾蔓延 + 感知盲区（局部深度/RGB遮挡）
+    
+    blind_prob: 机器人在火焰区域丢失感知的概率
+    """
+    H, W, _ = observations[0]["rgb"].shape
+    
+    # 初始化火焰 mask
+    if fire_mask_prev is None:
+        fire_mask = np.zeros((H, W), dtype=bool)
+        for _ in range(10):
+            x = np.random.randint(0, W)
+            y = np.random.randint(0, H)
+            fire_mask[y, x] = True
+    else:
+        fire_mask = fire_mask_prev.copy()
+    
+    # 火焰蔓延
+    kernel = np.ones((3,3), dtype=np.uint8)
+    dilated = cv2.dilate(fire_mask.astype(np.uint8), kernel)
+    new_cells = (dilated.astype(bool)) & (~fire_mask)
+    random_mask = np.random.rand(H, W) < spread_prob
+    fire_mask |= new_cells & random_mask
+
+    # 感知盲区：部分 fire_mask 区域被随机遮挡
+    blind_mask = (np.random.rand(H, W) < blind_prob) & fire_mask
+
+    # 修改 observations
+    for obs in observations:
+        rgb = obs["rgb"].copy()
+        depth = obs["depth"].copy()
+        # RGB 遮挡: 用黑色覆盖
+        rgb[blind_mask] = 0
+        # Depth 遮挡: 用 0 覆盖
+        depth[blind_mask] = 0
+        obs["rgb"] = rgb
+        obs["depth"] = depth
+
+    return fire_mask, observations
+
+def simulate_fire_with_blindspots_and_visual(observations, fire_mask_prev=None, spread_prob=0.3, blind_prob=0.7):
+    """
+    火灾蔓延 + 动态盲区 + 视觉干扰
+    blind_prob: 火焰区域丢失感知的概率
+    spread_prob: 火焰蔓延概率
+    """
+    H, W, _ = observations[0]["rgb"].shape
+    
+    # 初始化火焰 mask
+    if fire_mask_prev is None:
+        fire_mask = np.zeros((H, W), dtype=bool)
+        for _ in range(10):
+            x = np.random.randint(0, W)
+            y = np.random.randint(0, H)
+            fire_mask[y, x] = True
+    else:
+        fire_mask = fire_mask_prev.copy()
+    
+    # 火焰蔓延
+    kernel = np.ones((3,3), dtype=np.uint8)
+    dilated = cv2.dilate(fire_mask.astype(np.uint8), kernel)
+    new_cells = (dilated.astype(bool)) & (~fire_mask)
+    random_mask = np.random.rand(H, W) < spread_prob
+    fire_mask |= new_cells & random_mask
+
+    # 感知盲区：部分 fire_mask 区域被随机遮挡
+    blind_mask = (np.random.rand(H, W) < blind_prob) & fire_mask
+
+    # 修改 observations
+    for obs in observations:
+        rgb = obs["rgb"].copy()
+        depth = obs["depth"].copy()
+        
+        # 1. 遮挡 RGB / Depth
+        rgb[blind_mask] = 0
+        depth[blind_mask] = 0
+        
+        # 2. 火焰视觉干扰（亮度波动 + 红色增强 + 高斯噪声）
+        flicker_mask = fire_mask & (~blind_mask)  # 可见火焰区域
+        noise = np.random.normal(0, 10, rgb.shape).astype(np.uint8)
+        rgb[flicker_mask] = np.clip(rgb[flicker_mask] + noise[flicker_mask], 0, 255)
+        
+        # 红色增强
+        rgb[flicker_mask, 0] = np.clip(rgb[flicker_mask, 0]*1.2, 0, 255)  # R
+        rgb[flicker_mask, 1] = np.clip(rgb[flicker_mask, 1]*0.7, 0, 255)  # G
+        rgb[flicker_mask, 2] = np.clip(rgb[flicker_mask, 2]*0.7, 0, 255)  # B
+        
+        # 3. 随机高斯模糊模拟烟雾
+        if np.random.rand() < 0.3:
+            rgb = cv2.GaussianBlur(rgb, (3,3), 0)
+        
+        obs["rgb"] = rgb
+        obs["depth"] = depth
+
+    return fire_mask, observations
+
+
 def main(args, send_queue, receive_queue):
 
     # ------------------------------------------------------------------
@@ -116,6 +261,22 @@ def main(args, send_queue, receive_queue):
             
         count_step = 0
         point_sum = o3d.geometry.PointCloud()
+
+        # # 全局保持火焰 mask
+        # if 'fire_mask' not in locals():
+        #     fire_mask = None
+
+        # 1.# 模拟火焰 + 蔓延
+        # fire_mask, observations = simulate_fire(observations, fire_mask_prev=fire_mask, spread_prob=0.3)
+        
+        # 2.# 更新火灾 + 盲区
+        # fire_mask, observations = simulate_fire_with_blindspots(
+        #     observations, fire_mask_prev=fire_mask, spread_prob=0.3, blind_prob=0.7
+        # )
+        # 3.# 更新火灾、动态盲区和视觉干扰
+        # fire_mask, observations = simulate_fire_with_blindspots_and_visual(
+        #     observations, fire_mask_prev=fire_mask, spread_prob=0.3, blind_prob=0.7
+        # )
         while not env.episode_over:
             start = time.time()
             visited_vis = []
