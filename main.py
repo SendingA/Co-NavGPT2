@@ -32,7 +32,7 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.functio
 import threading
 from multiprocessing import Process, Queue
 import multiprocessing as mp
-·
+
 # Gui
 import open3d.visualization.gui as gui
 
