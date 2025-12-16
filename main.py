@@ -263,8 +263,8 @@ def main(args, send_queue, receive_queue):
         point_sum = o3d.geometry.PointCloud()
 
         # # 全局保持火焰 mask
-        # if 'fire_mask' not in locals():
-        #     fire_mask = None
+        if 'fire_mask' not in locals():
+            fire_mask = None
 
         # 1.# 模拟火焰 + 蔓延
         # fire_mask, observations = simulate_fire(observations, fire_mask_prev=fire_mask, spread_prob=0.3)
@@ -274,9 +274,9 @@ def main(args, send_queue, receive_queue):
         #     observations, fire_mask_prev=fire_mask, spread_prob=0.3, blind_prob=0.7
         # )
         # 3.# 更新火灾、动态盲区和视觉干扰
-        # fire_mask, observations = simulate_fire_with_blindspots_and_visual(
-        #     observations, fire_mask_prev=fire_mask, spread_prob=0.3, blind_prob=0.7
-        # )
+        fire_mask, observations = simulate_fire_with_blindspots_and_visual(
+            observations, fire_mask_prev=fire_mask, spread_prob=0.3, blind_prob=0.7
+        )
         while not env.episode_over:
             start = time.time()
             visited_vis = []
