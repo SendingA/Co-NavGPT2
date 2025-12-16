@@ -10,7 +10,7 @@ from PIL import Image
 import utils.pose as pu
 from utils.fmm_planner import FMMPlanner
 
-
+# 从深度图 + RGB 图 + 相机内参构建点云
 def build_full_scene_pcd(depth, image, cam_K):
     height, width = depth.shape
 
@@ -64,7 +64,7 @@ def build_full_scene_pcd(depth, image, cam_K):
     camera_object_pcd = camera_object_pcd.select_by_index(non_outlier_idx)
     return camera_object_pcd
 
-
+# 不仅检测前沿（frontier），还利用 FMM 距离规划器对每个前沿区域的中心点进行“可达性评分”，最终选择距离当前机器人位置最近的前沿作为探索目标。
 def detect_frontier(explored_map, obstacle_map, current_pose, threshold_point):
     # ------------------------------------------------------------------
     ##### Get the frontier map and score
@@ -155,6 +155,15 @@ class Global_Map_Proc():
         self.top_view_map.fill(0)
         self.z_buffer.fill(-np.inf)
         
+#  从点云（point_sum）中提取 2D 栅格地图，包括：
+
+# obstacle_map：障碍物占据（1 为障碍）
+
+# explored_map：已探索区域（1 为探索）
+
+# top_view_map：俯视 RGB 图（保留最高点的颜色）
+
+# 维护 z_buffer：每个像素最高点的高度       
     def Map_Extraction(self, point_sum, camera_position_z, clean_diff = True):
         map_size = self.args.map_size_cm // self.args.map_resolution
         map_real_halfsize  = self.args.map_size_cm / 100.0 / 2.0
@@ -207,6 +216,7 @@ class Global_Map_Proc():
         return self.obstacle_map, self.explored_map, self.top_view_map
     
     
+    # 这个函数从 explored_map 和 obstacle_map 中提取“探索前沿点（Frontier）”，并根据面积筛选出最大的一些连通区域，再返回它们的中心点作为机器人下一步的探索目标。
     def Frontier_Det(self, threshold_point):
         
         map_size = self.explored_map.shape[0]

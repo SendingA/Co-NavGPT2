@@ -154,6 +154,13 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                 infos = 2 # exploration
             else:
                 infos = 3 # detection
+        
+        # 生成 Episode 视频
+        if args.print_images and args.save_video:
+            video_paths = vu.create_episode_video(args, agent[0].episode_n, rank=rank)
+            if video_paths:
+                for vp in video_paths:
+                    print(f"Episode {agent[0].episode_n} video saved: {vp}")
                 
         count_episodes += 1
 

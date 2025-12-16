@@ -23,6 +23,10 @@ def get_args():
                                 (default: 0)""")
     parser.add_argument('--print_images', type=int, default=0,
                         help='1: save visualization as images')
+    parser.add_argument('--save_video', type=int, default=0,
+                        help='1: save episode as video (requires print_images=1)')
+    parser.add_argument('--video_fps', type=int, default=10,
+                        help='FPS for saved video (default: 10)')
 
     # Environment, dataset and episode specifications
     parser.add_argument('-fw', '--frame_width', type=int, default=640,

@@ -15,21 +15,6 @@ from gym import spaces
 
 from habitat.config import Config
 from habitat.core.dataset import Dataset, Episode
-
-# Compatibility shim: older/newer habitat versions may not provide
-# `Episode._reset_shortest_path_cache_hook`. The NavigationEpisode class
-# below expects this attribute to exist (used as `on_setattr` callback
-# for attr fields). If it's missing (which causes the AttributeError seen
-# during import), provide a no-op implementation that clears the
-# `_shortest_path_cache` attribute when an episode field is set.
-if not hasattr(Episode, "_reset_shortest_path_cache_hook"):
-    def _reset_shortest_path_cache_hook(instance, *args, **kwargs):
-        try:
-            instance._shortest_path_cache = None
-        except Exception:
-            pass
-
-    Episode._reset_shortest_path_cache_hook = staticmethod(_reset_shortest_path_cache_hook)
 from habitat.core.embodied_task import (
     EmbodiedTask,
     Measure,

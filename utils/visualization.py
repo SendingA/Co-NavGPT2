@@ -4,6 +4,7 @@ import dataclasses
 from PIL import Image, ImageDraw, ImageFont
 import cv2
 import os
+import glob
 
 import numpy as np
 from typing import List, Union
@@ -13,6 +14,109 @@ from constants import color_palette, coco_categories, category_to_id
 
 import supervision as sv
 from supervision.draw.color import Color, ColorPalette
+
+
+def images_to_video(image_dir, output_path, fps=10, pattern="Merged_Vis-*.png"):
+    """
+    将指定目录下的图片序列合成视频
+    
+    Args:
+        image_dir: 图片所在目录
+        output_path: 输出视频路径
+        fps: 视频帧率
+        pattern: 图片文件名匹配模式
+    
+    Returns:
+        bool: 是否成功生成视频
+    """
+    # 获取所有图片文件
+    image_files = glob.glob(os.path.join(image_dir, pattern))
+    
+    if len(image_files) == 0:
+        print(f"警告: 在 {image_dir} 中未找到匹配 {pattern} 的图片")
+        return False
+    
+    # 按数字排序 (提取文件名中的数字)
+    def extract_number(filepath):
+        filename = os.path.basename(filepath)
+        # 提取 "Merged_Vis-123.png" 或 "agent-0-Vis-123.png" 中的最后一个数字
+        parts = filename.replace('.png', '').split('-')
+        try:
+            return int(parts[-1])
+        except ValueError:
+            return 0
+    
+    image_files.sort(key=extract_number)
+    
+    # 读取第一张图片获取尺寸
+    first_image = cv2.imread(image_files[0])
+    if first_image is None:
+        print(f"错误: 无法读取图片 {image_files[0]}")
+        return False
+    
+    height, width = first_image.shape[:2]
+    
+    # 创建视频写入器
+    fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # 使用 mp4v 编码
+    video_writer = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+    
+    if not video_writer.isOpened():
+        print(f"错误: 无法创建视频文件 {output_path}")
+        return False
+    
+    # 写入所有帧
+    for img_path in image_files:
+        frame = cv2.imread(img_path)
+        if frame is not None:
+            video_writer.write(frame)
+    
+    video_writer.release()
+    print(f"视频已保存: {output_path} ({len(image_files)} 帧, {fps} FPS)")
+    return True
+
+
+def create_episode_video(args, episode_n, rank=0):
+    """
+    为指定 episode 创建三个视频:
+    1. agent-0-Vis-*.png -> agent_0 视频
+    2. agent-1-Vis-*.png -> agent_1 视频 (如果存在)
+    3. Merged_Vis-*.png -> merged 视频
+    
+    Args:
+        args: 命令行参数
+        episode_n: episode 编号
+        rank: 进程编号
+    
+    Returns:
+        list: 成功生成的视频文件路径列表
+    """
+    dump_dir = "{}/dump/{}".format(args.dump_location, args.nav_mode)
+    ep_dir = '{}/episodes_multi/{}/eps_{}/'.format(dump_dir, rank, episode_n)
+    video_dir = '{}/videos/'.format(dump_dir)
+    
+    if not os.path.exists(video_dir):
+        os.makedirs(video_dir)
+    
+    fps = getattr(args, 'video_fps', 10)
+    num_agents = getattr(args, 'num_agents', 2)
+    
+    video_paths = []
+    
+    # 1. 为每个 agent 生成视频
+    for agent_id in range(num_agents):
+        pattern = f"agent-{agent_id}-Vis-*.png"
+        video_path = os.path.join(video_dir, f'episode_{episode_n}_rank_{rank}_agent_{agent_id}.mp4')
+        if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
+            video_paths.append(video_path)
+    
+    # 2. 生成 Merged 视频
+    pattern = "Merged_Vis-*.png"
+    video_path = os.path.join(video_dir, f'episode_{episode_n}_rank_{rank}_merged.mp4')
+    if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
+        video_paths.append(video_path)
+    
+    return video_paths if video_paths else None
+
 
 # Copied from https://github.com/concept-graphs/concept-graphs/     
 def vis_result_fast(

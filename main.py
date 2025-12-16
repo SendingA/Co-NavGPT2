@@ -343,6 +343,15 @@ def main(args, send_queue, receive_queue):
         count_step += agent[0].l_step
 
         # ------------------------------------------------------------------
+        ##### 生成 Episode 视频
+        # ------------------------------------------------------------------
+        if args.print_images and args.save_video:
+            video_paths = vu.create_episode_video(args, agent[0].episode_n, rank=0)
+            if video_paths:
+                for vp in video_paths:
+                    logging.info(f"Episode {agent[0].episode_n} video saved: {vp}")
+
+        # ------------------------------------------------------------------
         ##### Logging
         # ------------------------------------------------------------------
         log_end = time.time()
