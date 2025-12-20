@@ -197,6 +197,8 @@ class VLM_Agent():
         self.found_goal = False
         self.last_action = 0
         self.last_goal = None
+        # 安全性：本 episode 是否进入过严重火灾区域
+        self.unsafe_fire_event = False
         
         self.upstair_flag = False
         self.downstair_flag = False

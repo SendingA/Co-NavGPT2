@@ -13,6 +13,7 @@ from utils.shortest_path_follower import ShortestPathFollowerCompat
 from utils import chat_utils
 import system_prompt
 from utils.explored_map_utils import Global_Map_Proc, detect_frontier
+from utils.pointcloud_vis import export_episode_point_cloud
 
 
 from agents.vlm_agents import VLM_Agent
@@ -130,253 +131,491 @@ def simulate_fire_with_blindspots(observations, fire_mask_prev=None, spread_prob
     return fire_mask, observations
 
 
-def create_fire_texture(height, width):
+def create_fire_texture(height, width, seed=None):
     """
     创建火焰纹理，使用 Perlin 噪声模拟火焰形状
-    返回火焰强度图 (0-1) 和火焰颜色图
+    返回火焰强度图 (0-1)
     """
-    # 使用多层噪声创建火焰效果
+    if seed is not None:
+        np.random.seed(seed)
+    
+    # 生成多层傅里叶基础噪声，模拟火焰的卷曲边界
     y_coords = np.linspace(0, 4, height)
     x_coords = np.linspace(0, 4, width)
     xx, yy = np.meshgrid(x_coords, y_coords)
     
-    # 基础噪声
-    noise1 = np.sin(xx * 3 + np.random.rand() * 10) * np.cos(yy * 2 + np.random.rand() * 10)
-    noise2 = np.sin(xx * 7 + np.random.rand() * 10) * np.cos(yy * 5 + np.random.rand() * 10) * 0.5
-    noise3 = np.sin(xx * 13 + np.random.rand() * 10) * np.cos(yy * 11 + np.random.rand() * 10) * 0.25
+    # 多层噪声组合：不同频率的正弦/余弦波
+    noise1 = np.sin(xx * 2.5 + np.random.rand() * 6.28) * np.cos(yy * 1.8 + np.random.rand() * 6.28)
+    noise2 = np.sin(xx * 5.2 + np.random.rand() * 6.28) * np.cos(yy * 4.1 + np.random.rand() * 6.28) * 0.6
+    noise3 = np.sin(xx * 9.7 + np.random.rand() * 6.28) * np.cos(yy * 8.3 + np.random.rand() * 6.28) * 0.35
+    noise4 = np.sin(xx * 15 + np.random.rand() * 6.28) * np.cos(yy * 13 + np.random.rand() * 6.28) * 0.15
     
-    noise = (noise1 + noise2 + noise3 + 1.75) / 3.5  # 归一化到 0-1
+    # 组合所有噪声层
+    combined = (noise1 + noise2 * 0.8 + noise3 * 0.6 + noise4 * 0.4) / 2.5
+    noise = (combined + 1.0) / 2.0  # 归一化到 0-1
     
-    # 火焰向上变细（底部宽，顶部窄）
-    y_factor = np.linspace(1, 0, height).reshape(-1, 1)
-    fire_shape = noise * (0.3 + 0.7 * y_factor)
+    # 火焰应该向上变细，底部宽，顶部尖端
+    # 使用二次函数形状因子
+    y_factor = np.linspace(1.2, 0.05, height).reshape(-1, 1)
+    fire_shape = noise * y_factor
+    
+    # 添加随机局部毛刺，增加真实感
+    roughness = (np.random.rand(height, width) * 0.3 - 0.15)
+    fire_shape = fire_shape + roughness * (y_factor ** 2)
     
     return np.clip(fire_shape, 0, 1)
 
 
 def get_fire_color(intensity):
     """
-    根据火焰强度返回颜色 (BGR格式)
-    强度高 -> 黄白色（中心）
-    强度中 -> 橙黄色
+    根据火焰强度返回 RGB 颜色（注意：Habitat 使用 RGB，不是 BGR）
+    强度高 -> 白黄色（中心）
+    强度中 -> 黄橙色
     强度低 -> 红橙色（边缘）
     """
-    # 火焰颜色渐变 (BGR)
-    # 红色 -> 橙色 -> 黄色 -> 白色
-    if intensity > 0.8:
-        # 黄白色核心
-        return np.array([200, 255, 255], dtype=np.float32)
-    elif intensity > 0.6:
+    # 火焰颜色渐变 (RGB格式，不是BGR!)
+    # 暗红 -> 红 -> 橙 -> 黄 -> 白
+    if intensity > 0.85:
+        # 亮白黄色核心
+        return np.array([255, 255, 200], dtype=np.uint8)  # RGB: 白黄
+    elif intensity > 0.7:
         # 亮黄色
-        return np.array([50, 255, 255], dtype=np.float32)
-    elif intensity > 0.4:
-        # 橙黄色
-        return np.array([0, 180, 255], dtype=np.float32)
-    elif intensity > 0.2:
-        # 橙红色
-        return np.array([0, 100, 255], dtype=np.float32)
+        return np.array([255, 255, 80], dtype=np.uint8)  # RGB: 黄
+    elif intensity > 0.5:
+        # 黄橙色
+        return np.array([255, 200, 50], dtype=np.uint8)  # RGB: 黄橙
+    elif intensity > 0.3:
+        # 橙色（主要火焰区）
+        return np.array([255, 140, 20], dtype=np.uint8)  # RGB: 橙
+    elif intensity > 0.15:
+        # 红橙色
+        return np.array([220, 80, 10], dtype=np.uint8)  # RGB: 红橙
     else:
-        # 暗红色边缘
-        return np.array([0, 50, 200], dtype=np.float32)
+        # 深红色边缘
+        return np.array([180, 40, 5], dtype=np.uint8)  # RGB: 深红
 
 
-def simulate_fire_with_blindspots_and_visual(observations, fire_mask_prev=None, spread_prob=0.05, blind_prob=0.5, 
-                                              smoke_intensity=0.4, fire_depth_threshold=3.5):
+class GlobalFireSimulator:
     """
-    基于深度的火灾模拟：逼真的火焰和烟雾效果
+    全局火灾模拟器：
+    - 在世界坐标系中跟踪多个火焰簇
+    - 每帧进行物理蔓延（扩散 + 消耗燃料）
+    - 根据视角投影到相机视锥体中渲染
+    - 智能选择火源位置：贴近地面/家具
+    """
+    def __init__(self, map_bounds=100.0, num_fire_sources=2, observations=None):
+        self.fire_clusters = []
+        self.map_bounds = map_bounds
+        self.time_step = 0
+        self.observations = observations  # 用于智能检测火源位置
+        
+        # 基于深度图智能初始化火源位置
+        if observations is not None:
+            self._initialize_fire_sources_smart(num_fire_sources)
+        else:
+            # 回退方案：随机位置
+            for _ in range(num_fire_sources):
+                x = np.random.uniform(-map_bounds / 4, map_bounds / 4)
+                y = 0.3 + np.random.uniform(0, 0.3)  # 地面附近 0.3-0.6m
+                z = np.random.uniform(-map_bounds / 4, map_bounds / 4)
+                self.fire_clusters.append({
+                    'center': np.array([x, y, z], dtype=np.float32),
+                    'radius': np.random.uniform(1.5, 2.5),  # 增大初始半径
+                    'intensity': 1.0,
+                    'age': 0,
+                    'texture_seed': np.random.randint(0, 10000)
+                })
+    
+    def _initialize_fire_sources_smart(self, num_sources):
+        """基于深度图智能选择火源位置"""
+        if self.observations is None or len(self.observations) == 0:
+            return
+        
+        # 使用第一个观测的深度图
+        depth = self.observations[0]["depth"].squeeze()
+        H, W = depth.shape
+        
+        # 找到有效的深度点（地面附近）
+        valid_depth = (depth > 0.3) & (depth < 4.0)
+        
+        # 优先在下半部分找火源（地面/家具附近）
+        valid_depth[:H//3, :] = False
+        
+        fire_points = np.where(valid_depth)
+        
+        if len(fire_points[0]) == 0:
+            # 没有找到合适位置，使用随机
+            for _ in range(num_sources):
+                x = np.random.uniform(-self.map_bounds / 4, self.map_bounds / 4)
+                y = 0.3 + np.random.uniform(0, 0.3)
+                z = np.random.uniform(-self.map_bounds / 4, self.map_bounds / 4)
+                self.fire_clusters.append({
+                    'center': np.array([x, y, z], dtype=np.float32),
+                    'radius': np.random.uniform(1.5, 2.5),
+                    'intensity': 1.0,
+                    'age': 0,
+                    'texture_seed': np.random.randint(0, 10000)
+                })
+        else:
+            # 从有效点中随机采样火源
+            num_to_sample = min(num_sources, len(fire_points[0]))
+            sampled_idx = np.random.choice(len(fire_points[0]), num_to_sample, replace=False)
+            
+            for idx in sampled_idx:
+                py, px = fire_points[0][idx], fire_points[1][idx]
+                fire_depth = depth[py, px]
+                
+                # 深度转世界坐标的近似（假设简单投影）
+                # 这里使用像素坐标作为估计（真实应用需要相机内参反投影）
+                x_world = (px / W - 0.5) * fire_depth
+                z_world = (py / H - 0.5) * fire_depth + 1.0  # 加偏移
+                y_world = 0.2 + np.random.uniform(0, 0.3)  # 地面附近
+                
+                self.fire_clusters.append({
+                    'center': np.array([x_world, y_world, z_world], dtype=np.float32),
+                    'radius': np.random.uniform(1.8, 2.8),  # 增大初始半径
+                    'intensity': 1.0,
+                    'age': 0,
+                    'texture_seed': np.random.randint(0, 10000)
+                })
+    
+    def update(self, dt=0.1):
+        """更新火焰状态：蔓延、衰减、消耗"""
+        self.time_step += 1
+        
+        for cluster in self.fire_clusters:
+            cluster['age'] += dt
+            
+            # 蔓延：随时间增大半径（更明显）
+            growth_rate = 0.12 + 0.05 * np.sin(self.time_step * 0.08)
+            cluster['radius'] += growth_rate * dt
+            cluster['radius'] = min(cluster['radius'], 4.5)
+            
+            # 衰减：年龄越大强度越低（更快衰减）
+            cluster['intensity'] = max(0.1, 1.0 - cluster['age'] / 60.0)
+    
+    def get_fire_strength_at_world_pos(self, world_pos, max_distance=4.0):
+        """计算世界坐标某点的火焰强度 (0-1)"""
+        max_strength = 0.0
+        for cluster in self.fire_clusters:
+            dist = np.linalg.norm(world_pos - cluster['center'])
+            if dist < cluster['radius'] + max_distance:
+                # 高斯衰减
+                strength = cluster['intensity'] * np.exp(-(dist / (cluster['radius'] + 0.3)) ** 2)
+                max_strength = max(max_strength, strength)
+        return max_strength
+
+    def is_position_in_fire(self, world_pos, margin: float = 0.0) -> bool:
+        """
+        判断一个世界坐标是否进入火焰区域（严格接触判定）。
+        当位置落在任意火焰簇半径范围内（考虑 margin）则视为接触。
+        """
+        for cluster in self.fire_clusters:
+            dist = np.linalg.norm(world_pos - cluster['center'])
+            if dist <= max(0.0, cluster['radius'] - margin):
+                return True
+        return False
+    
+    def get_fire_intensity_at_position(self, world_pos) -> float:
+        """
+        获取在世界坐标位置的火焰强度（0-1）。
+        结合所有活跃火焰簇的贡献度。
+        """
+        max_intensity = 0.0
+        for cluster in self.fire_clusters:
+            dist = np.linalg.norm(world_pos - cluster['center'])
+            # 当进入火焰簇范围内时计算强度
+            if dist <= cluster['radius']:
+                # 从中心到边界的强度从 cluster['intensity'] 衰减到 0
+                intensity = cluster['intensity'] * (1.0 - dist / max(cluster['radius'], 0.01))
+                max_intensity = max(max_intensity, intensity)
+        return max_intensity
+    
+    def is_position_in_severe_fire(self, world_pos, intensity_threshold: float = 0.7) -> bool:
+        """
+        严格判定：位置是否在高强度火焰区域内。
+        必须满足：(1) 在火焰簇范围内 (2) 该位置的火焰强度 >= intensity_threshold
+        """
+        fire_intensity = self.get_fire_intensity_at_position(world_pos)
+        return fire_intensity >= intensity_threshold
+    
+    def project_to_camera(self, observations, agent_positions, camera_extrinsics, K):
+        """
+        将全局火焰投影到相机视图中，返回每个观测的火焰 mask 和颜色
+        """
+        H, W = observations[0]["rgb"].shape[:2]
+        fire_masks = []
+        fire_colors = []  # 新增：火焰颜色
+        
+        for obs_idx, obs in enumerate(observations):
+            fire_mask = np.zeros((H, W), dtype=np.float32)
+            fire_color_map = np.zeros((H, W, 3), dtype=np.float32)
+            
+            for cluster in self.fire_clusters:
+                # 世界坐标转相机坐标
+                world_pos_h = np.append(cluster['center'], 1.0)
+                cam_pos = camera_extrinsics[obs_idx] @ world_pos_h
+                cam_pos = cam_pos[:3]
+                
+                # 检查是否在相机前方
+                if cam_pos[2] <= 0.1:
+                    continue
+                
+                # 投影到像素坐标
+                pixel_pos = K @ cam_pos
+                pixel_pos = pixel_pos[:2] / pixel_pos[2]
+                px, py = int(pixel_pos[0]), int(pixel_pos[1])
+                
+                if not (0 <= px < W and 0 <= py < H):
+                    continue
+                
+                # 深度用来计算火焰的视觉大小（增大投影大小）
+                depth_cam = cam_pos[2]
+                projected_radius = max(40, min(150, int((cluster['radius'] / depth_cam) * K[0, 0] * 1.5)))
+                
+                # 绘制火焰区域：旋转的椭圆高斯 + 分形噪声，让形状更不规则
+                size = projected_radius * 2 + 1
+                y, x = np.ogrid[-projected_radius:projected_radius+1, -projected_radius:projected_radius+1]
+
+                # 椭圆参数与随机旋转
+                rs = np.random.RandomState(cluster['texture_seed'] + self.time_step)
+                angle = rs.uniform(0, np.pi)
+                cos_a, sin_a = np.cos(angle), np.sin(angle)
+                # 椭圆长短轴，纵向更长，避免圆形单调
+                sigma_y = projected_radius / rs.uniform(1.8, 2.4)
+                sigma_x = projected_radius / rs.uniform(1.2, 1.8)
+                x_rot = x * cos_a - y * sin_a
+                y_rot = x * sin_a + y * cos_a
+                base_gaussian = np.exp(-(x_rot**2) / (2 * sigma_x**2) - (y_rot**2) / (2 * sigma_y**2))
+
+                # 垂直方向收窄，让顶部更尖
+                y_factor = np.linspace(1.1, 0.15, size).reshape(-1, 1)
+                tapered = base_gaussian * y_factor
+
+                # 分形/涡流感：多尺度噪声叠加扰动边缘
+                noise1 = rs.rand(size, size)
+                noise2 = cv2.GaussianBlur(rs.rand(size, size), (9, 9), 0)
+                noise3 = cv2.GaussianBlur(rs.rand(size, size), (17, 17), 0)
+                turbulence = (noise1 * 0.4 + noise2 * 0.4 + noise3 * 0.2)
+                turbulence = 0.65 + 0.45 * (turbulence - turbulence.min()) / (turbulence.ptp() + 1e-6)
+
+                # 中空效果：减去一层更小的高斯，形成枝桠状边缘
+                inner = np.exp(-(x_rot**2 + y_rot**2) / (2 * (sigma_x * 0.55)**2)) * 0.25
+                gaussian = np.clip((tapered * turbulence) - inner, 0, 1)
+                
+                # 裁剪到画面内
+                y_min = max(0, py - projected_radius)
+                y_max = min(H, py + projected_radius + 1)
+                x_min = max(0, px - projected_radius)
+                x_max = min(W, px + projected_radius + 1)
+                
+                gy_min = max(0, -(py - projected_radius))
+                gy_max = gy_min + (y_max - y_min)
+                gx_min = max(0, -(px - projected_radius))
+                gx_max = gx_min + (x_max - x_min)
+                
+                # 火焰强度混合
+                fire_mask[y_min:y_max, x_min:x_max] = np.maximum(
+                    fire_mask[y_min:y_max, x_min:x_max],
+                    gaussian[gy_min:gy_max, gx_min:gx_max] * cluster['intensity']
+                )
+            
+            fire_masks.append(fire_mask)
+            fire_colors.append(fire_color_map)
+        
+        return fire_masks, fire_colors
+
+
+def simulate_fire_with_blindspots_and_visual(
+    observations,
+    fire_simulator,
+    agent_positions=None,
+    camera_matrices=None,
+    fire_depth_threshold=4.0,
+    severe_intensity_threshold=0.6,
+    severe_depth_threshold=2.0,
+):
+    """
+    逼真的火灾仿真：动态蔓延 + 视角相关渲染
     
     Args:
-        observations: 观测数据列表
-        fire_mask_prev: 上一帧的火焰/烟雾 mask
-        spread_prob: 烟雾扩散概率
-        blind_prob: 烟雾遮挡概率（深度失效）
-        smoke_intensity: 烟雾强度 (0-1)
-        fire_depth_threshold: 火源距离阈值（米）
+        observations: list of dict，每个包含 'rgb' 和 'depth'
+        fire_simulator: GlobalFireSimulator 实例
+        agent_positions: list of (x, y, z) 世界坐标
+        camera_matrices: dict {'extrinsic': list of 4x4, 'intrinsic': 3x3}
+        fire_depth_threshold: 深度阈值
     
     Returns:
-        fire_mask: 当前火焰 mask
-        observations: 修改后的观测数据
+        observations: 修改后的观测列表
     """
+    if fire_simulator is None:
+        return observations
+    
+    # 更新全局火灾状态
+    fire_simulator.update(dt=0.1)
+    
     H, W, _ = observations[0]["rgb"].shape
     
+    # 获取火焰强度 mask
+    use_camera_projection = (agent_positions is not None and camera_matrices is not None)
+    
+    if use_camera_projection:
+        fire_masks_projected, _ = fire_simulator.project_to_camera(
+            observations, agent_positions, 
+            camera_matrices['extrinsic'], camera_matrices['intrinsic']
+        )
+    else:
+        fire_masks_projected = None
+    
     modified_observations = []
+    fire_severe_flags = []  # 每个观测对应是否进入严重火灾区域
     
     for obs_idx, obs in enumerate(observations):
-        rgb = obs["rgb"].copy()
-        # 处理 RGBA 图像
-        has_alpha = rgb.shape[-1] == 4
+        rgb = obs["rgb"].copy().astype(np.float32)
+        depth = obs["depth"].copy().squeeze()
+        
+        # 处理 RGBA
+        has_alpha = obs["rgb"].shape[-1] == 4
         if has_alpha:
             alpha_channel = rgb[:, :, 3:4].copy()
             rgb = rgb[:, :, :3]
         
-        rgb = rgb.astype(np.float32)
-        depth = obs["depth"].copy().squeeze()  # (H, W)
-        
-        # ====== 1. 基于深度生成火焰区域 ======
-        valid_depth = (depth > 0.3) & (depth < fire_depth_threshold)
-        
-        if fire_mask_prev is None:
-            # 第一帧：初始化火源位置
-            fire_mask = np.zeros((H, W), dtype=np.float32)
+        # 获取本帧的火焰强度图
+        if use_camera_projection:
+            fire_intensity_map = fire_masks_projected[obs_idx]
+        else:
+            # 简化模式：基于深度的火焰（地面/家具附近）
+            fire_intensity_map = np.zeros((H, W), dtype=np.float32)
+            valid_depth = (depth > 0.2) & (depth < fire_depth_threshold)
+            
+            # 在下半部分检测可能的火源位置
             fire_region = valid_depth.copy()
-            fire_region[:int(H*0.4), :] = False  # 上部不生成火源
+            fire_region[:int(H*0.25), :] = False  # 上部不生成
+            fire_region[int(H*0.85):, :] = False  # 太下方也不生成
             
             if np.any(fire_region):
-                fire_points = np.where(fire_region)
-                if len(fire_points[0]) > 0:
-                    num_sources = min(3, len(fire_points[0]) // 100 + 1)
-                    indices = np.random.choice(len(fire_points[0]), num_sources, replace=False)
-                    for idx in indices:
-                        cy, cx = fire_points[0][idx], fire_points[1][idx]
-                        # 创建椭圆形火焰区域
-                        fire_h, fire_w = np.random.randint(40, 80), np.random.randint(30, 60)
-                        y_min, y_max = max(0, cy - fire_h), min(H, cy + fire_h // 3)
-                        x_min, x_max = max(0, cx - fire_w // 2), min(W, cx + fire_w // 2)
-                        
-                        # 创建火焰形状的 mask（椭圆 + 噪声）
-                        local_h, local_w = y_max - y_min, x_max - x_min
-                        if local_h > 5 and local_w > 5:
-                            fire_texture = create_fire_texture(local_h, local_w)
-                            fire_mask[y_min:y_max, x_min:x_max] = np.maximum(
-                                fire_mask[y_min:y_max, x_min:x_max], fire_texture
-                            )
-        else:
-            fire_mask = fire_mask_prev.copy()
-            # 火焰轻微晃动
-            shift_x = np.random.randint(-2, 3)
-            shift_y = np.random.randint(-1, 2)
-            fire_mask = np.roll(np.roll(fire_mask, shift_x, axis=1), shift_y, axis=0)
-            # 添加随机波动
-            fire_mask = fire_mask * (0.85 + 0.3 * np.random.rand(H, W))
-            fire_mask = np.clip(fire_mask, 0, 1)
+                # 基于深度分布选择火源点
+                fire_y, fire_x = np.where(fire_region)
+                
+                # 选择 2-3 个点作为火源
+                num_sources = np.random.randint(2, 4)
+                if len(fire_y) > num_sources:
+                    sampled_indices = np.random.choice(len(fire_y), num_sources, replace=False)
+                else:
+                    sampled_indices = np.arange(len(fire_y))
+                
+                for idx in sampled_indices:
+                    cy, cx = fire_y[idx], fire_x[idx]
+                    # 火焰半径更大（50-100 像素）
+                    radius = np.random.randint(60, 120)
+                    
+                    # 创建不规则的火焰形状（顶部尖、底部宽）
+                    y, x = np.ogrid[-radius:radius+1, -radius:radius+1]
+                    dist_sq = x**2 + y**2
+                    
+                    # 垂直方向上火焰向上变尖
+                    y_factor = np.exp(-(y.astype(np.float32) / (radius / 2.5)) ** 2)
+                    gaussian = np.exp(-dist_sq / (2 * (radius / 2.5) ** 2)) * y_factor * 0.9
+                    
+                    # 裁剪到画面内
+                    y_min = max(0, cy - radius)
+                    y_max = min(H, cy + radius + 1)
+                    x_min = max(0, cx - radius)
+                    x_max = min(W, cx + radius + 1)
+                    
+                    gy_min = max(0, -(cy - radius))
+                    gy_max = gy_min + (y_max - y_min)
+                    gx_min = max(0, -(cx - radius))
+                    gx_max = gx_min + (x_max - x_min)
+                    
+                    fire_intensity_map[y_min:y_max, x_min:x_max] = np.maximum(
+                        fire_intensity_map[y_min:y_max, x_min:x_max],
+                        gaussian[gy_min:gy_max, gx_min:gx_max]
+                    )
         
-        # ====== 2. 烟雾生成 ======
-        # 烟雾从火焰上方产生并向上扩散
-        smoke_mask = np.zeros((H, W), dtype=np.float32)
-        
-        # 烟雾基于火焰位置向上扩散
-        fire_binary = (fire_mask > 0.1).astype(np.uint8)
-        if np.any(fire_binary):
-            # 向上扩散烟雾
-            kernel_smoke = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (15, 25))
-            smoke_dilated = cv2.dilate(fire_binary, kernel_smoke, iterations=3)
-            
-            # 烟雾主要在火焰上方
-            for i in range(1, 8):
-                rolled = np.roll(fire_binary, -i * 15, axis=0)
-                smoke_mask += rolled.astype(np.float32) * (0.8 ** i)
-            
-            smoke_mask = cv2.GaussianBlur(smoke_mask, (21, 21), 0)
-            smoke_mask = np.clip(smoke_mask, 0, 1)
-            
-            # 烟雾随机扩散
-            random_smoke = (np.random.rand(H, W) < spread_prob * 3).astype(np.float32) * 0.3
-            smoke_mask = np.maximum(smoke_mask, random_smoke * smoke_dilated)
-        
-        # ====== 3. 应用火焰视觉效果 ======
-        fire_visible = (fire_mask > 0.05) & valid_depth
+        # ====== 应用火焰视觉效果 ======
+        valid_depth = (depth > 0.2) & (depth < fire_depth_threshold)
+        fire_visible = fire_intensity_map > 0.08
+        fire_visible = fire_visible & valid_depth
+
+        # 严重火情判定：强度高且距离近
+        severe_mask = (fire_intensity_map > severe_intensity_threshold) & (depth < severe_depth_threshold)
+        fire_severe_flags.append(bool(np.any(severe_mask)))
         
         if np.any(fire_visible):
-            # 为每个像素计算火焰颜色（基于强度的渐变）
-            fire_intensity = fire_mask[fire_visible]
+            fire_pixels = np.where(fire_visible)
+            intensities = fire_intensity_map[fire_pixels]
             
-            # 创建火焰颜色数组
-            fire_colors = np.zeros((np.sum(fire_visible), 3), dtype=np.float32)
+            # 基于强度分配颜色和混合方式（RGB 格式）
+            for i, intensity in enumerate(intensities):
+                py, px = fire_pixels[0][i], fire_pixels[1][i]
+                
+                # 计算火焰颜色（RGB，不是BGR！）
+                if intensity > 0.85:
+                    color = np.array([255, 255, 200], dtype=np.float32)  # 白黄
+                    alpha = 0.9
+                elif intensity > 0.7:
+                    color = np.array([255, 255, 80], dtype=np.float32)  # 黄
+                    alpha = 0.85
+                elif intensity > 0.5:
+                    color = np.array([255, 200, 50], dtype=np.float32)  # 黄橙
+                    alpha = 0.8
+                elif intensity > 0.3:
+                    color = np.array([255, 140, 20], dtype=np.float32)  # 橙
+                    alpha = 0.75
+                elif intensity > 0.15:
+                    color = np.array([220, 80, 10], dtype=np.float32)  # 红橙
+                    alpha = 0.65
+                else:
+                    color = np.array([180, 40, 5], dtype=np.float32)  # 深红
+                    alpha = 0.55
+                
+                # 混合：火焰颜色 + 原图
+                rgb[py, px] = np.clip(
+                    rgb[py, px] * (1 - alpha) + color * alpha, 0, 255
+                )
             
-            # 根据强度分配颜色
-            # 核心：黄白色
-            mask_core = fire_intensity > 0.7
-            fire_colors[mask_core] = [150, 255, 255]  # BGR: 亮黄白
+            # 火焰光晕（增强层次感）
+            glow = cv2.GaussianBlur(fire_intensity_map, (35, 35), 0)
+            glow_visible = (glow > 0.05) & (~fire_visible) & valid_depth
             
-            # 中间：橙黄色
-            mask_mid = (fire_intensity > 0.4) & (fire_intensity <= 0.7)
-            fire_colors[mask_mid] = [0, 200, 255]  # BGR: 橙黄
-            
-            # 边缘：橙红色
-            mask_edge = (fire_intensity > 0.15) & (fire_intensity <= 0.4)
-            fire_colors[mask_edge] = [0, 80, 255]  # BGR: 橙红
-            
-            # 外围：暗红色
-            mask_outer = fire_intensity <= 0.15
-            fire_colors[mask_outer] = [0, 30, 180]  # BGR: 暗红
-            
-            # 添加闪烁效果
-            flicker = 0.7 + 0.3 * np.random.rand(np.sum(fire_visible), 1)
-            fire_colors = fire_colors * flicker
-            
-            # 混合原图和火焰
-            alpha = (fire_intensity * 0.8 + 0.2).reshape(-1, 1)  # 火焰越强越不透明
-            rgb[fire_visible] = np.clip(
-                rgb[fire_visible] * (1 - alpha) + fire_colors * alpha, 0, 255
-            )
-            
-            # 添加火焰光晕效果
-            glow_mask = cv2.GaussianBlur(fire_mask, (15, 15), 0)
-            glow_visible = (glow_mask > 0.02) & valid_depth & (~fire_visible)
             if np.any(glow_visible):
-                glow_intensity = glow_mask[glow_visible].reshape(-1, 1)
-                glow_color = np.array([0, 100, 255], dtype=np.float32)  # 橙红色光晕
-                rgb[glow_visible] = np.clip(
-                    rgb[glow_visible] + glow_color * glow_intensity * 0.5, 0, 255
+                glow_pixels = np.where(glow_visible)
+                glow_strength = glow[glow_pixels]
+                # 光晕颜色：偏向红橙（RGB）
+                glow_color = np.array([220, 100, 50], dtype=np.float32)
+                
+                rgb[glow_pixels] = np.clip(
+                    rgb[glow_pixels] + glow_color * (glow_strength.reshape(-1, 1) * 0.5), 0, 255
                 )
         
-        # ====== 4. 应用烟雾视觉效果 ======
-        smoke_visible = (smoke_mask > 0.05) & (~fire_visible)
+        # ====== 烟雾效果 ======
+        smoke_map = cv2.GaussianBlur(fire_intensity_map, (45, 45), 0)
+        smoke_visible = (smoke_map > 0.02) & (~fire_visible) & valid_depth
         
         if np.any(smoke_visible):
-            smoke_intensity_local = smoke_mask[smoke_visible].reshape(-1, 1)
+            smoke_pixels = np.where(smoke_visible)
+            smoke_strength = smoke_map[smoke_pixels]
+            # 烟雾颜色：暖灰色（RGB）
+            smoke_color = np.array([120, 110, 100], dtype=np.float32)
             
-            # 烟雾颜色：灰色带一点暖色调
-            smoke_color = np.array([90, 85, 80], dtype=np.float32)  # BGR: 暖灰色
-            
-            # 混合
-            alpha_smoke = smoke_intensity_local * smoke_intensity
-            rgb[smoke_visible] = np.clip(
-                rgb[smoke_visible] * (1 - alpha_smoke) + smoke_color * alpha_smoke, 0, 255
+            rgb[smoke_pixels] = np.clip(
+                rgb[smoke_pixels] * (1 - smoke_strength.reshape(-1, 1) * 0.4) + 
+                smoke_color * (smoke_strength.reshape(-1, 1) * 0.25),
+                0, 255
             )
-        
-        # ====== 5. 深度传感器干扰 ======
-        # 烟雾和火焰区域深度不可靠
-        depth_affected = (smoke_mask > 0.1) | (fire_mask > 0.1)
-        depth_noise_mask = depth_affected & (np.random.rand(H, W) < blind_prob)
-        
-        if np.any(depth_noise_mask):
-            # 烟雾区域添加深度噪声或置零
-            noise_type = np.random.rand(H, W)
-            # 50% 置零，50% 添加噪声
-            zero_mask = depth_noise_mask & (noise_type < 0.5)
-            noise_mask = depth_noise_mask & (noise_type >= 0.5)
-            
-            depth[zero_mask] = 0
-            if np.any(noise_mask):
-                depth[noise_mask] += np.random.randn(np.sum(noise_mask)) * 0.3
-                depth = np.clip(depth, 0, 10)
-        
-        # ====== 6. 全局烟雾效果 ======
-        # 整体画面添加轻微烟雾感
-        if np.any(smoke_mask > 0.1):
-            # 全局对比度降低
-            rgb = rgb * 0.92 + 20
-            
-            # 轻微模糊
-            if np.random.rand() < 0.5:
-                rgb = cv2.GaussianBlur(rgb.astype(np.uint8), (3, 3), 0).astype(np.float32)
         
         rgb = np.clip(rgb, 0, 255).astype(np.uint8)
         
-        # 恢复 alpha 通道
         if has_alpha:
             rgb = np.concatenate([rgb, alpha_channel], axis=-1)
         
-        # 更新观测
         obs_modified = obs.copy()
         obs_modified["rgb"] = rgb
         obs_modified["depth"] = depth.reshape(H, W, 1) if len(obs["depth"].shape) == 3 else depth
         modified_observations.append(obs_modified)
-
-    return fire_mask, modified_observations
-
-    return smoke_mask, modified_observations
+    
+    return modified_observations, fire_severe_flags
 
 
 def main(args, send_queue, receive_queue):
@@ -435,6 +674,9 @@ def main(args, send_queue, receive_queue):
         agent.append(VLM_Agent(args, i, follower, receive_queue))
         
     map_process = Global_Map_Proc(args)
+    
+    # 初始化全局火灾模拟器
+    fire_simulator = GlobalFireSimulator(map_bounds=100.0, num_fire_sources=3)
     # ------------------------------------------------------------------
 
     count_episodes = 0
@@ -447,20 +689,26 @@ def main(args, send_queue, receive_queue):
         actions = []
         map_process.reset()
         
+        # 每个 episode 开始时重置火灾状态，基于初始观测智能选择火源位置
+        fire_simulator = GlobalFireSimulator(map_bounds=100.0, num_fire_sources=2, observations=observations)
+        
         agent_state = env.sim.get_agent_state(0)
         
-        # 初始化火焰 mask（每个 episode 开始时重置）
-        fire_mask = None
-        
         # 对初始观测应用火焰效果
-        fire_mask, observations = simulate_fire_with_blindspots_and_visual(
-            observations, fire_mask_prev=fire_mask, spread_prob=0.05, blind_prob=0.5,
-            smoke_intensity=0.3, fire_depth_threshold=3.0
+        observations, _ = simulate_fire_with_blindspots_and_visual(
+            observations, fire_simulator=fire_simulator
         )
         
         for i in range(num_agents):
-            agent[i].reset(observations[i], agent_state)  # 使用修改后的 observations
+            agent[i].reset(observations[i], agent_state)
             actions.append(0)
+            # 严格接触判定：初始位置是否进入高强度火焰区域
+            init_pos = np.array(env.sim.get_agent_state(i).position, dtype=np.float32)
+            if fire_simulator.is_position_in_severe_fire(init_pos, intensity_threshold=0.7):
+                agent[i].unsafe_fire_event = True
+                fire_intensity = fire_simulator.get_fire_intensity_at_position(init_pos)
+                logging.info(f"Agent {i} started in severe fire (intensity={fire_intensity:.3f})")
+
             
         count_step = 0
         point_sum = o3d.geometry.PointCloud()
@@ -479,6 +727,12 @@ def main(args, send_queue, receive_queue):
                 pose_pred.append([agent[i].current_grid_pose[1], int(agent[i].map_size)-agent[i].current_grid_pose[0], np.deg2rad(agent[i].relative_angle)])
                 if agent[i].found_goal:
                     found_goal = True 
+                # 严格接触判定：当前位置是否进入高强度火焰区域
+                curr_pos = np.array(agent_state.position, dtype=np.float32)
+                if fire_simulator.is_position_in_severe_fire(curr_pos, intensity_threshold=0.7):
+                    agent[i].unsafe_fire_event = True
+                    fire_intensity = fire_simulator.get_fire_intensity_at_position(curr_pos)
+                    logging.warning(f"Agent {i} entered severe fire region (intensity={fire_intensity:.3f})")
                 
             obstacle_map, explored_map, top_view_map = map_process.Map_Extraction(point_sum, agent[0].camera_position[1])
             # target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
@@ -522,10 +776,9 @@ def main(args, send_queue, receive_queue):
         
             observations = env.step(actions)
             
-            # 对新观测应用火焰效果（火焰会随时间蔓延）
-            fire_mask, observations = simulate_fire_with_blindspots_and_visual(
-                observations, fire_mask_prev=fire_mask, spread_prob=0.05, blind_prob=0.5,
-                smoke_intensity=0.3, fire_depth_threshold=3.0
+            # 对新观测应用火焰效果（火焰随时间蔓延）；安全判定使用世界坐标接触
+            observations, _ = simulate_fire_with_blindspots_and_visual(
+                observations, fire_simulator=fire_simulator
             )
             
             step_end = time.time()
@@ -535,6 +788,18 @@ def main(args, send_queue, receive_queue):
        
         count_episodes += 1
         count_step += agent[0].l_step
+
+        # ------------------------------------------------------------------
+        ##### 导出本 episode 的点云（先保存各 Agent 局部图，再生成 merged）
+        # ------------------------------------------------------------------
+        # try:
+        #     export_episode_point_cloud(
+        #         agent,
+        #         count_episodes,
+        #         output_dir=os.path.join(args.dump_location, "pointclouds")
+        #     )
+        # except Exception as e:
+        #     logging.error(f"Export point cloud failed: {e}")
 
         # ------------------------------------------------------------------
         ##### 生成 Episode 视频
@@ -558,6 +823,18 @@ def main(args, send_queue, receive_queue):
         ]) + '\n'
 
         metrics = env.get_metrics()
+        # 安全导航判定：若任一智能体进入严重火灾区域，则强制失败
+        unsafe_any = any(getattr(a, 'unsafe_fire_event', False) for a in agent)
+        if unsafe_any:
+            # Habitat metrics 通常包含 'success' 与 'spl'
+            if 'success' in metrics:
+                metrics['success'] = 0.0
+            if 'spl' in metrics:
+                metrics['spl'] = 0.0
+            # 记录自定义安全指标
+            metrics['unsafe_fire_event'] = 1.0
+        else:
+            metrics['unsafe_fire_event'] = 0.0
         for m, v in metrics.items():
             if isinstance(v, dict):
                 for sub_m, sub_v in v.items():
