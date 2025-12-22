@@ -68,6 +68,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             actions.append(0)
             
         count_steps = 0
+        episode_start_time = time.time()
         point_sum = o3d.geometry.PointCloud()
         while not env.episode_over:
             start = time.time()
@@ -91,27 +92,103 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             
             if (agent[0].l_step % args.num_local_steps == args.num_local_steps - 1 or agent[0].l_step == 0) and not found_goal:
                 goal_points.clear()
-                # if args.nav_mode == "gpt":
                 target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
-                for i in range(num_agents):
-                    if agent[i].curr_frontier_count > 2*args.num_local_steps + 1 and len(target_point_list) > 0 and args.fill_mode:
-                        map_process.obstacle_map[target_edge_map == int(goal_frontiers["robot_"+ str(i)].split('_')[1])+1]
-                        obstacle_map[target_edge_map == int(goal_frontiers["robot_"+ str(i)].split('_')[1])+1]
-                        agent[i].curr_frontier_count = 0
-                        target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
-                        
-                if len(target_point_list) > 0 and agent[0].l_step > 0:
-                    candidate_map_list = chat_utils.get_all_candidate_maps(target_edge_map, top_view_map, pose_pred)
-                    message = chat_utils.message_prepare(system_prompt.system_prompt, candidate_map_list, agent[i].goal_name)
-            
-                    goal_frontiers = chat_utils.chat_with_gpt4v(message)
+                
+                # fill_mode 处理：当智能体重复探索同一前沿点时，标记为障碍
+                if args.fill_mode and len(target_point_list) > 0:
                     for i in range(num_agents):
-                        goal_points.append(target_point_list[int(goal_frontiers["robot_"+ str(i)].split('_')[1])])
-                        
+                        if agent[i].curr_frontier_count > 2*args.num_local_steps + 1:
+                            # 标记目标前沿点的障碍区域
+                            if 'goal_frontiers' in locals() and "robot_"+ str(i) in goal_frontiers:
+                                idx = int(goal_frontiers["robot_"+ str(i)].split('_')[1])
+                                if idx < len(target_point_list):
+                                    map_process.obstacle_map[target_edge_map == idx+1] = 1
+                                    obstacle_map[target_edge_map == idx+1] = 1
+                            agent[i].curr_frontier_count = 0
+                    # 重新检测前沿点
+                    target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
+                
+                # 根据 nav_mode 选择全局规划策略
+                if args.nav_mode == "gpt":
+                    # ===== GPT 模式 =====
+                    if len(target_point_list) > 0 and agent[0].l_step > 0:
+                        candidate_map_list = chat_utils.get_all_candidate_maps(target_edge_map, top_view_map, pose_pred)
+                        message = chat_utils.message_prepare(system_prompt.system_prompt, candidate_map_list, agent[i].goal_name)
+                        goal_frontiers = chat_utils.chat_with_gpt4v(message)
+                        for i in range(num_agents):
+                            goal_points.append(target_point_list[int(goal_frontiers["robot_"+ str(i)].split('_')[1])])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
+                elif args.nav_mode == "nearest":
+                    # ===== 最近距离模式 =====
+                    if len(target_point_list) > 0:
+                        for i in range(num_agents):
+                            distances = [np.linalg.norm(np.array(target_point_list[j]) - np.array(pose_pred[i][:2])) for j in range(len(target_point_list))]
+                            closest_idx = np.argmin(distances)
+                            goal_points.append(target_point_list[closest_idx])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
+                elif args.nav_mode == "co_ut":
+                    # ===== 合作模式：为每个 agent 分配不同的前沿点 =====
+                    if len(target_point_list) > 0:
+                        assigned_frontiers = set()
+                        for i in range(num_agents):
+                            best_idx = -1
+                            best_dist = float('inf')
+                            for j, frontier in enumerate(target_point_list):
+                                if j not in assigned_frontiers:
+                                    dist = np.linalg.norm(np.array(frontier) - np.array(pose_pred[i][:2]))
+                                    if dist < best_dist:
+                                        best_dist = dist
+                                        best_idx = j
+                            
+                            if best_idx != -1:
+                                goal_points.append(target_point_list[best_idx])
+                                assigned_frontiers.add(best_idx)
+                            else:
+                                distances = [np.linalg.norm(np.array(target_point_list[j]) - np.array(pose_pred[i][:2])) for j in range(len(target_point_list))]
+                                goal_points.append(target_point_list[np.argmin(distances)])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
+                elif args.nav_mode == "fill":
+                    # ===== 覆盖模式：优先探索高价值区域 =====
+                    if len(target_point_list) > 0:
+                        for i in range(num_agents):
+                            best_idx = 0
+                            best_score = -1
+                            for j, frontier in enumerate(target_point_list):
+                                if target_score is not None and j < len(target_score):
+                                    score = target_score[j]
+                                else:
+                                    score = 1.0 / (1.0 + np.linalg.norm(np.array(frontier) - np.array(pose_pred[i][:2])))
+                                
+                                if score > best_score:
+                                    best_score = score
+                                    best_idx = j
+                            
+                            goal_points.append(target_point_list[best_idx])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
                 else:
+                    # 默认：随机模式
                     for i in range(num_agents):
-                        action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
-                        goal_points.append([int(action[0]), int(action[1])])
+                        if len(target_point_list) > 0:
+                            goal_points.append(target_point_list[np.random.randint(0, len(target_point_list))])
+                        else:
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
                             
                           
             
@@ -157,9 +234,19 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                 
         count_episodes += 1
 
+        # 计算 episode 耗时和性能指标
+        episode_end_time = time.time()
+        episode_runtime = episode_end_time - episode_start_time
+        fps = count_steps / max(episode_runtime, 1e-6)
+        avg_step_time = episode_runtime / max(count_steps, 1)
+
         metrics = env.get_metrics()
+        metrics['episode_runtime'] = episode_runtime
+        metrics['episode_steps'] = count_steps
+        metrics['fps'] = fps
+        metrics['avg_step_time'] = avg_step_time
         
-        receive_queue.put([metrics, infos, count_steps])
+        receive_queue.put([metrics, infos, count_steps, episode_runtime])
 
 def main():
 
@@ -256,15 +343,17 @@ def main():
     agg_metrics: Dict = defaultdict(float)
     total_fail = []
     total_steps = 0
+    total_runtime = 0.0
     start = time.time()
     while count_episodes < num_episodes:
         
         if not receive_queue.empty():
             print("received")
             count_episodes += 1
-            metrics, infos, count_steps = receive_queue.get()
+            metrics, infos, count_steps, episode_runtime = receive_queue.get()
             
             total_steps += count_steps
+            total_runtime += episode_runtime
             
             for m, v in metrics.items():
                 agg_metrics[m] += v
@@ -274,11 +363,14 @@ def main():
 
             end = time.time()
             time_elapsed = time.gmtime(end - start)
+            overall_fps = total_steps / max(end - start, 1e-6)
+            
             log = " ".join([
                 "Time: {0:0=2d}d".format(time_elapsed.tm_mday - 1),
                 "{},".format(time.strftime("%Hh %Mm %Ss", time_elapsed)),
-                "num timesteps {},".format(total_steps ),
-                "FPS {},".format(int(total_steps  / (end - start)))
+                "total_timesteps {},".format(total_steps),
+                "overall_FPS {:.2f},".format(overall_fps),
+                "avg_runtime {:.2f}s".format(total_runtime / max(count_episodes, 1))
             ]) + '\n'
             
             log += "Failed Case: exploration/detection/success/total:"
