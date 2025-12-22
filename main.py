@@ -136,19 +136,92 @@ def main(args, send_queue, receive_queue):
             
             if (agent[0].l_step % args.num_local_steps == args.num_local_steps - 1 or agent[0].l_step == 0) and not found_goal:
                 goal_points.clear()
-                # if args.nav_mode == "gpt":
                 target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
-                if len(target_point_list) > 0 and agent[0].l_step > 0:
-                    candidate_map_list = chat_utils.get_all_candidate_maps(target_edge_map, top_view_map, pose_pred)
-                    message = chat_utils.message_prepare(system_prompt.system_prompt, candidate_map_list, agent[i].goal_name)
-            
-                    goal_frontiers = chat_utils.chat_with_gpt4v(message)
-                    for i in range(num_agents):
-                        goal_points.append(target_point_list[int(goal_frontiers["robot_"+ str(i)].split('_')[1])])
+                
+                if args.nav_mode == "gpt":
+                    # ===== GPT 模式：使用 GPT 选择全局目标 =====
+                    if len(target_point_list) > 0 and agent[0].l_step > 0:
+                        candidate_map_list = chat_utils.get_all_candidate_maps(target_edge_map, top_view_map, pose_pred)
+                        message = chat_utils.message_prepare(system_prompt.system_prompt, candidate_map_list, agent[i].goal_name)
+                        goal_frontiers = chat_utils.chat_with_gpt4v(message)
+                        for i in range(num_agents):
+                            goal_points.append(target_point_list[int(goal_frontiers["robot_"+ str(i)].split('_')[1])])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
+                elif args.nav_mode == "nearest":
+                    # ===== 最近距离模式：每个 agent 选择离自己最近的前沿点 =====
+                    if len(target_point_list) > 0:
+                        for i in range(num_agents):
+                            distances = [np.linalg.norm(np.array(target_point_list[j]) - np.array(pose_pred[i][:2])) for j in range(len(target_point_list))]
+                            closest_idx = np.argmin(distances)
+                            goal_points.append(target_point_list[closest_idx])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
+                elif args.nav_mode == "co_ut":
+                    # ===== 合作模式：为每个 agent 分配不同的前沿点 =====
+                    if len(target_point_list) > 0:
+                        assigned_frontiers = set()
+                        for i in range(num_agents):
+                            # 优先选择未被分配的距离最近的前沿点
+                            best_idx = -1
+                            best_dist = float('inf')
+                            for j, frontier in enumerate(target_point_list):
+                                if j not in assigned_frontiers:
+                                    dist = np.linalg.norm(np.array(frontier) - np.array(pose_pred[i][:2]))
+                                    if dist < best_dist:
+                                        best_dist = dist
+                                        best_idx = j
+                            
+                            if best_idx != -1:
+                                goal_points.append(target_point_list[best_idx])
+                                assigned_frontiers.add(best_idx)
+                            else:
+                                # 如果所有前沿点都被分配，选择最近的
+                                distances = [np.linalg.norm(np.array(target_point_list[j]) - np.array(pose_pred[i][:2])) for j in range(len(target_point_list))]
+                                goal_points.append(target_point_list[np.argmin(distances)])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
+                elif args.nav_mode == "fill":
+                    # ===== 覆盖模式：优先探索高价值区域（基于前沿得分） =====
+                    if len(target_point_list) > 0:
+                        for i in range(num_agents):
+                            # 选择前沿点中得分最高的（探索价值最大）
+                            best_idx = 0
+                            best_score = -1
+                            for j, frontier in enumerate(target_point_list):
+                                if target_score is not None and j < len(target_score):
+                                    score = target_score[j]
+                                else:
+                                    # 如果没有得分，用距离倒数作为替代
+                                    score = 1.0 / (1.0 + np.linalg.norm(np.array(frontier) - np.array(pose_pred[i][:2])))
+                                
+                                if score > best_score:
+                                    best_score = score
+                                    best_idx = j
+                            
+                            goal_points.append(target_point_list[best_idx])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+                
                 else:
+                    # 默认：随机选择前沿点
                     for i in range(num_agents):
-                        action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
-                        goal_points.append([int(action[0]), int(action[1])])
+                        if len(target_point_list) > 0:
+                            goal_points.append(target_point_list[np.random.randint(0, len(target_point_list))])
+                        else:
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
                             
             goal_map = []
             for i in range(num_agents):
