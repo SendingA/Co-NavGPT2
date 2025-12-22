@@ -200,6 +200,13 @@ class VLM_Agent():
         # 安全性：本 episode 是否进入过严重火灾区域
         self.unsafe_fire_event = False
         
+        # 火灾危害暴露指标（Cumulative Hazard Exposure）
+        self.cumulative_hazard_exposure = 0.0  # 累积危害暴露（强度 * 步数）
+        self.step_hazard_exposure = 0.0        # 当前步的危害暴露
+        self.max_hazard_intensity = 0.0        # 最大火焰强度
+        self.hazard_contact_steps = 0          # 与火焰接触的步数
+        self.total_steps = 0                   # 总步数
+        
         self.upstair_flag = False
         self.downstair_flag = False
         self.another_floor = False

@@ -702,12 +702,24 @@ def main(args, send_queue, receive_queue):
         for i in range(num_agents):
             agent[i].reset(observations[i], agent_state)
             actions.append(0)
-            # 严格接触判定：初始位置是否进入高强度火焰区域
+            
+            # 初始位置的火灾危害计算
             init_pos = np.array(env.sim.get_agent_state(i).position, dtype=np.float32)
+            init_fire_intensity = fire_simulator.get_fire_intensity_at_position(init_pos)
+            
+            # 初始化危害暴露指标
+            agent[i].cumulative_hazard_exposure = init_fire_intensity
+            agent[i].step_hazard_exposure = init_fire_intensity
+            agent[i].max_hazard_intensity = init_fire_intensity
+            agent[i].total_steps = 1
+            
+            if init_fire_intensity > 0.1:
+                agent[i].hazard_contact_steps = 1
+            
+            # 严格接触判定：初始位置是否进入高强度火焰区域
             if fire_simulator.is_position_in_severe_fire(init_pos, intensity_threshold=0.7):
                 agent[i].unsafe_fire_event = True
-                fire_intensity = fire_simulator.get_fire_intensity_at_position(init_pos)
-                logging.info(f"Agent {i} started in severe fire (intensity={fire_intensity:.3f})")
+                logging.info(f"Agent {i} started in severe fire (intensity={init_fire_intensity:.3f})")
 
             
         count_step = 0
@@ -727,11 +739,25 @@ def main(args, send_queue, receive_queue):
                 pose_pred.append([agent[i].current_grid_pose[1], int(agent[i].map_size)-agent[i].current_grid_pose[0], np.deg2rad(agent[i].relative_angle)])
                 if agent[i].found_goal:
                     found_goal = True 
-                # 严格接触判定：当前位置是否进入高强度火焰区域
+                
+                # ===== 火灾危害暴露计算 =====
                 curr_pos = np.array(agent_state.position, dtype=np.float32)
+                fire_intensity = fire_simulator.get_fire_intensity_at_position(curr_pos)
+                
+                # 累积危害暴露（火焰强度 * 步数权重）
+                agent[i].step_hazard_exposure = fire_intensity
+                agent[i].cumulative_hazard_exposure += fire_intensity
+                agent[i].max_hazard_intensity = max(agent[i].max_hazard_intensity, fire_intensity)
+                
+                # 统计与火焰接触的步数（强度 > 0.1 视为接触）
+                if fire_intensity > 0.1:
+                    agent[i].hazard_contact_steps += 1
+                
+                agent[i].total_steps += 1
+                
+                # 严格接触判定：当前位置是否进入高强度火焰区域
                 if fire_simulator.is_position_in_severe_fire(curr_pos, intensity_threshold=0.7):
                     agent[i].unsafe_fire_event = True
-                    fire_intensity = fire_simulator.get_fire_intensity_at_position(curr_pos)
                     logging.warning(f"Agent {i} entered severe fire region (intensity={fire_intensity:.3f})")
                 
             obstacle_map, explored_map, top_view_map = map_process.Map_Extraction(point_sum, agent[0].camera_position[1])
@@ -823,18 +849,36 @@ def main(args, send_queue, receive_queue):
         ]) + '\n'
 
         metrics = env.get_metrics()
-        # 安全导航判定：若任一智能体进入严重火灾区域，则强制失败
-        unsafe_any = any(getattr(a, 'unsafe_fire_event', False) for a in agent)
-        if unsafe_any:
-            # Habitat metrics 通常包含 'success' 与 'spl'
-            if 'success' in metrics:
-                metrics['success'] = 0.0
-            if 'spl' in metrics:
-                metrics['spl'] = 0.0
-            # 记录自定义安全指标
-            metrics['unsafe_fire_event'] = 1.0
+        
+        # ===== 添加火灾危害暴露指标（Cumulative Hazard Exposure）=====
+        # 保持原有 success/spl 不变，基于现有数据添加新的安全指标
+        
+        # 计算多智能体的平均指标
+        if num_agents > 0:
+            avg_cumulative_hazard = np.mean([getattr(a, 'cumulative_hazard_exposure', 0.0) for a in agent])
+            avg_max_hazard_intensity = np.mean([getattr(a, 'max_hazard_intensity', 0.0) for a in agent])
+            avg_hazard_contact_ratio = np.mean([
+                getattr(a, 'hazard_contact_steps', 0) / max(getattr(a, 'total_steps', 1), 1) 
+                for a in agent
+            ])
         else:
-            metrics['unsafe_fire_event'] = 0.0
+            avg_cumulative_hazard = 0.0
+            avg_max_hazard_intensity = 0.0
+            avg_hazard_contact_ratio = 0.0
+        
+        # 添加到 metrics（不覆盖原有指标）
+        metrics['cumulative_hazard_exposure'] = avg_cumulative_hazard
+        metrics['max_hazard_intensity'] = avg_max_hazard_intensity
+        metrics['hazard_contact_ratio'] = avg_hazard_contact_ratio
+        
+        # 记录单个 agent 的详细 hazard exposure
+        for i, ag in enumerate(agent):
+            metrics[f'agent_{i}/cumulative_hazard'] = getattr(ag, 'cumulative_hazard_exposure', 0.0)
+            metrics[f'agent_{i}/max_hazard_intensity'] = getattr(ag, 'max_hazard_intensity', 0.0)
+            metrics[f'agent_{i}/hazard_contact_ratio'] = (
+                getattr(ag, 'hazard_contact_steps', 0) / max(getattr(ag, 'total_steps', 1), 1)
+            )
+        
         for m, v in metrics.items():
             if isinstance(v, dict):
                 for sub_m, sub_v in v.items():

@@ -116,6 +116,81 @@ def _transform_pcd(pcd: o3d.geometry.PointCloud, R: np.ndarray, t: np.ndarray):
     return q
 
 
+def _centroid_xyz(pts: np.ndarray):
+    if pts.size == 0:
+        return np.zeros(3)
+    return pts.mean(axis=0)
+
+
+def derive_radar_from_rgbd(rgbd_pcd: o3d.geometry.PointCloud,
+                           n_beams_h: int,
+                           n_beams_v: int,
+                           range_max: float,
+                           range_std: float,
+                           origin_cam: np.ndarray,
+                           R_sensor_cam: np.ndarray) -> o3d.geometry.PointCloud:
+    """Directly derive sparse radar-like returns by binning RGBD points into beam indices.
+    - origin_cam: sensor origin in camera/world frame (3,)
+    - R_sensor_cam: rotation matrix mapping sensor axes into camera/world frame (3x3)
+    Returns: PointCloud in camera/world frame with orange color.
+    """
+    pts = np.asarray(rgbd_pcd.points)
+    if pts.size == 0:
+        return o3d.geometry.PointCloud()
+
+    # Transform points into sensor local frame: p_s = R^T * (p_c - origin)
+    rel = pts - origin_cam[None, :]
+    rel_s = (R_sensor_cam.T @ rel.T).T
+
+    x, y, z = rel_s[:, 0], rel_s[:, 1], rel_s[:, 2]
+    r = np.sqrt(x * x + y * y + z * z)
+    mask = r > 0
+    if range_max is not None:
+        mask &= (r <= range_max)
+    if not np.any(mask):
+        return o3d.geometry.PointCloud()
+    x, y, z, r = x[mask], y[mask], z[mask], r[mask]
+    idx_all = np.nonzero(mask)[0]
+
+    # Angles
+    az = np.arctan2(y, x)  # [-pi, pi]
+    el = np.arctan2(z, np.sqrt(x * x + y * y))  # [-pi/2, pi/2]
+
+    # Discretize into beams
+    az_min, az_max = -np.pi, np.pi
+    el_min, el_max = -np.pi / 2.0, np.pi / 2.0
+    az_bin = (az - az_min) / (az_max - az_min) * n_beams_h
+    el_bin = (el - el_min) / (el_max - el_min) * n_beams_v
+    h_idx = np.clip(np.floor(az_bin).astype(int), 0, n_beams_h - 1)
+    v_idx = np.clip(np.floor(el_bin).astype(int), 0, n_beams_v - 1)
+
+    # Select nearest point per beam cell
+    key = h_idx * n_beams_v + v_idx
+    # For efficiency, sort by range and take first occurrence per key
+    order = np.argsort(r)
+    key_sorted = key[order]
+    unique_keys, first_pos = np.unique(key_sorted, return_index=True)
+    chosen = order[first_pos]
+
+    # Reconstruct chosen points in camera/world frame
+    rel_s_chosen = np.stack([x[chosen], y[chosen], z[chosen]], axis=1)
+    rel_c = (R_sensor_cam @ rel_s_chosen.T).T
+    pts_c = rel_c + origin_cam[None, :]
+
+    # Add radial noise
+    if range_std and range_std > 0:
+        # Perturb along local sensor ray direction
+        dirs_s = rel_s_chosen / (np.linalg.norm(rel_s_chosen, axis=1, keepdims=True) + 1e-8)
+        noise = np.random.normal(0.0, range_std, size=(dirs_s.shape[0], 1)) * dirs_s
+        noise_c = (R_sensor_cam @ noise.T).T
+        pts_c = pts_c + noise_c
+
+    radar_pcd = o3d.geometry.PointCloud()
+    radar_pcd.points = o3d.utility.Vector3dVector(pts_c)
+    radar_pcd.colors = o3d.utility.Vector3dVector(np.tile(np.array([[1.0, 0.2, 0.0]]), (pts_c.shape[0], 1)))
+    return radar_pcd
+
+
 def save_comparison_image(rgbd_pcd: o3d.geometry.PointCloud,
                           radar_pcd: o3d.geometry.PointCloud,
                           fused_pcd: o3d.geometry.PointCloud,
@@ -194,6 +269,8 @@ def main():
     parser.add_argument("--range-max", type=float, default=50.0, help="Max range (m)")
     parser.add_argument("--range-std", type=float, default=0.03, help="Range noise std (m)")
     parser.add_argument("--top-plane", type=str, choices=["auto", "xy", "xz", "yz"], default="auto", help="Axes for top view plots")
+    parser.add_argument("--mode", type=str, choices=["scan", "derive"], default="scan", help="Radar generation mode: physics scan or RGBD-derived")
+    parser.add_argument("--sensor-origin", type=str, choices=["manual", "auto"], default="manual", help="Sensor origin: use extrinsics or cloud centroid")
     parser.add_argument("--radar-tx", type=float, default=0.0, help="Radar extrinsic translation X (m) in RGBD frame")
     parser.add_argument("--radar-ty", type=float, default=0.0, help="Radar extrinsic translation Y (m) in RGBD frame")
     parser.add_argument("--radar-tz", type=float, default=0.0, help="Radar extrinsic translation Z (m) in RGBD frame")
@@ -238,14 +315,38 @@ def main():
             logging.warning(f"Empty PLY skipped: {filepath}")
             continue
 
-        # Transform RGBD to radar frame for simulation (camera->radar)
-        rgbd_in_radar = _transform_pcd(rgbd_pcd, R_c2r, t_c2r)
+        # Decide sensor origin in camera/world frame
+        pts_np = np.asarray(rgbd_pcd.points)
+        if args.sensor_origin == "auto" and pts_np.size > 0:
+            origin_cam = _centroid_xyz(pts_np)
+        else:
+            origin_cam = t_r2c
 
-        # Simulate radar in radar frame
-        radar_in_radar, radar_info = radar_sim.simulate_radar_pointcloud(rgbd_in_radar)
+        if args.mode == "scan":
+            # Transform RGBD to radar frame for simulation (camera->radar)
+            rgbd_in_radar = _transform_pcd(rgbd_pcd, R_c2r, t_c2r)
 
-        # Transform radar back to camera/RGBD frame (radar->camera)
-        radar_pcd = _transform_pcd(radar_in_radar, R_r2c, t_r2c)
+            # Simulate radar in radar frame
+            radar_in_radar, radar_info = radar_sim.simulate_radar_pointcloud(rgbd_in_radar)
+
+            # Transform radar back to camera/RGBD frame (radar->camera)
+            radar_pcd = _transform_pcd(radar_in_radar, R_r2c, t_r2c)
+        else:
+            # Directly derive radar points by binning onto beams from origin_cam with orientation R_r2c
+            radar_pcd = derive_radar_from_rgbd(
+                rgbd_pcd,
+                n_beams_h=args.beams_h,
+                n_beams_v=args.beams_v,
+                range_max=args.range_max,
+                range_std=args.range_std,
+                origin_cam=origin_cam,
+                R_sensor_cam=R_r2c,
+            )
+            radar_info = {
+                "n_points": len(radar_pcd.points),
+                "point_density": (len(radar_pcd.points) / max(len(rgbd_pcd.points), 1)),
+                "avg_reflectance": 0.0,
+            }
 
         fused_pcd = radar_sim.fuse_pointclouds(rgbd_pcd, radar_pcd)
 
