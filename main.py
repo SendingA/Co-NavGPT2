@@ -15,6 +15,8 @@ import system_prompt
 from utils.explored_map_utils import Global_Map_Proc, detect_frontier
 from utils.pointcloud_vis import export_episode_point_cloud
 
+# 导入 Obstacle & Hazard Map 可视化工具
+from scripts.visualize_obstacle_hazard_maps import ObstacleHazardMapVisualizer
 
 from agents.vlm_agents import VLM_Agent
 import utils.visualization as vu
@@ -900,6 +902,49 @@ def main(args, send_queue, receive_queue):
         #     )
         # except Exception as e:
         #     logging.error(f"Export point cloud failed: {e}")
+
+        # ------------------------------------------------------------------
+        ##### 生成 Obstacle 和 Hazard Map 可视化
+        # ------------------------------------------------------------------
+        try:
+            # 初始化地图可视化器
+            map_visualizer = ObstacleHazardMapVisualizer(
+                map_size_cm=args.map_size_cm,
+                map_resolution=args.map_resolution,
+                output_dir=os.path.join(args.dump_location, "maps")
+            )
+            
+            # 设置已提取的地图数据
+            map_visualizer.obstacle_map = obstacle_map.astype(np.float32)
+            map_visualizer.explored_map = explored_map.astype(np.float32)
+            map_visualizer.top_view_rgb = top_view_map.copy()  # 保持原始格式
+            
+            # 从 top_view_rgb 中检测火焰颜色生成 hazard map
+            # 这样 hazard map 与 obstacle map 使用完全相同的坐标系
+            hazard_map = map_visualizer.generate_hazard_map_from_topview_rgb(top_view_map)
+            
+            # 获取 agent 世界坐标位置
+            agent_positions = []
+            for i in range(num_agents):
+                pos = env.sim.get_agent_state(i).position
+                agent_positions.append((pos[0], pos[2]))  # XZ 平面
+            
+            # 生成可视化
+            fire_clusters = fire_simulator.fire_clusters if fire_simulator else []
+            map_visualizer.visualize_maps(
+                agent_positions=agent_positions,
+                fire_clusters=fire_clusters,
+                filename=f"episode_{count_episodes:04d}_obstacle_hazard"
+            )
+            
+            # 保存单独的地图文件
+            map_visualizer.save_individual_maps(f"episode_{count_episodes:04d}")
+            
+            logging.info(f"[Episode {count_episodes}] Obstacle & Hazard maps saved")
+        except Exception as e:
+            logging.warning(f"Failed to generate obstacle/hazard maps: {e}")
+            import traceback
+            traceback.print_exc()
 
         # ------------------------------------------------------------------
         ##### 生成 Episode 视频
