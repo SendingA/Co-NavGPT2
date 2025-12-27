@@ -77,10 +77,11 @@ def images_to_video(image_dir, output_path, fps=10, pattern="Merged_Vis-*.png"):
 
 def create_episode_video(args, episode_n, rank=0):
     """
-    为指定 episode 创建三个视频:
+    为指定 episode 创建视频:
     1. agent-0-Vis-*.png -> agent_0 视频
     2. agent-1-Vis-*.png -> agent_1 视频 (如果存在)
     3. Merged_Vis-*.png -> merged 视频
+    4. agent-X-RGBD-*.png -> agent_X RGBD 视频
     
     Args:
         args: 命令行参数
@@ -102,14 +103,21 @@ def create_episode_video(args, episode_n, rank=0):
     
     video_paths = []
     
-    # 1. 为每个 agent 生成视频
+    # 1. 为每个 agent 生成普通可视化视频
     for agent_id in range(num_agents):
         pattern = f"agent-{agent_id}-Vis-*.png"
         video_path = os.path.join(video_dir, f'episode_{episode_n}_rank_{rank}_agent_{agent_id}.mp4')
         if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
             video_paths.append(video_path)
     
-    # 2. 生成 Merged 视频
+    # 2. 为每个 agent 生成 RGBD 视频
+    for agent_id in range(num_agents):
+        pattern = f"agent-{agent_id}-RGBD-*.png"
+        video_path = os.path.join(video_dir, f'episode_{episode_n}_rank_{rank}_agent_{agent_id}_rgbd.mp4')
+        if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
+            video_paths.append(video_path)
+    
+    # 3. 生成 Merged 视频
     pattern = "Merged_Vis-*.png"
     video_path = os.path.join(video_dir, f'episode_{episode_n}_rank_{rank}_merged.mp4')
     if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
@@ -481,6 +489,136 @@ def write_number_full(image, pose, number):
         drawn_centers.append((px, py))
     
     return pil_image
+
+def visualize_agent_rgbd(args, step, observations, episode_n=0, rank=0):
+    """
+    为每个 agent 保存 RGB + Depth 的可视化图像。
+    
+    Args:
+        args: 命令行参数
+        step: 当前步数
+        observations: 观测列表，每个元素包含 'rgb' 和 'depth'
+        episode_n: episode 编号
+        rank: 进程编号
+    
+    Returns:
+        list: 生成的图像数组列表（每个 agent 一张）
+    """
+    num_agents = len(observations)
+    rgbd_images = []
+    
+    dump_dir = "{}/dump/{}".format(args.dump_location, args.nav_mode)
+    ep_dir = '{}/episodes_multi/{}/eps_{}/'.format(dump_dir, rank, episode_n)
+    
+    if args.print_images:
+        if not os.path.exists(ep_dir):
+            os.makedirs(ep_dir)
+    
+    for i, obs in enumerate(observations):
+        rgb = obs.get('rgb', None)
+        depth = obs.get('depth', None)
+        
+        if rgb is None:
+            continue
+        
+        # RGB 图像处理
+        rgb_vis = rgb.copy()
+        if rgb_vis.shape[-1] == 3:
+            # 确保是 uint8
+            if rgb_vis.dtype != np.uint8:
+                rgb_vis = (rgb_vis * 255).astype(np.uint8) if rgb_vis.max() <= 1.0 else rgb_vis.astype(np.uint8)
+        
+        h, w = rgb_vis.shape[:2]
+        
+        # Depth 图像处理
+        if depth is not None:
+            depth_img = depth.copy()
+            # 如果 depth 有额外的维度，去掉
+            if len(depth_img.shape) == 3:
+                depth_img = depth_img.squeeze(-1)
+            
+            # 归一化 depth 到 0-255
+            depth_min = depth_img.min()
+            depth_max = depth_img.max()
+            if depth_max > depth_min:
+                depth_normalized = (depth_img - depth_min) / (depth_max - depth_min) * 255
+            else:
+                depth_normalized = np.zeros_like(depth_img)
+            depth_normalized = depth_normalized.astype(np.uint8)
+            
+            # 应用 colormap 使深度图更容易可视化
+            depth_colored = cv2.applyColorMap(depth_normalized, cv2.COLORMAP_JET)
+            
+            # 调整 depth 大小以匹配 rgb
+            if depth_colored.shape[:2] != (h, w):
+                depth_colored = cv2.resize(depth_colored, (w, h), interpolation=cv2.INTER_LINEAR)
+            
+            # 创建 RGB+Depth 并排图像
+            # 在两张图之间添加分隔线
+            separator_width = 5
+            combined_width = w * 2 + separator_width
+            combined_image = np.zeros((h, combined_width, 3), dtype=np.uint8)
+            
+            # RGB 在左边 (转换为 BGR 用于 OpenCV)
+            combined_image[:, :w, :] = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
+            
+            # 分隔线（白色）
+            combined_image[:, w:w+separator_width, :] = 255
+            
+            # Depth 在右边
+            combined_image[:, w+separator_width:, :] = depth_colored
+            
+            # # 添加标签
+            # font = cv2.FONT_HERSHEY_SIMPLEX
+            # font_scale = 0.6
+            # font_thickness = 2
+            # text_color = (255, 255, 255)  # 白色
+            # bg_color = (0, 0, 0)  # 黑色背景
+            
+            # # RGB 标签
+            # text_rgb = f"Agent {i} - RGB"
+            # (text_w, text_h), _ = cv2.getTextSize(text_rgb, font, font_scale, font_thickness)
+            # cv2.rectangle(combined_image, (5, 5), (text_w + 10, text_h + 10), bg_color, -1)
+            # cv2.putText(combined_image, text_rgb, (7, text_h + 7), font, font_scale, text_color, font_thickness)
+            
+            # # Depth 标签
+            # text_depth = f"Agent {i} - Depth"
+            # (text_w, text_h), _ = cv2.getTextSize(text_depth, font, font_scale, font_thickness)
+            # cv2.rectangle(combined_image, (w + separator_width + 5, 5), 
+            #              (w + separator_width + text_w + 10, text_h + 10), bg_color, -1)
+            # cv2.putText(combined_image, text_depth, (w + separator_width + 7, text_h + 7), 
+            #            font, font_scale, text_color, font_thickness)
+            
+            # # 添加步数信息
+            # step_text = f"Step: {step}"
+            # (text_w, text_h), _ = cv2.getTextSize(step_text, font, font_scale, font_thickness)
+            # cv2.rectangle(combined_image, (combined_width - text_w - 15, 5), 
+            #              (combined_width - 5, text_h + 10), bg_color, -1)
+            # cv2.putText(combined_image, step_text, (combined_width - text_w - 10, text_h + 7), 
+            #            font, font_scale, text_color, font_thickness)
+        else:
+            # 如果没有 depth，只保存 RGB
+            combined_image = cv2.cvtColor(rgb_vis, cv2.COLOR_RGB2BGR)
+            
+            # 添加标签
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text = f"Agent {i} - RGB (No Depth)"
+            cv2.putText(combined_image, text, (10, 25), font, 0.6, (255, 255, 255), 2)
+        
+        rgbd_images.append(combined_image)
+        
+        # 保存图像
+        if args.print_images:
+            fn = ep_dir + f'agent-{i}-RGBD-{step}.png'
+            cv2.imwrite(fn, combined_image)
+        
+        # 可视化显示
+        if args.visualize:
+            cv2.imshow(f"Agent_{i}_RGBD", combined_image)
+            cv2.waitKey(1)
+    
+    return rgbd_images
+
 
 def Visualize(args, step, pose_pred, map_pred, exp_pred, goal_name, visited_vis, map_edge, goal_map, top_view_map, episode_n=0, rank=0):
     sem_map = np.zeros(map_pred.shape)

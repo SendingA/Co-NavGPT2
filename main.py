@@ -875,6 +875,12 @@ def main(args, send_queue, receive_queue):
                     goal_map, 
                     transform_rgb_bgr(top_view_map),
                     agent[0].episode_n)
+                
+                # 同时保存每个 agent 的 RGB+Depth 可视化
+                vu.visualize_agent_rgbd(
+                    args, agent[0].l_step,
+                    observations,
+                    agent[0].episode_n)
         
             observations = env.step(actions)
             
