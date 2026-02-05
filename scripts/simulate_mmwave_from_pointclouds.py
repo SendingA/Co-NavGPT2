@@ -197,66 +197,322 @@ def save_comparison_image(rgbd_pcd: o3d.geometry.PointCloud,
                           out_path: str,
                           title: str,
                           top_plane: str = "auto"):
+    """
+    生成 RGBD、毫米波雷达和融合点云的对比可视化图像。
+    包括 Top View 和 Side View，使毫米波雷达输出与 RGBD 感知视图对齐。
+    """
     pts = np.asarray(rgbd_pcd.points)
     cols = np.asarray(rgbd_pcd.colors) if len(rgbd_pcd.colors) > 0 else None
 
-    fig, axes = plt.subplots(2, 2, figsize=(14, 12), dpi=150)
-    fig.suptitle(title, fontsize=16)
+    # 创建 3x3 的图像布局：
+    # Row 0: RGBD (Top, Side-XZ, Side-YZ)
+    # Row 1: Radar (Top, Side-XZ, Side-YZ)  
+    # Row 2: Fused (Top, Side-XZ, Side-YZ)
+    fig, axes = plt.subplots(3, 3, figsize=(18, 16), dpi=150)
+    fig.suptitle(f'{title}\n(RGBD vs mmWave Radar Side-View Comparison)', fontsize=16)
 
     # Determine top-plane axes
     ax_pair = _choose_top_plane(pts, top_plane)
     ai, aj = _to_indices(ax_pair)
 
-    # RGBD top
+    # 计算共享的坐标范围
+    all_pts = [pts]
+    if len(radar_pcd.points) > 0:
+        all_pts.append(np.asarray(radar_pcd.points))
+    if len(fused_pcd.points) > 0:
+        all_pts.append(np.asarray(fused_pcd.points))
+    
+    if any(len(p) > 0 for p in all_pts):
+        all_concat = np.vstack([p for p in all_pts if len(p) > 0])
+        x_min, x_max = all_concat[:, 0].min() - 0.5, all_concat[:, 0].max() + 0.5
+        y_min, y_max = all_concat[:, 1].min() - 0.5, all_concat[:, 1].max() + 0.5
+        z_min, z_max = all_concat[:, 2].min() - 0.5, all_concat[:, 2].max() + 0.5
+    else:
+        x_min, x_max, y_min, y_max, z_min, z_max = -5, 5, -5, 5, -1, 3
+
+    # ==================== Row 0: RGBD ====================
+    # RGBD Top View
     if len(pts) > 0:
         axes[0, 0].scatter(pts[:, ai], pts[:, aj], c=cols if cols is not None else "tab:cyan", s=0.5, alpha=0.7)
-        axes[0, 0].set_title(f'RGBD Top View ({ax_pair[0]}-{ax_pair[1]}) ({len(pts)} points)')
+        axes[0, 0].set_title(f'RGBD Top View ({ax_pair[0]}-{ax_pair[1]})\n{len(pts)} points', fontsize=11)
     else:
-        axes[0, 0].text(0.5, 0.5, 'Empty RGBD', ha='center', va='center')
+        axes[0, 0].text(0.5, 0.5, 'Empty RGBD', ha='center', va='center', fontsize=12)
     axes[0, 0].set_xlabel(f'{ax_pair[0].upper()} (m)')
     axes[0, 0].set_ylabel(f'{ax_pair[1].upper()} (m)')
-    axes[0, 0].axis('equal')
-    axes[0, 0].grid(alpha=0.2)
+    axes[0, 0].set_aspect('equal')
+    axes[0, 0].grid(alpha=0.3, linestyle='--')
 
-    # RGBD side
+    # RGBD Side View X-Z (前视图/侧视图)
     if len(pts) > 0:
-        axes[0, 1].scatter(pts[:, 0], pts[:, 2], c=cols if cols is not None else "tab:cyan", s=0.5, alpha=0.7)
-        axes[0, 1].set_title('RGBD Side View')
+        # 按 Y 值着色，模拟深度感
+        y_normalized = (pts[:, 1] - y_min) / (y_max - y_min + 1e-6)
+        colors_xz = plt.cm.viridis(y_normalized) if cols is None else cols
+        axes[0, 1].scatter(pts[:, 0], pts[:, 2], c=colors_xz, s=0.5, alpha=0.7)
+        axes[0, 1].set_title(f'RGBD Side View (X-Z)\nFront/Back depth coded', fontsize=11)
     else:
-        axes[0, 1].text(0.5, 0.5, 'Empty RGBD', ha='center', va='center')
-    axes[0, 1].set_xlabel('X (m)')
-    axes[0, 1].set_ylabel('Z (m)')
-    axes[0, 1].axis('equal')
-    axes[0, 1].grid(alpha=0.2)
+        axes[0, 1].text(0.5, 0.5, 'Empty RGBD', ha='center', va='center', fontsize=12)
+    axes[0, 1].set_xlabel('X (m) - Left/Right')
+    axes[0, 1].set_ylabel('Z (m) - Height')
+    axes[0, 1].set_xlim(x_min, x_max)
+    axes[0, 1].set_ylim(z_min, z_max)
+    axes[0, 1].set_aspect('equal')
+    axes[0, 1].grid(alpha=0.3, linestyle='--')
 
-    # Radar top
-    if len(radar_pcd.points) > 0:
-        rpts = np.asarray(radar_pcd.points)
-        rcols = np.asarray(radar_pcd.colors) if len(radar_pcd.colors) > 0 else None
-        axes[1, 0].scatter(rpts[:, ai], rpts[:, aj], c=rcols if rcols is not None else "tab:red", s=2, alpha=0.8)
-        axes[1, 0].set_title(f'mmWave Radar Top View ({ax_pair[0]}-{ax_pair[1]}) ({len(radar_pcd.points)} points)')
+    # RGBD Side View Y-Z (侧视图)
+    if len(pts) > 0:
+        x_normalized = (pts[:, 0] - x_min) / (x_max - x_min + 1e-6)
+        colors_yz = plt.cm.plasma(x_normalized) if cols is None else cols
+        axes[0, 2].scatter(pts[:, 1], pts[:, 2], c=colors_yz, s=0.5, alpha=0.7)
+        axes[0, 2].set_title(f'RGBD Side View (Y-Z)\nLeft/Right depth coded', fontsize=11)
     else:
-        axes[1, 0].text(0.5, 0.5, 'No Radar Points', ha='center', va='center')
-        axes[1, 0].set_title('mmWave Radar Top View (0 points)')
+        axes[0, 2].text(0.5, 0.5, 'Empty RGBD', ha='center', va='center', fontsize=12)
+    axes[0, 2].set_xlabel('Y (m) - Forward/Backward')
+    axes[0, 2].set_ylabel('Z (m) - Height')
+    axes[0, 2].set_xlim(y_min, y_max)
+    axes[0, 2].set_ylim(z_min, z_max)
+    axes[0, 2].set_aspect('equal')
+    axes[0, 2].grid(alpha=0.3, linestyle='--')
+
+    # ==================== Row 1: Radar ====================
+    rpts = np.asarray(radar_pcd.points) if len(radar_pcd.points) > 0 else np.array([]).reshape(0, 3)
+    rcols = np.asarray(radar_pcd.colors) if len(radar_pcd.colors) > 0 else None
+
+    # Radar Top View
+    if len(rpts) > 0:
+        axes[1, 0].scatter(rpts[:, ai], rpts[:, aj], c=rcols if rcols is not None else "tab:orange", s=4, alpha=0.9, marker='o')
+        axes[1, 0].set_title(f'mmWave Radar Top View\n{len(rpts)} points (sparse)', fontsize=11)
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No Radar Points', ha='center', va='center', fontsize=12)
+        axes[1, 0].set_title('mmWave Radar Top View\n0 points', fontsize=11)
     axes[1, 0].set_xlabel(f'{ax_pair[0].upper()} (m)')
     axes[1, 0].set_ylabel(f'{ax_pair[1].upper()} (m)')
-    axes[1, 0].axis('equal')
-    axes[1, 0].grid(alpha=0.2)
+    axes[1, 0].set_aspect('equal')
+    axes[1, 0].grid(alpha=0.3, linestyle='--')
 
-    # Fused top
-    if len(fused_pcd.points) > 0:
-        fpts = np.asarray(fused_pcd.points)
-        fcols = np.asarray(fused_pcd.colors) if len(fused_pcd.colors) > 0 else None
-        axes[1, 1].scatter(fpts[:, ai], fpts[:, aj], c=fcols if fcols is not None else "tab:purple", s=1.5, alpha=0.8)
-        axes[1, 1].set_title(f'Fused (RGBD+Radar) Top View ({ax_pair[0]}-{ax_pair[1]}) ({len(fused_pcd.points)} points)')
-    axes[1, 1].set_xlabel(f'{ax_pair[0].upper()} (m)')
-    axes[1, 1].set_ylabel(f'{ax_pair[1].upper()} (m)')
-    axes[1, 1].axis('equal')
-    axes[1, 1].grid(alpha=0.2)
+    # 用距离着色
+    if len(rpts) > 0:
+        dist = np.sqrt(rpts[:, 0]**2 + rpts[:, 1]**2 + rpts[:, 2]**2)
+        dist_norm = (dist - dist.min()) / (dist.max() - dist.min() + 1e-6)
+        radar_colors_xz = plt.cm.hot(dist_norm)
+    else:
+        radar_colors_xz = None
 
-    plt.tight_layout(rect=[0, 0.03, 1, 0.97])
+    # Radar Side View X-Z
+    if len(rpts) > 0:
+        axes[1, 1].scatter(rpts[:, 0], rpts[:, 2], c=radar_colors_xz, s=6, alpha=0.9, marker='s')
+        axes[1, 1].set_title(f'mmWave Radar Side View (X-Z)\nDistance coded (hot)', fontsize=11)
+    else:
+        axes[1, 1].text(0.5, 0.5, 'No Radar Points', ha='center', va='center', fontsize=12)
+    axes[1, 1].set_xlabel('X (m) - Left/Right')
+    axes[1, 1].set_ylabel('Z (m) - Height')
+    axes[1, 1].set_xlim(x_min, x_max)
+    axes[1, 1].set_ylim(z_min, z_max)
+    axes[1, 1].set_aspect('equal')
+    axes[1, 1].grid(alpha=0.3, linestyle='--')
+
+    # Radar Side View Y-Z
+    if len(rpts) > 0:
+        axes[1, 2].scatter(rpts[:, 1], rpts[:, 2], c=radar_colors_xz, s=6, alpha=0.9, marker='s')
+        axes[1, 2].set_title(f'mmWave Radar Side View (Y-Z)\nDistance coded (hot)', fontsize=11)
+    else:
+        axes[1, 2].text(0.5, 0.5, 'No Radar Points', ha='center', va='center', fontsize=12)
+    axes[1, 2].set_xlabel('Y (m) - Forward/Backward')
+    axes[1, 2].set_ylabel('Z (m) - Height')
+    axes[1, 2].set_xlim(y_min, y_max)
+    axes[1, 2].set_ylim(z_min, z_max)
+    axes[1, 2].set_aspect('equal')
+    axes[1, 2].grid(alpha=0.3, linestyle='--')
+
+    # ==================== Row 2: Fused ====================
+    fpts = np.asarray(fused_pcd.points) if len(fused_pcd.points) > 0 else np.array([]).reshape(0, 3)
+    fcols = np.asarray(fused_pcd.colors) if len(fused_pcd.colors) > 0 else None
+
+    # Fused Top View
+    if len(fpts) > 0:
+        axes[2, 0].scatter(fpts[:, ai], fpts[:, aj], c=fcols if fcols is not None else "tab:purple", s=1, alpha=0.7)
+        axes[2, 0].set_title(f'Fused (RGBD+Radar) Top View\n{len(fpts)} points', fontsize=11)
+    else:
+        axes[2, 0].text(0.5, 0.5, 'Empty Fused', ha='center', va='center', fontsize=12)
+    axes[2, 0].set_xlabel(f'{ax_pair[0].upper()} (m)')
+    axes[2, 0].set_ylabel(f'{ax_pair[1].upper()} (m)')
+    axes[2, 0].set_aspect('equal')
+    axes[2, 0].grid(alpha=0.3, linestyle='--')
+
+    # Fused Side View X-Z
+    if len(fpts) > 0:
+        axes[2, 1].scatter(fpts[:, 0], fpts[:, 2], c=fcols if fcols is not None else "tab:purple", s=1, alpha=0.7)
+        axes[2, 1].set_title(f'Fused Side View (X-Z)', fontsize=11)
+    else:
+        axes[2, 1].text(0.5, 0.5, 'Empty Fused', ha='center', va='center', fontsize=12)
+    axes[2, 1].set_xlabel('X (m) - Left/Right')
+    axes[2, 1].set_ylabel('Z (m) - Height')
+    axes[2, 1].set_xlim(x_min, x_max)
+    axes[2, 1].set_ylim(z_min, z_max)
+    axes[2, 1].set_aspect('equal')
+    axes[2, 1].grid(alpha=0.3, linestyle='--')
+
+    # Fused Side View Y-Z
+    if len(fpts) > 0:
+        axes[2, 2].scatter(fpts[:, 1], fpts[:, 2], c=fcols if fcols is not None else "tab:purple", s=1, alpha=0.7)
+        axes[2, 2].set_title(f'Fused Side View (Y-Z)', fontsize=11)
+    else:
+        axes[2, 2].text(0.5, 0.5, 'Empty Fused', ha='center', va='center', fontsize=12)
+    axes[2, 2].set_xlabel('Y (m) - Forward/Backward')
+    axes[2, 2].set_ylabel('Z (m) - Height')
+    axes[2, 2].set_xlim(y_min, y_max)
+    axes[2, 2].set_ylim(z_min, z_max)
+    axes[2, 2].set_aspect('equal')
+    axes[2, 2].grid(alpha=0.3, linestyle='--')
+
+    # 添加图例说明
+    legend_text = (
+        f"RGBD: {len(pts)} pts | Radar: {len(rpts)} pts | "
+        f"Density: {len(rpts)/max(len(pts),1)*100:.1f}%"
+    )
+    fig.text(0.5, 0.01, legend_text, ha='center', fontsize=10, 
+             bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.5))
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     plt.savefig(out_path, bbox_inches='tight')
+    plt.close(fig)
+    
+    # 额外保存一个专门的 Side View 对比图（类似相机视角）
+    save_side_view_comparison(rgbd_pcd, radar_pcd, out_path.replace('.png', '_sideview.png'), title)
+
+
+def save_side_view_comparison(rgbd_pcd: o3d.geometry.PointCloud,
+                               radar_pcd: o3d.geometry.PointCloud,
+                               out_path: str,
+                               title: str):
+    """
+    生成专门的 Side View 对比图，类似 RGBD 深度图的视角。
+    将点云投影到类似相机视角的 2D 平面上。
+    """
+    pts = np.asarray(rgbd_pcd.points)
+    cols = np.asarray(rgbd_pcd.colors) if len(rgbd_pcd.colors) > 0 else None
+    rpts = np.asarray(radar_pcd.points) if len(radar_pcd.points) > 0 else np.array([]).reshape(0, 3)
+    
+    if len(pts) == 0:
+        return
+    
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10), dpi=150)
+    fig.suptitle(f'{title}\nSide View Comparison (Camera-like Projection)', fontsize=14)
+    
+    # 模拟相机视角：假设相机在原点，朝向 +Y 方向
+    # X 轴为水平方向（左右），Z 轴为垂直方向（上下），Y 轴为深度
+    
+    # 过滤掉相机后方的点（Y < 0）
+    front_mask_rgb = pts[:, 1] > 0.1
+    pts_front = pts[front_mask_rgb]
+    cols_front = cols[front_mask_rgb] if cols is not None else None
+    
+    if len(rpts) > 0:
+        front_mask_radar = rpts[:, 1] > 0.1
+        rpts_front = rpts[front_mask_radar]
+    else:
+        rpts_front = np.array([]).reshape(0, 3)
+    
+    # ===== RGBD Camera-like View (透视投影) =====
+    if len(pts_front) > 0:
+        # 简单透视投影：u = fx * X/Y, v = fy * Z/Y
+        fx, fy = 500, 500  # 虚拟焦距
+        u_rgb = fx * pts_front[:, 0] / (pts_front[:, 1] + 1e-6)
+        v_rgb = fy * pts_front[:, 2] / (pts_front[:, 1] + 1e-6)
+        
+        # 深度着色
+        depth_rgb = pts_front[:, 1]
+        depth_norm = (depth_rgb - depth_rgb.min()) / (depth_rgb.max() - depth_rgb.min() + 1e-6)
+        
+        axes[0, 0].scatter(u_rgb, -v_rgb, c=cols_front if cols_front is not None else plt.cm.jet(depth_norm), 
+                          s=0.3, alpha=0.7)
+        axes[0, 0].set_title(f'RGBD Camera View\n(Perspective Projection, {len(pts_front)} pts)')
+    else:
+        axes[0, 0].text(0.5, 0.5, 'No points in front', ha='center', va='center')
+    axes[0, 0].set_xlabel('u (pixels)')
+    axes[0, 0].set_ylabel('v (pixels)')
+    axes[0, 0].set_aspect('equal')
+    axes[0, 0].grid(alpha=0.2)
+    axes[0, 0].set_facecolor('black')
+    
+    # ===== RGBD Depth Map Style =====
+    if len(pts_front) > 0:
+        fx, fy = 500, 500
+        u_rgb = fx * pts_front[:, 0] / (pts_front[:, 1] + 1e-6)
+        v_rgb = fy * pts_front[:, 2] / (pts_front[:, 1] + 1e-6)
+        depth_rgb = pts_front[:, 1]
+        depth_norm = (depth_rgb - depth_rgb.min()) / (depth_rgb.max() - depth_rgb.min() + 1e-6)
+        # 创建深度图风格的可视化
+        depth_colors = plt.cm.jet(1 - depth_norm)  # 近处红，远处蓝
+        axes[0, 1].scatter(u_rgb, -v_rgb, c=depth_colors, s=0.3, alpha=0.8)
+        axes[0, 1].set_title(f'RGBD Depth Map Style\n(Red=Near, Blue=Far)')
+        
+        # 添加 colorbar
+        sm = plt.cm.ScalarMappable(cmap='jet_r', norm=plt.Normalize(depth_rgb.min(), depth_rgb.max()))
+        sm.set_array([])
+        cbar = plt.colorbar(sm, ax=axes[0, 1], shrink=0.8)
+        cbar.set_label('Depth (m)')
+    else:
+        axes[0, 1].text(0.5, 0.5, 'No points', ha='center', va='center')
+    axes[0, 1].set_xlabel('u (pixels)')
+    axes[0, 1].set_ylabel('v (pixels)')
+    axes[0, 1].set_aspect('equal')
+    axes[0, 1].set_facecolor('black')
+    
+    # ===== mmWave Radar Camera View =====
+    if len(rpts_front) > 0:
+        fx, fy = 500, 500
+        u_radar = fx * rpts_front[:, 0] / (rpts_front[:, 1] + 1e-6)
+        v_radar = fy * rpts_front[:, 2] / (rpts_front[:, 1] + 1e-6)
+        
+        depth_radar = rpts_front[:, 1]
+        depth_radar_norm = (depth_radar - depth_radar.min()) / (depth_radar.max() - depth_radar.min() + 1e-6)
+        radar_colors = plt.cm.hot(1 - depth_radar_norm)
+        
+        axes[1, 0].scatter(u_radar, -v_radar, c=radar_colors, s=15, alpha=0.9, marker='s', edgecolors='white', linewidths=0.3)
+        axes[1, 0].set_title(f'mmWave Radar Camera View\n(Sparse, {len(rpts_front)} pts)')
+        
+        # 添加 colorbar
+        sm_r = plt.cm.ScalarMappable(cmap='hot_r', norm=plt.Normalize(depth_radar.min(), depth_radar.max()))
+        sm_r.set_array([])
+        cbar_r = plt.colorbar(sm_r, ax=axes[1, 0], shrink=0.8)
+        cbar_r.set_label('Range (m)')
+    else:
+        axes[1, 0].text(0.5, 0.5, 'No Radar Points', ha='center', va='center', fontsize=12, color='white')
+        axes[1, 0].set_title('mmWave Radar Camera View\n(0 pts)')
+    axes[1, 0].set_xlabel('u (pixels)')
+    axes[1, 0].set_ylabel('v (pixels)')
+    axes[1, 0].set_aspect('equal')
+    axes[1, 0].set_facecolor('black')
+    axes[1, 0].grid(alpha=0.2, color='gray')
+    
+    # ===== Fused View (RGBD + Radar overlay) =====
+    if len(pts_front) > 0:
+        fx, fy = 500, 500
+        u_rgb = fx * pts_front[:, 0] / (pts_front[:, 1] + 1e-6)
+        v_rgb = fy * pts_front[:, 2] / (pts_front[:, 1] + 1e-6)
+        # 先画 RGBD（底层，透明）
+        axes[1, 1].scatter(u_rgb, -v_rgb, c='cyan', s=0.2, alpha=0.3, label='RGBD')
+        
+        # 再画 Radar（上层，高亮）
+        if len(rpts_front) > 0:
+            u_radar = fx * rpts_front[:, 0] / (rpts_front[:, 1] + 1e-6)
+            v_radar = fy * rpts_front[:, 2] / (rpts_front[:, 1] + 1e-6)
+            axes[1, 1].scatter(u_radar, -v_radar, c='orange', s=20, alpha=1.0, marker='s', 
+                              edgecolors='yellow', linewidths=0.5, label='Radar')
+        
+        axes[1, 1].set_title(f'Fused Camera View\n(RGBD: cyan, Radar: orange)')
+        axes[1, 1].legend(loc='upper right', fontsize=8)
+    else:
+        axes[1, 1].text(0.5, 0.5, 'No points', ha='center', va='center', color='white')
+    axes[1, 1].set_xlabel('u (pixels)')
+    axes[1, 1].set_ylabel('v (pixels)')
+    axes[1, 1].set_aspect('equal')
+    axes[1, 1].set_facecolor('black')
+    axes[1, 1].grid(alpha=0.2, color='gray')
+    
+    plt.tight_layout(rect=[0, 0, 1, 0.95])
+    plt.savefig(out_path, bbox_inches='tight', facecolor='white')
     plt.close(fig)
 
 
@@ -264,10 +520,10 @@ def main():
     parser = argparse.ArgumentParser(description="Simulate mmWave radar from saved RGBD pointclouds")
     parser.add_argument("--input", type=str, default=os.path.join(ROOT, "tmp", "pointclouds"), help="Input folder with RGBD PLYs")
     parser.add_argument("--output", type=str, default=os.path.join(ROOT, "tmp", "pointclouds_radar"), help="Output folder for radar/fused results")
-    parser.add_argument("--beams-h", type=int, default=128, help="Horizontal beams")
-    parser.add_argument("--beams-v", type=int, default=8, help="Vertical beams")
-    parser.add_argument("--range-max", type=float, default=50.0, help="Max range (m)")
-    parser.add_argument("--range-std", type=float, default=0.03, help="Range noise std (m)")
+    parser.add_argument("--beams-h", type=int, default=32, help="Horizontal beams (sparse)")
+    parser.add_argument("--beams-v", type=int, default=4, help="Vertical beams (sparse)")
+    parser.add_argument("--range-max", type=float, default=20.0, help="Max range (m)")
+    parser.add_argument("--range-std", type=float, default=0.05, help="Range noise std (m)")
     parser.add_argument("--top-plane", type=str, choices=["auto", "xy", "xz", "yz"], default="auto", help="Axes for top view plots")
     parser.add_argument("--mode", type=str, choices=["scan", "derive"], default="scan", help="Radar generation mode: physics scan or RGBD-derived")
     parser.add_argument("--sensor-origin", type=str, choices=["manual", "auto"], default="manual", help="Sensor origin: use extrinsics or cloud centroid")
@@ -289,11 +545,17 @@ def main():
         return
     logging.info(f"Found {len(files)} RGBD files")
 
+    # 使用边缘/轮廓模式的雷达仿真器（更稀疏的参数）
     radar_sim = MMWaveRadarSimulator(
         n_beams_h=args.beams_h,
         n_beams_v=args.beams_v,
         range_max=args.range_max,
         range_std=args.range_std,
+        edge_threshold=0.5,      # 深度不连续阈值（增大）
+        neighbor_radius=0.25,    # 邻域搜索半径（增大）
+        boundary_ratio=0.03,     # 边界点采样比例（减小）
+        downsample_voxel=0.12,   # 体素下采样大小（增大）
+        random_dropout=0.5,      # 随机丢弃50%
     )
 
     # Build extrinsic transforms
@@ -326,8 +588,10 @@ def main():
             # Transform RGBD to radar frame for simulation (camera->radar)
             rgbd_in_radar = _transform_pcd(rgbd_pcd, R_c2r, t_c2r)
 
-            # Simulate radar in radar frame
-            radar_in_radar, radar_info = radar_sim.simulate_radar_pointcloud(rgbd_in_radar)
+            # Simulate radar in radar frame (使用边缘/轮廓模式)
+            radar_in_radar, radar_info = radar_sim.simulate_radar_pointcloud(
+                rgbd_in_radar, method="combined"
+            )
 
             # Transform radar back to camera/RGBD frame (radar->camera)
             radar_pcd = _transform_pcd(radar_in_radar, R_r2c, t_r2c)

@@ -2,45 +2,50 @@
 """
 毫米波雷达仿真器 (mmWave Radar Simulator)
 
-模拟现实的毫米波雷达特性：
-1. 稀疏采样：仅选择部分点（模拟有限的射线数）
-2. 距离测量噪声：高斯噪声
-3. 角度分辨率限制：量化角度
-4. 运动补偿：考虑agent运动
-5. 多径效应：部分点的多次反射
-6. 材料相关反射率：不同材料的反射强度不同
+模拟现实的毫米波雷达特性，重点在于提取点云的边缘/轮廓：
+1. 边缘检测：提取物体边界点
+2. 深度不连续检测：识别深度跳变位置
+3. 稀疏轮廓：只保留场景轮廓点
+4. 距离测量噪声：高斯噪声
 """
 
 import numpy as np
 import open3d as o3d
 from typing import Tuple, List, Dict
 import logging
+from scipy.spatial import KDTree
+from scipy import ndimage
 
 
 class MMWaveRadarSimulator:
     """
-    毫米波雷达仿真器
+    毫米波雷达仿真器 - 边缘/轮廓提取模式
     
     主要参数（可配置）：
-    - n_beams_h: 水平射线数（通常 64-256）
-    - n_beams_v: 垂直射线数（通常 8-16）
-    - range_min/max: 测距范围（通常 0.1-200m）
-    - range_std: 距离测量标准差（通常 1-5cm）
-    - azimuth_resolution: 方位角分辨率（°）
-    - elevation_resolution: 仰角分辨率（°）
+    - edge_threshold: 边缘检测阈值（深度差异）
+    - neighbor_radius: 邻域搜索半径
+    - downsample_voxel: 体素下采样大小
+    - boundary_ratio: 边界点采样比例
     """
     
     def __init__(
         self,
-        n_beams_h: int = 128,          # 水平射线数
-        n_beams_v: int = 8,            # 垂直射线数
+        n_beams_h: int = 64,           # 保留用于兼容性
+        n_beams_v: int = 8,            # 保留用于兼容性
         range_min: float = 0.1,        # 最小测距 (m)
-        range_max: float = 100.0,      # 最大测距 (m)
-        range_std: float = 0.05,       # 距离噪声标准差 (m)
+        range_max: float = 50.0,       # 最大测距 (m)
+        range_std: float = 0.08,       # 距离噪声标准差 (m)（增大噪声）
         fov_h: float = 360.0,          # 水平视场 (°)
-        fov_v: float = 30.0,           # 垂直视场 (°)
-        reflection_threshold: float = 0.1,  # 最小反射强度阈值
-        multipath_ratio: float = 0.1,  # 多径效应比例
+        fov_v: float = 60.0,           # 垂直视场 (°)
+        reflection_threshold: float = 0.1,
+        multipath_ratio: float = 0.02,
+        # 边缘检测专用参数 - 调整为更稀疏
+        edge_threshold: float = 0.5,   # 深度不连续阈值 (m)（增大，减少检测）
+        neighbor_radius: float = 0.25, # 邻域搜索半径 (m)（增大，减少边界点）
+        boundary_ratio: float = 0.03,  # 边界点采样比例（减小）
+        downsample_voxel: float = 0.12, # 体素下采样大小 (m)（增大，更稀疏）
+        curvature_threshold: float = 0.05,  # 曲率阈值（增大，减少检测）
+        random_dropout: float = 0.5,   # 随机丢弃比例（新增）
     ):
         self.n_beams_h = n_beams_h
         self.n_beams_v = n_beams_v
@@ -52,108 +57,261 @@ class MMWaveRadarSimulator:
         self.reflection_threshold = reflection_threshold
         self.multipath_ratio = multipath_ratio
         
-        # 生成射线方向（极坐标）
-        self.azimuth_angles = np.linspace(-fov_h / 2, fov_h / 2, n_beams_h)  # 度
-        self.elevation_angles = np.linspace(-fov_v / 2, fov_v / 2, n_beams_v)  # 度
+        # 边缘检测参数
+        self.edge_threshold = edge_threshold
+        self.neighbor_radius = neighbor_radius
+        self.boundary_ratio = boundary_ratio
+        self.downsample_voxel = downsample_voxel
+        self.curvature_threshold = curvature_threshold
+        self.random_dropout = random_dropout
         
-        # 材料反射率字典（RGB 色值映射到反射率）
-        self.material_reflectance = {
-            'metal': 0.9,
-            'concrete': 0.6,
-            'brick': 0.5,
-            'wood': 0.4,
-            'fabric': 0.2,
-            'glass': 0.3,
-            'default': 0.5
-        }
-        
-        logging.info(f"[mmWave] Initialized radar simulator:")
-        logging.info(f"  Beams: {n_beams_h}×{n_beams_v} (horizontal × vertical)")
-        logging.info(f"  Range: {range_min}m ~ {range_max}m")
-        logging.info(f"  FOV: {fov_h}° × {fov_v}°")
+        logging.info(f"[mmWave] Initialized radar simulator (edge/contour mode):")
+        logging.info(f"  Edge threshold: {edge_threshold}m, Neighbor radius: {neighbor_radius}m")
+        logging.info(f"  Boundary ratio: {boundary_ratio}, Voxel size: {downsample_voxel}m, Dropout: {random_dropout}")
     
-    def _rgb_to_material(self, rgb_color: np.ndarray) -> str:
+    def _extract_boundary_points(self, points: np.ndarray, colors: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
         """
-        根据RGB颜色估计材料类型（用于反射率估计）
+        提取点云的边界/轮廓点
+        
+        使用多种方法检测边界：
+        1. 深度不连续检测
+        2. 法向量变化检测
+        3. 点密度变化检测
         
         Args:
-            rgb_color: (3,) RGB 值 [0-255]
+            points: (N, 3) 点云坐标
+            colors: (N, 3) 点云颜色（可选）
         
         Returns:
-            material: 材料名称
+            boundary_points: 边界点坐标
+            boundary_colors: 边界点颜色
         """
-        r, g, b = rgb_color[:3]
+        if len(points) < 10:
+            return points, colors if colors is not None else np.ones((len(points), 3)) * 0.5
         
-        # 简单的色彩启发式分类
-        gray = (r + g + b) / 3
+        # 创建点云对象用于处理
+        pcd = o3d.geometry.PointCloud()
+        pcd.points = o3d.utility.Vector3dVector(points)
         
-        if gray > 200:  # 浅色 → 可能是混凝土/墙面
-            return 'concrete'
-        elif gray > 150:  # 中灰 → 砖或木材
-            if abs(r - b) > 30:  # 偏黄/棕 → 木材
-                return 'wood'
-            else:
-                return 'brick'
-        elif gray > 100:  # 深灰 → 织物/地毯
-            return 'fabric'
-        else:  # 很深 → 金属或特殊材料
-            return 'metal'
+        # 1. 先进行体素下采样
+        if self.downsample_voxel > 0:
+            pcd_down = pcd.voxel_down_sample(voxel_size=self.downsample_voxel)
+        else:
+            pcd_down = pcd
+        
+        points_down = np.asarray(pcd_down.points)
+        
+        if len(points_down) < 10:
+            return points_down, np.ones((len(points_down), 3)) * 0.5
+        
+        # 2. 计算法向量
+        pcd_down.estimate_normals(
+            search_param=o3d.geometry.KDTreeSearchParamHybrid(
+                radius=self.neighbor_radius * 2, max_nn=30
+            )
+        )
+        
+        # 3. 构建 KDTree 用于邻域搜索
+        kdtree = KDTree(points_down)
+        
+        boundary_mask = np.zeros(len(points_down), dtype=bool)
+        
+        # 4. 多种边界检测方法
+        for i, point in enumerate(points_down):
+            # 查找邻域点
+            neighbors_idx = kdtree.query_ball_point(point, self.neighbor_radius)
+            
+            if len(neighbors_idx) < 3:
+                # 孤立点 -> 边界
+                boundary_mask[i] = True
+                continue
+            
+            neighbor_points = points_down[neighbors_idx]
+            
+            # 方法1: 深度不连续检测
+            # 计算到原点的距离（模拟雷达视角）
+            dist_center = np.linalg.norm(point)
+            dist_neighbors = np.linalg.norm(neighbor_points, axis=1)
+            depth_diff = np.max(np.abs(dist_neighbors - dist_center))
+            
+            if depth_diff > self.edge_threshold:
+                boundary_mask[i] = True
+                continue
+            
+            # 方法2: 点密度变化检测
+            # 边界处通常只有半边有点
+            centroid = np.mean(neighbor_points, axis=0)
+            dist_to_centroid = np.linalg.norm(point - centroid)
+            avg_neighbor_dist = np.mean(np.linalg.norm(neighbor_points - point, axis=1))
+            
+            # 如果点偏离邻域质心，说明可能是边界
+            if dist_to_centroid > avg_neighbor_dist * 0.5:
+                boundary_mask[i] = True
+                continue
+            
+            # 方法3: 法向量散度检测
+            if pcd_down.has_normals():
+                normals = np.asarray(pcd_down.normals)
+                center_normal = normals[i]
+                neighbor_normals = normals[neighbors_idx]
+                
+                # 计算法向量一致性
+                normal_dots = np.abs(np.dot(neighbor_normals, center_normal))
+                normal_variance = 1 - np.mean(normal_dots)
+                
+                if normal_variance > 0.3:  # 法向量变化大 -> 边界
+                    boundary_mask[i] = True
+                    continue
+            
+            # 方法4: 局部平面拟合检测
+            if len(neighbors_idx) >= 4:
+                # PCA 分析
+                centered = neighbor_points - centroid
+                cov = np.cov(centered.T)
+                eigenvalues = np.linalg.eigvalsh(cov)
+                eigenvalues = np.sort(eigenvalues)[::-1]
+                
+                # 计算局部曲率（最小特征值 / 特征值之和）
+                curvature = eigenvalues[2] / (np.sum(eigenvalues) + 1e-8)
+                
+                if curvature > self.curvature_threshold:
+                    boundary_mask[i] = True
+        
+        # 5. 提取边界点
+        boundary_points = points_down[boundary_mask]
+        
+        # 6. 如果边界点太少，随机采样一些补充
+        min_points = int(len(points_down) * self.boundary_ratio)
+        if len(boundary_points) < min_points:
+            # 随机采样补充
+            non_boundary_idx = np.where(~boundary_mask)[0]
+            n_extra = min(min_points - len(boundary_points), len(non_boundary_idx))
+            if n_extra > 0:
+                extra_idx = np.random.choice(non_boundary_idx, n_extra, replace=False)
+                extra_points = points_down[extra_idx]
+                boundary_points = np.vstack([boundary_points, extra_points])
+        
+        # 7. 如果边界点太多，下采样（更激进的限制）
+        max_points = int(len(points_down) * 0.10)  # 最多保留10%（从25%降低）
+        if len(boundary_points) > max_points:
+            idx = np.random.choice(len(boundary_points), max_points, replace=False)
+            boundary_points = boundary_points[idx]
+        
+        # 7.5 额外随机丢弃
+        if hasattr(self, 'random_dropout') and self.random_dropout > 0 and len(boundary_points) > 0:
+            keep_mask = np.random.rand(len(boundary_points)) > self.random_dropout
+            if np.any(keep_mask):
+                boundary_points = boundary_points[keep_mask]
+        
+        # 8. 为边界点生成颜色
+        if colors is not None and len(colors) > 0:
+            # 为每个边界点找到最近的原始点，获取颜色
+            original_kdtree = KDTree(points)
+            _, nearest_idx = original_kdtree.query(boundary_points)
+            boundary_colors = colors[nearest_idx]
+        else:
+            # 使用橙红色标识雷达点
+            boundary_colors = np.tile([1.0, 0.4, 0.1], (len(boundary_points), 1))
+        
+        return boundary_points, boundary_colors
     
-    def _estimate_reflectance(self, rgb_color: np.ndarray) -> float:
-        """根据RGB颜色估计反射率"""
-        material = self._rgb_to_material(rgb_color)
-        return self.material_reflectance.get(material, self.material_reflectance['default'])
-    
-    def _point_in_view(self, point_3d: np.ndarray) -> Tuple[bool, float, float]:
+    def _extract_silhouette_points(self, points: np.ndarray, colors: np.ndarray = None, 
+                                   sensor_origin: np.ndarray = None) -> Tuple[np.ndarray, np.ndarray]:
         """
-        判断一个3D点是否在雷达视场内，返回是否可见、方位角、仰角
+        从传感器视角提取轮廓点（silhouette edges）
+        
+        基于深度不连续性检测，类似真实雷达的边缘检测
         
         Args:
-            point_3d: (3,) 3D 点坐标 (x, y, z)
+            points: (N, 3) 点云坐标
+            colors: (N, 3) 点云颜色
+            sensor_origin: (3,) 传感器位置
         
         Returns:
-            in_view: 是否在视场内
-            azimuth: 方位角 (°)
-            elevation: 仰角 (°)
+            silhouette_points: 轮廓点坐标
+            silhouette_colors: 轮廓点颜色
         """
-        x, y, z = point_3d
+        if sensor_origin is None:
+            sensor_origin = np.array([0, 0, 0])
         
-        # 计算距离
-        dist = np.sqrt(x**2 + y**2 + z**2)
-        if dist < 1e-6 or dist < self.range_min or dist > self.range_max:
-            return False, None, None
+        if len(points) < 10:
+            return points, colors if colors is not None else np.ones((len(points), 3)) * 0.5
         
-        # 计算方位角（相对于 x 轴）
-        azimuth = np.degrees(np.arctan2(y, x))
+        # 计算每个点相对于传感器的方向和距离
+        rel_points = points - sensor_origin
+        distances = np.linalg.norm(rel_points, axis=1)
         
-        # 计算仰角
-        elevation = np.degrees(np.arcsin(np.clip(z / dist, -1, 1)))
+        # 转换为球坐标
+        azimuth = np.arctan2(rel_points[:, 1], rel_points[:, 0])
+        elevation = np.arcsin(np.clip(rel_points[:, 2] / (distances + 1e-8), -1, 1))
         
-        # 检查是否在视场内
-        if abs(azimuth) > self.fov_h / 2 + 1:  # 加 1° 容差
-            return False, None, None
-        if abs(elevation) > self.fov_v / 2 + 1:
-            return False, None, None
+        # 将球坐标量化到网格
+        az_bins = 180  # 水平分辨率
+        el_bins = 60   # 垂直分辨率
         
-        return True, azimuth, elevation
+        az_idx = ((azimuth + np.pi) / (2 * np.pi) * az_bins).astype(int) % az_bins
+        el_idx = ((elevation + np.pi/2) / np.pi * el_bins).astype(int) % el_bins
+        
+        # 创建深度图
+        depth_image = np.full((el_bins, az_bins), np.inf)
+        point_idx_map = np.full((el_bins, az_bins), -1, dtype=int)
+        
+        for i, (ai, ei, d) in enumerate(zip(az_idx, el_idx, distances)):
+            if d < depth_image[ei, ai]:
+                depth_image[ei, ai] = d
+                point_idx_map[ei, ai] = i
+        
+        # 在深度图上检测边缘（深度不连续）
+        # 使用Sobel算子或简单差分
+        valid_mask = depth_image < np.inf
+        depth_image_filled = np.where(valid_mask, depth_image, 0)
+        
+        # 计算深度梯度
+        grad_x = np.abs(np.diff(depth_image_filled, axis=1, prepend=0))
+        grad_y = np.abs(np.diff(depth_image_filled, axis=0, prepend=0))
+        gradient_mag = np.sqrt(grad_x**2 + grad_y**2)
+        
+        # 边缘检测：梯度大于阈值
+        edge_mask = (gradient_mag > self.edge_threshold) & valid_mask
+        
+        # 提取边缘点的索引
+        edge_point_indices = point_idx_map[edge_mask]
+        edge_point_indices = edge_point_indices[edge_point_indices >= 0]
+        edge_point_indices = np.unique(edge_point_indices)
+        
+        if len(edge_point_indices) == 0:
+            # 回退：随机采样
+            n_sample = max(int(len(points) * self.boundary_ratio), 100)
+            edge_point_indices = np.random.choice(len(points), min(n_sample, len(points)), replace=False)
+        
+        silhouette_points = points[edge_point_indices]
+        
+        if colors is not None and len(colors) > 0:
+            silhouette_colors = colors[edge_point_indices]
+        else:
+            silhouette_colors = np.tile([1.0, 0.4, 0.1], (len(silhouette_points), 1))
+        
+        return silhouette_points, silhouette_colors
     
     def simulate_radar_pointcloud(
         self,
         rgbd_pointcloud: o3d.geometry.PointCloud,
         rgbd_colors: np.ndarray = None,
         agent_pose: np.ndarray = None,
-        add_multipath: bool = True,
+        add_multipath: bool = False,
         add_noise: bool = True,
+        method: str = "combined",  # "boundary", "silhouette", "combined"
     ) -> Tuple[o3d.geometry.PointCloud, Dict]:
         """
-        根据 RGBD 点云仿真毫米波雷达点云
+        根据 RGBD 点云仿真毫米波雷达点云（边缘/轮廓模式）
         
         Args:
             rgbd_pointcloud: Open3D 点云对象（RGBD 原始数据）
-            rgbd_colors: (N, 3) RGBD 原色数据，用于材料反射率估计
+            rgbd_colors: (N, 3) RGBD 原色数据
             agent_pose: (6,) agent 位姿 [x, y, z, roll, pitch, yaw]
             add_multipath: 是否添加多径效应
             add_noise: 是否添加测量噪声
+            method: 边缘检测方法 - "boundary"（几何边界）, "silhouette"（视角轮廓）, "combined"（两者结合）
         
         Returns:
             radar_pcd: 仿真的雷达点云 (Open3D PointCloud)
@@ -164,95 +322,75 @@ class MMWaveRadarSimulator:
             return o3d.geometry.PointCloud(), {'n_points': 0}
         
         points = np.asarray(rgbd_pointcloud.points)
-        colors = np.asarray(rgbd_pointcloud.colors) if rgbd_colors is None else rgbd_colors
         
+        if rgbd_colors is None and rgbd_pointcloud.has_colors():
+            colors = np.asarray(rgbd_pointcloud.colors)
+        elif rgbd_colors is not None:
+            colors = rgbd_colors
+        else:
+            colors = np.ones((len(points), 3)) * 0.5
+        
+        # 确保颜色数组与点数匹配
         if len(colors) != len(points):
             colors = np.ones((len(points), 3)) * 0.5
         
-        # 模拟射线追踪：为每条射线找到最近的有效点
-        radar_points = []
-        radar_colors = []
-        reflectances = []
+        # 传感器位置
+        sensor_origin = agent_pose[:3] if agent_pose is not None else np.array([0, 0, 0])
         
-        for az in self.azimuth_angles:
-            for el in self.elevation_angles:
-                # 射线方向（笛卡尔坐标）
-                az_rad = np.radians(az)
-                el_rad = np.radians(el)
-                ray_dir = np.array([
-                    np.cos(el_rad) * np.cos(az_rad),
-                    np.cos(el_rad) * np.sin(az_rad),
-                    np.sin(el_rad)
-                ])
+        # 根据方法提取边缘点
+        if method == "boundary":
+            radar_points, radar_colors = self._extract_boundary_points(points, colors)
+        elif method == "silhouette":
+            radar_points, radar_colors = self._extract_silhouette_points(points, colors, sensor_origin)
+        else:  # combined
+            # 结合两种方法
+            boundary_pts, boundary_cols = self._extract_boundary_points(points, colors)
+            silhouette_pts, silhouette_cols = self._extract_silhouette_points(points, colors, sensor_origin)
+            
+            if len(boundary_pts) > 0 and len(silhouette_pts) > 0:
+                radar_points = np.vstack([boundary_pts, silhouette_pts])
+                radar_colors = np.vstack([boundary_cols, silhouette_cols])
                 
-                # 在该射线方向上找最近的点（射线追踪）
-                distances = np.sum(points * ray_dir, axis=1)  # 投影距离
+                # 去重（使用体素网格）
+                temp_pcd = o3d.geometry.PointCloud()
+                temp_pcd.points = o3d.utility.Vector3dVector(radar_points)
+                temp_pcd.colors = o3d.utility.Vector3dVector(radar_colors)
+                temp_pcd = temp_pcd.voxel_down_sample(voxel_size=self.downsample_voxel)
                 
-                # 过滤有效距离范围
-                valid_mask = (distances >= self.range_min) & (distances <= self.range_max)
-                
-                if np.any(valid_mask):
-                    valid_dist = distances[valid_mask]
-                    valid_idx = np.where(valid_mask)[0]
-                    
-                    # 取最近的点
-                    closest_idx = valid_idx[np.argmin(valid_dist)]
-                    closest_point = points[closest_idx]
-                    closest_dist = np.linalg.norm(closest_point)
-                    closest_color = colors[closest_idx]
-                    
-                    # 检查反射强度（根据颜色和角度估计）
-                    reflectance = self._estimate_reflectance(closest_color * 255)
-                    
-                    # 角度相关的反射衰减（掠射角效应）
-                    point_to_ray = closest_point / (closest_dist + 1e-6)
-                    cosine_angle = np.abs(np.dot(point_to_ray, ray_dir))
-                    reflectance *= (cosine_angle ** 0.5)  # 掠射角衰减
-                    
-                    # 反射强度阈值
-                    if reflectance >= self.reflection_threshold:
-                        # 添加测量噪声
-                        if add_noise:
-                            noise = np.random.normal(0, self.range_std)
-                            noisy_dist = closest_dist + noise
-                        else:
-                            noisy_dist = closest_dist
-                        
-                        # 转换回笛卡尔坐标
-                        radar_point = ray_dir * noisy_dist
-                        radar_points.append(radar_point)
-                        radar_colors.append(closest_color)
-                        reflectances.append(reflectance)
-                        
-                        # 多径效应：以较小概率添加虚假回波
-                        if add_multipath and np.random.rand() < self.multipath_ratio:
-                            # 模拟二次反射
-                            multipath_dist = noisy_dist * (0.9 + 0.2 * np.random.rand())
-                            multipath_point = ray_dir * multipath_dist
-                            radar_points.append(multipath_point)
-                            radar_colors.append(closest_color * 0.7)  # 二次反射更暗
-                            reflectances.append(reflectance * 0.5)
+                radar_points = np.asarray(temp_pcd.points)
+                radar_colors = np.asarray(temp_pcd.colors)
+            elif len(boundary_pts) > 0:
+                radar_points, radar_colors = boundary_pts, boundary_cols
+            else:
+                radar_points, radar_colors = silhouette_pts, silhouette_cols
+        
+        # 添加测量噪声
+        if add_noise and len(radar_points) > 0:
+            noise = np.random.normal(0, self.range_std, radar_points.shape)
+            radar_points = radar_points + noise
+        
+        # 距离过滤
+        if len(radar_points) > 0:
+            distances = np.linalg.norm(radar_points - sensor_origin, axis=1)
+            valid_mask = (distances >= self.range_min) & (distances <= self.range_max)
+            radar_points = radar_points[valid_mask]
+            radar_colors = radar_colors[valid_mask]
         
         # 创建输出点云
-        if len(radar_points) == 0:
-            logging.warning("[mmWave] No valid radar points generated")
-            radar_pcd = o3d.geometry.PointCloud()
-        else:
-            radar_points = np.array(radar_points)
-            radar_colors = np.clip(np.array(radar_colors), 0, 1)
-            
-            radar_pcd = o3d.geometry.PointCloud()
+        radar_pcd = o3d.geometry.PointCloud()
+        if len(radar_points) > 0:
             radar_pcd.points = o3d.utility.Vector3dVector(radar_points)
-            radar_pcd.colors = o3d.utility.Vector3dVector(radar_colors)
+            radar_pcd.colors = o3d.utility.Vector3dVector(np.clip(radar_colors, 0, 1))
         
         # 统计信息
         radar_info = {
             'n_points': len(radar_points),
-            'n_rays': len(self.azimuth_angles) * len(self.elevation_angles),
-            'point_density': len(radar_points) / (len(self.azimuth_angles) * len(self.elevation_angles)),
-            'avg_reflectance': np.mean(reflectances) if reflectances else 0.0,
             'rgbd_points': len(points),
+            'sparsity_ratio': len(radar_points) / max(len(points), 1),
+            'method': method,
         }
+        
+        logging.info(f"[mmWave] Generated {len(radar_points)} edge/contour points from {len(points)} RGBD points")
         
         return radar_pcd, radar_info
     
@@ -265,19 +403,9 @@ class MMWaveRadarSimulator:
     ) -> o3d.geometry.PointCloud:
         """
         融合 RGBD 和雷达点云，用不同颜色区分来源
-        
-        Args:
-            rgbd_pcd: RGBD 点云
-            radar_pcd: 雷达点云
-            rgbd_color: RGBD 点的颜色
-            radar_color: 雷达点的颜色
-        
-        Returns:
-            fused_pcd: 融合点云
         """
         fused_pcd = o3d.geometry.PointCloud()
         
-        # 合并点坐标
         points_list = []
         colors_list = []
         
@@ -306,16 +434,9 @@ class MMWaveRadarSimulator:
 def visualize_radar_comparison(rgbd_pcd, radar_pcd, fused_pcd=None):
     """
     并排可视化 RGBD、雷达和融合点云
-    
-    Args:
-        rgbd_pcd: RGBD 点云
-        radar_pcd: 雷达点云
-        fused_pcd: 融合点云（可选）
     """
     import matplotlib.pyplot as plt
-    from mpl_toolkits.mplot3d import Axes3D
     
-    # RGBD 和雷达统计
     n_rgbd = len(rgbd_pcd.points)
     n_radar = len(radar_pcd.points)
     
@@ -339,8 +460,8 @@ def visualize_radar_comparison(rgbd_pcd, radar_pcd, fused_pcd=None):
         pts_radar = np.asarray(radar_pcd.points)
         cols_radar = np.asarray(radar_pcd.colors)
         ax2.scatter(pts_radar[:, 0], pts_radar[:, 1], pts_radar[:, 2],
-                   c=cols_radar, s=1, alpha=0.6)
-        ax2.set_title(f'mmWave Radar Point Cloud\n({n_radar} points)')
+                   c=cols_radar, s=2, alpha=0.8)
+        ax2.set_title(f'mmWave Radar Point Cloud\n({n_radar} points - edge/contour)')
         ax2.set_xlabel('X (m)')
         ax2.set_ylabel('Y (m)')
         ax2.set_zlabel('Z (m)')
@@ -362,31 +483,49 @@ def visualize_radar_comparison(rgbd_pcd, radar_pcd, fused_pcd=None):
 
 
 if __name__ == "__main__":
-    print("mmWave Radar Simulator")
+    print("mmWave Radar Simulator - Edge/Contour Mode")
     print("=" * 50)
     
-    # 测试：生成随机 RGBD 点云
+    # 测试：生成一个简单的房间点云
     np.random.seed(42)
-    n_points = 5000
     
-    # 生成随机点云（盒子内）
-    rgbd_pts = np.random.uniform(-5, 5, (n_points, 3))
-    rgbd_pts[:, 2] = np.abs(rgbd_pts[:, 2])  # 仅上半空间
-    rgbd_colors = np.random.rand(n_points, 3)
+    # 创建一个简单的房间（墙壁 + 地板）
+    points_list = []
+    
+    # 地板
+    floor_x = np.random.uniform(-5, 5, 2000)
+    floor_y = np.random.uniform(-5, 5, 2000)
+    floor_z = np.zeros(2000)
+    points_list.append(np.stack([floor_x, floor_y, floor_z], axis=1))
+    
+    # 墙壁
+    for wall_x in [-5, 5]:
+        wall_y = np.random.uniform(-5, 5, 500)
+        wall_z = np.random.uniform(0, 3, 500)
+        points_list.append(np.stack([np.full(500, wall_x), wall_y, wall_z], axis=1))
+    
+    for wall_y in [-5, 5]:
+        wall_x = np.random.uniform(-5, 5, 500)
+        wall_z = np.random.uniform(0, 3, 500)
+        points_list.append(np.stack([wall_x, np.full(500, wall_y), wall_z], axis=1))
+    
+    points = np.vstack(points_list)
+    colors = np.random.rand(len(points), 3) * 0.3 + 0.5  # 灰白色
     
     rgbd_pcd = o3d.geometry.PointCloud()
-    rgbd_pcd.points = o3d.utility.Vector3dVector(rgbd_pts)
-    rgbd_pcd.colors = o3d.utility.Vector3dVector(rgbd_colors)
+    rgbd_pcd.points = o3d.utility.Vector3dVector(points)
+    rgbd_pcd.colors = o3d.utility.Vector3dVector(colors)
     
     # 初始化雷达仿真器
     radar_sim = MMWaveRadarSimulator(
-        n_beams_h=128,
-        n_beams_v=8,
-        range_max=50.0
+        edge_threshold=0.3,
+        neighbor_radius=0.2,
+        boundary_ratio=0.1,
+        downsample_voxel=0.05,
     )
     
     # 仿真雷达点云
-    radar_pcd, radar_info = radar_sim.simulate_radar_pointcloud(rgbd_pcd)
+    radar_pcd, radar_info = radar_sim.simulate_radar_pointcloud(rgbd_pcd, method="combined")
     
     print(f"Radar simulation result:")
     for k, v in radar_info.items():
@@ -397,5 +536,5 @@ if __name__ == "__main__":
     
     # 可视化
     fig = visualize_radar_comparison(rgbd_pcd, radar_pcd, fused)
-    fig.savefig('/tmp/radar_comparison.png', dpi=150, bbox_inches='tight')
-    print("\nVisualization saved to /tmp/radar_comparison.png")
+    fig.savefig('/tmp/radar_edge_comparison.png', dpi=150, bbox_inches='tight')
+    print("\nVisualization saved to /tmp/radar_edge_comparison.png")

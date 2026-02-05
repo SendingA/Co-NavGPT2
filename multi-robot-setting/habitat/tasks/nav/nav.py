@@ -122,8 +122,20 @@ def merge_sim_episode_config(sim_config: Config, episode: Episode, sim: Simulato
                 agent_name = sim_config.AGENTS[i]
                 agent_cfg = getattr(sim_config, agent_name)
 
-                angle = np.random.uniform(0, 2 * np.pi)
-                source_rotation = [0.0, np.sin(angle / 2), 0, np.cos(angle / 2)]
+                # 使用固定的角度偏移，而不是随机角度
+                # Agent 1 朝向与 Agent 0 相差 180 度 (π)
+                # 可以根据需要调整这个偏移量
+                angle_offset = np.pi * i  # Agent 1: 180°, Agent 2: 360°, etc.
+                
+                # 从 episode 的原始朝向提取 yaw 角度
+                # start_rotation 是四元数 [x, y, z, w]
+                orig_rotation = episode.start_rotation
+                # 对于只绕 Y 轴旋转的情况: rotation = [0, sin(yaw/2), 0, cos(yaw/2)]
+                orig_yaw = 2 * np.arctan2(orig_rotation[1], orig_rotation[3])
+                
+                # 新的 yaw 角度 = 原始角度 + 偏移
+                new_yaw = orig_yaw + angle_offset
+                source_rotation = [0.0, np.sin(new_yaw / 2), 0, np.cos(new_yaw / 2)]
                 
                 agent_cfg.defrost()
                 agent_cfg.START_POSITION = episode.start_position
@@ -1248,7 +1260,7 @@ class VelocityAction(SimulatorTaskAction):
 
     def step(
         self,
-        *args: Any,
+        *args: Any,                                                                                                                                                                                                                                                                                                                                         
         task: EmbodiedTask,
         linear_velocity: float,
         angular_velocity: float,

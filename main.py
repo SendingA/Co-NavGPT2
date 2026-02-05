@@ -763,11 +763,12 @@ def main(args, send_queue, receive_queue):
                     logging.warning(f"Agent {i} entered severe fire region (intensity={fire_intensity:.3f})")
                 
             obstacle_map, explored_map, top_view_map = map_process.Map_Extraction(point_sum, agent[0].camera_position[1])
-            # target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
+            
+            # 始终检测 frontiers（用于可视化）
+            target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
             
             if (agent[0].l_step % args.num_local_steps == args.num_local_steps - 1 or agent[0].l_step == 0) and not found_goal:
                 goal_points.clear()
-                target_score, target_edge_map, target_point_list = map_process.Frontier_Det(threshold_point=8)
                 
                 if args.nav_mode == "gpt":
                     # ===== GPT 模式：使用 GPT 选择全局目标 =====
@@ -881,6 +882,15 @@ def main(args, send_queue, receive_queue):
                     args, agent[0].l_step,
                     observations,
                     agent[0].episode_n)
+                
+                # 保存 TopView + Frontiers 可视化（robots 和 candidate frontiers）
+                vu.visualize_topview_with_frontiers(
+                    args, agent[0].l_step,
+                    transform_rgb_bgr(top_view_map),
+                    pose_pred,
+                    target_point_list,
+                    goal_points,
+                    agent[0].episode_n)
         
             observations = env.step(actions)
             
@@ -912,45 +922,45 @@ def main(args, send_queue, receive_queue):
         # ------------------------------------------------------------------
         ##### 生成 Obstacle 和 Hazard Map 可视化
         # ------------------------------------------------------------------
-        try:
-            # 初始化地图可视化器
-            map_visualizer = ObstacleHazardMapVisualizer(
-                map_size_cm=args.map_size_cm,
-                map_resolution=args.map_resolution,
-                output_dir=os.path.join(args.dump_location, "maps")
-            )
+        # try:
+        #     # 初始化地图可视化器
+        #     map_visualizer = ObstacleHazardMapVisualizer(
+        #         map_size_cm=args.map_size_cm,
+        #         map_resolution=args.map_resolution,
+        #         output_dir=os.path.join(args.dump_location, "maps")
+        #     )
             
-            # 设置已提取的地图数据
-            map_visualizer.obstacle_map = obstacle_map.astype(np.float32)
-            map_visualizer.explored_map = explored_map.astype(np.float32)
-            map_visualizer.top_view_rgb = top_view_map.copy()  # 保持原始格式
+        #     # 设置已提取的地图数据
+        #     map_visualizer.obstacle_map = obstacle_map.astype(np.float32)
+        #     map_visualizer.explored_map = explored_map.astype(np.float32)
+        #     map_visualizer.top_view_rgb = top_view_map.copy()  # 保持原始格式
             
-            # 从 top_view_rgb 中检测火焰颜色生成 hazard map
-            # 这样 hazard map 与 obstacle map 使用完全相同的坐标系
-            hazard_map = map_visualizer.generate_hazard_map_from_topview_rgb(top_view_map)
+        #     # 从 top_view_rgb 中检测火焰颜色生成 hazard map
+        #     # 这样 hazard map 与 obstacle map 使用完全相同的坐标系
+        #     hazard_map = map_visualizer.generate_hazard_map_from_topview_rgb(top_view_map)
             
-            # 获取 agent 世界坐标位置
-            agent_positions = []
-            for i in range(num_agents):
-                pos = env.sim.get_agent_state(i).position
-                agent_positions.append((pos[0], pos[2]))  # XZ 平面
+        #     # 获取 agent 世界坐标位置
+        #     agent_positions = []
+        #     for i in range(num_agents):
+        #         pos = env.sim.get_agent_state(i).position
+        #         agent_positions.append((pos[0], pos[2]))  # XZ 平面
             
-            # 生成可视化
-            fire_clusters = fire_simulator.fire_clusters if fire_simulator else []
-            map_visualizer.visualize_maps(
-                agent_positions=agent_positions,
-                fire_clusters=fire_clusters,
-                filename=f"episode_{count_episodes:04d}_obstacle_hazard"
-            )
+        #     # 生成可视化
+        #     fire_clusters = fire_simulator.fire_clusters if fire_simulator else []
+        #     map_visualizer.visualize_maps(
+        #         agent_positions=agent_positions,
+        #         fire_clusters=fire_clusters,
+        #         filename=f"episode_{count_episodes:04d}_obstacle_hazard"
+        #     )
             
-            # 保存单独的地图文件
-            map_visualizer.save_individual_maps(f"episode_{count_episodes:04d}")
+        #     # 保存单独的地图文件
+        #     map_visualizer.save_individual_maps(f"episode_{count_episodes:04d}")
             
-            logging.info(f"[Episode {count_episodes}] Obstacle & Hazard maps saved")
-        except Exception as e:
-            logging.warning(f"Failed to generate obstacle/hazard maps: {e}")
-            import traceback
-            traceback.print_exc()
+        #     logging.info(f"[Episode {count_episodes}] Obstacle & Hazard maps saved")
+        # except Exception as e:
+        #     logging.warning(f"Failed to generate obstacle/hazard maps: {e}")
+        #     import traceback
+        #     traceback.print_exc()
 
         # ------------------------------------------------------------------
         ##### 生成 Episode 视频
@@ -996,13 +1006,13 @@ def main(args, send_queue, receive_queue):
         metrics['max_hazard_intensity'] = avg_max_hazard_intensity
         metrics['hazard_contact_ratio'] = avg_hazard_contact_ratio
         
-        # 记录单个 agent 的详细 hazard exposure
-        for i, ag in enumerate(agent):
-            metrics[f'agent_{i}/cumulative_hazard'] = getattr(ag, 'cumulative_hazard_exposure', 0.0)
-            metrics[f'agent_{i}/max_hazard_intensity'] = getattr(ag, 'max_hazard_intensity', 0.0)
-            metrics[f'agent_{i}/hazard_contact_ratio'] = (
-                getattr(ag, 'hazard_contact_steps', 0) / max(getattr(ag, 'total_steps', 1), 1)
-            ) 
+        # # 记录单个 agent 的详细 hazard exposure
+        # for i, ag in enumerate(agent):
+        #     metrics[f'agent_{i}/cumulative_hazard'] = getattr(ag, 'cumulative_hazard_exposure', 0.0)
+        #     metrics[f'agent_{i}/max_hazard_intensity'] = getattr(ag, 'max_hazard_intensity', 0.0)
+        #     metrics[f'agent_{i}/hazard_contact_ratio'] = (
+        #         getattr(ag, 'hazard_contact_steps', 0) / max(getattr(ag, 'total_steps', 1), 1)
+        #     ) 
         
         for m, v in metrics.items():
             if isinstance(v, dict):

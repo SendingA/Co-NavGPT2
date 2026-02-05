@@ -123,6 +123,12 @@ def create_episode_video(args, episode_n, rank=0):
     if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
         video_paths.append(video_path)
     
+    # 4. 生成 TopView + Frontiers 视频
+    pattern = "TopView_Frontiers-*.png"
+    video_path = os.path.join(video_dir, f'episode_{episode_n}_rank_{rank}_topview_frontiers.mp4')
+    if images_to_video(ep_dir, video_path, fps=fps, pattern=pattern):
+        video_paths.append(video_path)
+    
     return video_paths if video_paths else None
 
 
@@ -489,6 +495,227 @@ def write_number_full(image, pose, number):
         drawn_centers.append((px, py))
     
     return pil_image
+
+
+def visualize_topview_with_frontiers(args, step, top_view_map, pose_pred, target_point_list, 
+                                      goal_points=None, episode_n=0, rank=0):
+    """
+    在 top-view 图上优雅地标记 robots 位置和 candidate frontiers。
+    
+    Args:
+        args: 命令行参数
+        step: 当前步数
+        top_view_map: 俯视图 (H, W, 3)，BGR 格式
+        pose_pred: robots 的位置列表 [(x, y, theta), ...]
+        target_point_list: candidate frontiers 列表 [(x, y), ...]
+        goal_points: 当前目标点列表（可选）
+        episode_n: episode 编号
+        rank: 进程编号
+    
+    Returns:
+        np.ndarray: 标记后的图像
+    """
+    # 复制图像避免修改原图
+    vis_map = top_view_map.copy()
+    
+    # 调整到合适的显示尺寸
+    display_size = 600
+    h, w = vis_map.shape[:2]
+    scale = display_size / max(h, w)
+    new_h, new_w = int(h * scale), int(w * scale)
+    vis_map = cv2.resize(vis_map, (new_w, new_h), interpolation=cv2.INTER_LINEAR)
+    
+    # 计算坐标缩放比例
+    scale_x = new_w / w
+    scale_y = new_h / h
+    
+    # 翻转图像（与其他可视化保持一致）
+    vis_map = np.flipud(vis_map).copy()
+    
+    # ===== 1. 绘制 Candidate Frontiers =====
+    if target_point_list and len(target_point_list) > 0:
+        num_frontiers = len(target_point_list)
+        
+        for idx, frontier in enumerate(target_point_list):
+            # 转换坐标
+            fx, fy = frontier[0], frontier[1]
+            fx_scaled = int(fx * scale_x)
+            fy_scaled = new_h - int(fy * scale_y)  # 翻转 y
+            
+            # 检查是否是当前目标点
+            is_goal = False
+            if goal_points:
+                for gp in goal_points:
+                    if abs(gp[0] - frontier[0]) < 3 and abs(gp[1] - frontier[1]) < 3:
+                        is_goal = True
+                        break
+            
+            if is_goal:
+                # 目标点：用星形或更大的标记
+                color = (0, 255, 255)  # 黄色 (BGR)
+                # 绘制星形
+                star_size = 12
+                pts = []
+                for i in range(5):
+                    # 外点
+                    angle_out = -np.pi/2 + i * 2 * np.pi / 5
+                    pts.append([fx_scaled + int(star_size * np.cos(angle_out)),
+                               fy_scaled + int(star_size * np.sin(angle_out))])
+                    # 内点
+                    angle_in = angle_out + np.pi / 5
+                    pts.append([fx_scaled + int(star_size * 0.4 * np.cos(angle_in)),
+                               fy_scaled + int(star_size * 0.4 * np.sin(angle_in))])
+                pts = np.array(pts, np.int32)
+                cv2.fillPoly(vis_map, [pts], color)
+                cv2.polylines(vis_map, [pts], True, (0, 200, 200), 2)
+            else:
+                # 普通 frontier：用小圆点
+                color = (255, 200, 100)  # 浅蓝色 (BGR)
+                cv2.circle(vis_map, (fx_scaled, fy_scaled), 6, color, -1)
+                cv2.circle(vis_map, (fx_scaled, fy_scaled), 6, (200, 150, 50), 1)
+            
+            # 添加 frontier 编号（小字体）
+            font = cv2.FONT_HERSHEY_SIMPLEX
+            text = f"F{idx}"
+            font_scale = 0.35
+            cv2.putText(vis_map, text, (fx_scaled + 8, fy_scaled + 3), 
+                       font, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+    
+    # ===== 2. 绘制 Robots =====
+    num_agents = len(pose_pred)
+    robot_colors = [
+        (0, 0, 255),    # 红色 - Robot 0
+        (0, 255, 0),    # 绿色 - Robot 1
+        (255, 0, 0),    # 蓝色 - Robot 2
+        (255, 0, 255),  # 紫色 - Robot 3
+    ]
+    
+    for i, pose in enumerate(pose_pred):
+        px, py, theta = pose[0], pose[1], pose[2] if len(pose) > 2 else 0
+        px_scaled = int(px * scale_x)
+        py_scaled = new_h - int(py * scale_y)  # 翻转 y
+        
+        color = robot_colors[i % len(robot_colors)]
+        
+        # 绘制机器人主体（圆形）
+        cv2.circle(vis_map, (px_scaled, py_scaled), 10, color, -1)
+        cv2.circle(vis_map, (px_scaled, py_scaled), 10, (255, 255, 255), 2)
+        
+        # 绘制方向箭头
+        arrow_len = 18
+        end_x = int(px_scaled + arrow_len * np.cos(theta))
+        end_y = int(py_scaled - arrow_len * np.sin(theta))  # 注意 y 方向
+        cv2.arrowedLine(vis_map, (px_scaled, py_scaled), (end_x, end_y), 
+                       (255, 255, 255), 2, tipLength=0.4)
+        
+        # 添加机器人标签
+        label = f"R{i}"
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 0.5
+        (text_w, text_h), _ = cv2.getTextSize(label, font, font_scale, 2)
+        
+        # 标签背景
+        label_x = px_scaled - text_w // 2
+        label_y = py_scaled - 18
+        cv2.rectangle(vis_map, (label_x - 2, label_y - text_h - 2), 
+                     (label_x + text_w + 2, label_y + 2), color, -1)
+        cv2.putText(vis_map, label, (label_x, label_y), 
+                   font, font_scale, (255, 255, 255), 1, cv2.LINE_AA)
+        
+        # 如果有目标点，绘制机器人到目标的连线
+        if goal_points and i < len(goal_points):
+            gx, gy = goal_points[i][0], goal_points[i][1]
+            gx_scaled = int(gx * scale_x)
+            gy_scaled = new_h - int(gy * scale_y)
+            # 绘制虚线（用点）
+            line_color = tuple(max(0, c - 50) for c in color)
+            pts_on_line = 15
+            for j in range(pts_on_line):
+                t = j / pts_on_line
+                lx = int(px_scaled + t * (gx_scaled - px_scaled))
+                ly = int(py_scaled + t * (gy_scaled - py_scaled))
+                if j % 2 == 0:
+                    cv2.circle(vis_map, (lx, ly), 2, line_color, -1)
+    
+    # ===== 3. 添加图例（右上角，超大号版） =====
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    font_scale = 1.1  # 超大字体
+    font_thickness = 2
+    line_height = 55  # 超大行高
+    
+    # 计算图例大小
+    legend_items = num_agents + 2  # robots + frontier + goal
+    legend_w = 260  # 更宽
+    legend_h = line_height * (legend_items + 1) + 40  # +1 for title
+    
+    # 右上角位置
+    legend_x = new_w - legend_w - 15
+    legend_y = 35
+    
+    # 背景（半透明效果通过深色实现）
+    cv2.rectangle(vis_map, (legend_x - 15, legend_y - 30), 
+                 (legend_x + legend_w, legend_y + legend_h), (30, 30, 30), -1)
+    cv2.rectangle(vis_map, (legend_x - 15, legend_y - 30), 
+                 (legend_x + legend_w, legend_y + legend_h), (150, 150, 150), 2)
+    
+    # 标题
+    cv2.putText(vis_map, f"Step: {step}", (legend_x, legend_y + 10), 
+               font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
+    legend_y += line_height + 10
+    
+    # 分隔线
+    cv2.line(vis_map, (legend_x - 8, legend_y - 15), 
+            (legend_x + legend_w - 8, legend_y - 15), (100, 100, 100), 2)
+    
+    # Robots
+    for i in range(num_agents):
+        color = robot_colors[i % len(robot_colors)]
+        # 超大的圆形标记
+        cv2.circle(vis_map, (legend_x + 18, legend_y), 18, color, -1)
+        cv2.circle(vis_map, (legend_x + 18, legend_y), 18, (255, 255, 255), 2)
+        cv2.putText(vis_map, f"Robot {i}", (legend_x + 48, legend_y + 10), 
+                   font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
+        legend_y += line_height
+    
+    # Frontiers
+    cv2.circle(vis_map, (legend_x + 18, legend_y), 16, (255, 200, 100), -1)
+    cv2.circle(vis_map, (legend_x + 18, legend_y), 16, (200, 150, 50), 2)
+    cv2.putText(vis_map, "Frontier", (legend_x + 48, legend_y + 10), 
+               font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
+    legend_y += line_height
+    
+    # Goal（星形）
+    star_x, star_y = legend_x + 18, legend_y
+    star_size = 18  # 超大星形
+    pts = []
+    for j in range(5):
+        angle_out = -np.pi/2 + j * 2 * np.pi / 5
+        pts.append([star_x + int(star_size * np.cos(angle_out)),
+                   star_y + int(star_size * np.sin(angle_out))])
+        angle_in = angle_out + np.pi / 5
+        pts.append([star_x + int(star_size * 0.4 * np.cos(angle_in)),
+                   star_y + int(star_size * 0.4 * np.sin(angle_in))])
+    pts = np.array(pts, np.int32)
+    cv2.fillPoly(vis_map, [pts], (0, 255, 255))
+    cv2.polylines(vis_map, [pts], True, (0, 200, 200), 2)
+    cv2.putText(vis_map, "Goal", (legend_x + 48, legend_y + 10), 
+               font, font_scale, (255, 255, 255), font_thickness, cv2.LINE_AA)
+    
+    # ===== 4. 保存图像 =====
+    if args.print_images:
+        dump_dir = "{}/dump/{}".format(args.dump_location, args.nav_mode)
+        ep_dir = '{}/episodes_multi/{}/eps_{}/'.format(dump_dir, rank, episode_n)
+        if not os.path.exists(ep_dir):
+            os.makedirs(ep_dir)
+        fn = ep_dir + f'TopView_Frontiers-{step}.png'
+        cv2.imwrite(fn, vis_map)
+    
+    if args.visualize:
+        cv2.imshow("TopView_Frontiers", vis_map)
+        cv2.waitKey(1)
+    
+    return vis_map
+
 
 def visualize_agent_rgbd(args, step, observations, episode_n=0, rank=0):
     """
