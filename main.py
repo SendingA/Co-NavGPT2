@@ -11,11 +11,13 @@ import torch.nn.functional as F
 from habitat import Env, logger
 from utils.shortest_path_follower import ShortestPathFollowerCompat
 from utils import chat_utils
+from utils import gpt_trace
 import system_prompt
 from utils.explored_map_utils import Global_Map_Proc, detect_frontier
 
 
 from agents.vlm_agents import VLM_Agent
+from agents.gnn_assigner import GNNAssigner
 import utils.visualization as vu
 from arguments import get_args
 
@@ -87,6 +89,9 @@ def main(args, send_queue, receive_queue):
     num_episodes = env.number_of_episodes
 
     assert num_episodes > 0, "num_episodes should be greater than 0"
+    if getattr(args, "max_episodes", 0) and args.max_episodes > 0:
+        num_episodes = min(num_episodes, args.max_episodes)
+        print(f"[main] capping run to {num_episodes} episodes")
 
     num_agents = config.SIMULATOR.NUM_AGENTS
     agent = []
@@ -97,6 +102,10 @@ def main(args, send_queue, receive_queue):
         agent.append(VLM_Agent(args, i, follower, receive_queue))
         
     map_process = Global_Map_Proc(args)
+
+    gnn_assigner = None
+    if args.nav_mode == "gnn":
+        gnn_assigner = GNNAssigner(ckpt_path=getattr(args, "gnn_ckpt", None))
     # ------------------------------------------------------------------
 
     count_episodes = 0
@@ -143,9 +152,45 @@ def main(args, send_queue, receive_queue):
                     if len(target_point_list) > 0 and agent[0].l_step > 0:
                         candidate_map_list = chat_utils.get_all_candidate_maps(target_edge_map, top_view_map, pose_pred)
                         message = chat_utils.message_prepare(system_prompt.system_prompt, candidate_map_list, agent[i].goal_name)
+                        _t0 = time.perf_counter()
                         goal_frontiers = chat_utils.chat_with_gpt4v(message)
+                        _dt_ms = (time.perf_counter() - _t0) * 1000.0
+                        print("[DECISION] mode=gpt n_frontiers={} latency_ms={:.2f}".format(len(target_point_list), _dt_ms), flush=True)
+                        if gpt_trace.is_enabled():
+                            gpt_trace.log_decision(
+                                target_point_list,
+                                target_score,
+                                target_edge_map,
+                                pose_pred,
+                                int(obstacle_map.shape[0]),
+                                agent[0].goal_name,
+                                goal_frontiers,
+                            )
                         for i in range(num_agents):
                             goal_points.append(target_point_list[int(goal_frontiers["robot_"+ str(i)].split('_')[1])])
+                    else:
+                        for i in range(num_agents):
+                            action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)
+                            goal_points.append([int(action[0]), int(action[1])])
+
+                elif args.nav_mode == "gnn":
+                    # ===== GNN 模式：用 BC 训练的 cross-attention 模型代替 GPT =====
+                    if len(target_point_list) > 0 and agent[0].l_step > 0:
+                        _t0 = time.perf_counter()
+                        goal_frontiers = gnn_assigner.assign(
+                            target_point_list,
+                            target_score,
+                            target_edge_map,
+                            pose_pred,
+                            map_size=int(obstacle_map.shape[0]),
+                            num_agents=num_agents,
+                        )
+                        _dt_ms = (time.perf_counter() - _t0) * 1000.0
+                        print("[DECISION] mode=gnn n_frontiers={} latency_ms={:.2f}".format(len(target_point_list), _dt_ms), flush=True)
+                        for i in range(num_agents):
+                            idx = int(goal_frontiers["robot_" + str(i)].split('_')[1])
+                            idx = max(0, min(idx, len(target_point_list) - 1))
+                            goal_points.append(target_point_list[idx])
                     else:
                         for i in range(num_agents):
                             action = np.random.rand(1, 2).squeeze()*(obstacle_map.shape[0] - 1)

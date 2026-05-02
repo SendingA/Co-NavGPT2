@@ -1,0 +1,308 @@
+% \begin{figure*}[t]
+%   \centering
+%   \includegraphics[width=\textwidth]{figures/Cooerative Navigation using llm.png}
+%   \caption{structure.}
+%   \label{fig:overview}
+% \end{figure*}
+
+
+% \subsection{Task Definition}
+
+% We consider a \emph{multi-agent cooperative SAR} task in fire driven indoor environments, where a team of mobile robots collaboratively explores an unknown scene to locate victims or mission critical target objects under hazardous conditions. Let $\mathcal{C} = \{c_1, \ldots, c_m\}$ denote the set of target categories (e.g., \emph{human}, \emph{fire extinguisher}, \emph{bathroom}), and let $\mathcal{S} = \{s_1, \ldots, s_K\}$ denote the set of indoor scenes affected by fire, smoke, and structural damage.
+
+% For each episode, a team of $N$ robots $\mathcal{R} = \{r_1, \ldots, r_N\}$ is deployed in a scene $s_i \in \mathcal{S}$. All robots are initialized at a common starting location $\mathbf{p}_i$, but with different initial orientations to reflect realistic deployment constraints in emergency response. Each robot is assigned the same target category $c_i \in \mathcal{C}$. An episode is therefore defined as:
+% \begin{equation}
+% \mathcal{T}_i = \{N, s_i, c_i, \mathbf{p}_i\}.
+% \end{equation}
+
+% The observation space $\mathcal{O}$ consists of four main modalities: RGB images, depth images, thermal images, and mmWave radar reflected signals, which jointly provide complementary visual, geometric, and smoke-robust perception information. The action space $\mathcal{A}$ consists of six discrete actions:
+% \{\texttt{move\_forward}, \texttt{turn\_left}, \texttt{turn\_right}, \texttt{look\_up}, \texttt{look\_down}, \texttt{stop}\}, where \texttt{move\_forward} action advances the robot by $0.25\,\text{m}$, while the rotational actions, including \texttt{turn\_left}, \texttt{turn\_right}, \texttt{look\_up}, and \texttt{look\_down}, rotate the robot by $30^{\circ}$ in the corresponding direction.
+
+% At each discrete time step $t$, each robot $r_i$ receives a
+% multi-modal observation $o_t^i \in \mathcal{O}$ from its local perspective and simultaneously executes a single action $a_t^i$ from $\mathcal{A}$. % The \texttt{stop} action is triggered when a robot determines that it has reached the specific number of goal objects or explored the entire map. 
+% An episode is considered successful if the team of agents safely reaches the specified number of target instances of category \(c_i\) within a distance threshold of \(0.1\,\text{m}\) or explores the entire environment while all agents remain within survivable hazard limits throughout the episode.
+\subsection{Task Definition}
+We consider a \emph{multi-agent cooperative SAR} task in fire-driven indoor environments, where a team of mobile robots explores an unknown scene to locate victims or mission-critical targets under hazardous conditions. Let $\mathcal{C} = \{c_1, \ldots, c_m\}$ denote the set of target categories (e.g., \emph{human}, \emph{fire extinguisher}, \emph{bathroom}), and let $\mathcal{S} = \{s_1, \ldots, s_K\}$ denote the set of fire-affected indoor scenes. In each episode, $N$ robots $\mathcal{R} = \{r_1, \ldots, r_N\}$ are deployed in a scene $s_i \in \mathcal{S}$ from a shared starting position $\mathbf{p}_i$ with different initial orientations to reflect realistic emergency deployment. All robots are assigned the same target category $c_i \in \mathcal{C}$. The episode is defined as:
+\begin{equation}
+\mathcal{T}_i = \{N, s_i, c_i, \mathbf{p}_i\}.
+\end{equation}
+
+The observation space $\mathcal{O}$ comprises four modalities: RGB, depth, thermal imaging, and mmWave radar, providing complementary visual, geometric, and smoke-robust perception. The action space $\mathcal{A}$ consists of six discrete actions:
+\{\texttt{move\_forward}, \texttt{turn\_left}, \texttt{turn\_right}, \texttt{look\_up}, \texttt{look\_down}, \texttt{stop}\}. The \texttt{move\_forward} action advances the robot by $0.25\,\text{m}$, and each rotational action changes orientation by $30^{\circ}$. At each discrete time step $t$, robot $r_i$ receives a multi-modal observation $o_t^i \in \mathcal{O}$ and executes an action $a_t^i \in \mathcal{A}$. An episode is successful if the team reaches the required number of target instances of category $c_i$ within a $0.1\,\text{m}$ distance threshold, or fully explores the environment, while all agents remain within survivable hazard limits throughout the episode.
+
+
+% Each agent is allowed a maximum of $T_{\max}=500$ time steps per episode. The collective objective of the agent team is to minimize exploration time and cumulative hazard exposure, while maximizing spatial coverage and overall task success rate, under dynamic and adverse conditions characterized by fire propagation, smoke-induced visibility degradation, and unreliable sensing.
+\subsection{Overview}
+As illustrated in Fig.~\ref{fig:System Design}, we propose a hazard-aware multi-agent navigation framework, \system, tailored for indoor fire SAR scenarios. Each agent performs robust multi-modal perception by jointly fusing RGB-D, thermal imaging, and mmWave radar to see through smoke and construct a local hazard-annotated 3D point cloud encoding geometry, temperature, smoke and sensing uncertainty. These local maps are merged into a global representation, which is further projected into a compact 2D obstacle and hazard map for frontier extraction and risk assessment. Leveraging this structured spatial and hazard-aware abstraction, a VLM serves as a global planner, reasoning jointly over robot states, frontier utility, and environmental risks to assign safe and efficient exploration goals to each agent. Finally, a hazard-aware Fast Marching Method (FMM) local planner refines these assignments into collision-free and risk-sensitive trajectories. Together, this hierarchical design enables coordinated, safe, and efficient multi-agent exploration under dynamic, fire-driven indoor conditions.
+
+\subsection{Multi-modal Perception and Fusion}
+To maintain reliable situational awareness under such harsh conditions, our framework adopts a robust multi-modal perception pipeline that integrates RGBD, thermal imaging, and mmWave radar signals as illustrated in Fig.~\ref{fig:multi_modal_perception_and_fusion}. The goal is to (1) extract stable structural cues, (2) detect fire-related hazards, and (3) produce a unified hazard-aware map for downstream planning.
+
+For each robot $r_i$, given a sequence of synchronized multi-modal observations collected in indoor fire environments,
+including RGB, depth, and thermal images,
+\begin{equation}
+\mathcal{I}_i =
+\left\{
+\left(I^{i}_{1,\mathrm{rgb}}, I^{i}_{1,\mathrm{d}}, I^{i}_{1,\mathrm{th}}\right), \dots,
+\left(I^{i}_{t,\mathrm{rgb}}, I^{i}_{t,\mathrm{d}}, I^{i}_{t,\mathrm{th}}\right)
+\right\},
+\end{equation}
+and the corresponding mmWave radar observations and the associated robot poses are:
+\begin{equation}
+\mathcal{M}_i^{\mathrm{rad}} =
+\left\{
+m_1^i, \dots, m_t^i
+\right\}, \quad
+\mathcal{P}_i = \{p^i_1, \dots, p^i_t\}.
+\end{equation}
+Each robot incrementally constructs a local hazard-aware 3D point cloud map $\mathcal{M}_i$ through the multi-modal perception and its pose.
+% In indoor fire scenarios, visual perception is severely degraded by dense smoke, dynamic flames, and extreme illumination conditions,
+% leading to significant loss of structural details in RGB images and increased noise or missing values in depth measurements.
+% To address this challenge, we perform a high-level multi-modal fusion that integrates RGB, depth, and thermal observations to recover a
+% \emph{see-through-smoke} visual representation.
+
+Specifically, at each time step $t$, three visual modalities are first spatially and temporally aligned.
+The aligned observations are then jointly processed by a VLM-based fusion operator $\mathcal{F}_{\mathrm{vlm}}(\cdot)$ to infer an enhanced visual representation:
+\begin{equation}
+I^{i}_{t,\mathrm{fused}} =
+\mathcal{F}_{\mathrm{vlm}}
+\left(
+I^{i}_{t,\mathrm{rgb}},
+I^{i}_{t,\mathrm{d}},
+I^{i}_{t,\mathrm{th}}
+\right).
+\end{equation}
+% where $\mathcal{F}_{\mathrm{vlm}}(\cdot)$ denotes a semantic-aware multi-modal fusion operator that leverages both visual cues and learned cross-modal priors.
+% By reasoning over these complementary modalities, the VLM infers a visually enhanced representation that restores occluded structures,
+% suppresses smoke-induced artifacts, and preserves scene semantics.
+The resulting fused image $I^{i}_{t,\mathrm{fused}}$ approximates a \emph{smoke-transparent} view of the environment, enabling more reliable downstream tasks such as 3D reconstruction, hazard mapping, and frontier extraction.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\columnwidth]{figures/multi_modal_perception_and_fusion.pdf}
+  \caption{Architecture of multi-modal perception and cross-modal fusion for robust environment understanding.}
+  \label{fig:multi_modal_perception_and_fusion}
+  \vspace{-15pt}
+\end{figure}
+% There are some overlaps in the follwing paragraph because there is no change to the detector and segmentation model
+An open-vocabulary detector $\mathrm{Det}(\cdot)$ is then applied to the fused image $I^i_{t,\mathrm{fused}}$ to identify candidate objects and fire-related regions. A class-agnostic segmentation model $\mathrm{Seg}(\cdot)$ further extracts pixel-wise masks for these regions. Each pixel $u$ in the fused image, together with its depth $d(u)$, is back-projected to a 3D point in the camera frame: 
+\begin{equation}
+\mathbf{x}_c(u) = d(u)\mathbf{K}^{-1}\tilde{u},
+\end{equation}
+where $\mathbf{K}$ is the camera intrinsic matrix and $\tilde{u}$ is the homogeneous pixel coordinate.
+
+Thermal measurements are aligned with RGB pixels to estimate temperature $T(u)$, while smoke density $S(u)$ is inferred from RGB degradation and depth consistency. Each point is augmented with a hazard attribute vector:
+\begin{equation}
+\mathbf{h} = [T(u), S(u), \sigma(u)],
+\end{equation}
+where $\sigma(u)$ encodes sensing uncertainty due to occlusion, smoke, or missing depth returns.
+
+The local 3D hazard-aware point cloud is then formed by combining the vision-based points with mmWave radar points:
+\begin{equation}
+\mathcal{M}_t^{i} =
+\mathcal{F}_{\mathrm{proj}} \Big( 
+    \mathrm{Seg} \big( \mathrm{Det}(I^i_{t,\mathrm{fused}}) \big) 
+\Big) 
+\;\cup\; 
+m_t^i.
+\end{equation}
+
+% Finally, the global hazard-aware 3D point cloud map is constructed by aggregating all robots’ local maps into a common coordinate frame:
+% \begin{equation}
+% \mathcal{M}^{3D} = \bigcup_{i=1}^{n} \mathcal{F}_{\mathrm{proj}} \big(\mathcal{M}_i^{3D}, p^i_t \big),
+% \end{equation}
+% where $p^i_t$ is the robot pose at time $t$.
+% The local map $\mathcal{M}_i$ is incrementally updated with hazard-aware tuples $(\mathbf{x}_g, \mathbf{h})$ obtained from multi-modal visual perception. In parallel, mmWave radar observations $m_\tau^i$ are used to augment the local map by reinforcing structural occupancy in regions affected by severe visual degradation. 
+The global hazard-aware point cloud map $\mathcal{M}$ is then constructed by jointly aggregating vision-based hazard points and mmWave radar points from all robots into a common coordinate frame:
+\begin{equation}
+\mathcal{M} =
+\bigcup_{i=1}^{n}
+\;\bigcup_{\tau=1}^{t}
+\mathcal{M}_\tau^{i}
+\label{eq:global_map}
+\end{equation}
+
+To suppress noisy measurements introduced by fire flickering, smoke diffusion, and thermal sensor artifacts, we apply DBSCAN clustering to the merged point cloud and remove sparse outliers.
+
+
+
+\subsection{Global Map Construction and Frontier Risk Assessment}
+\label{section: Global Map Construction and Frontier Risk Assessment}
+
+To enable efficient risk-aware exploration in fire scenarios, a global 2D obstacle–hazard map is constructed from the 3D point cloud observations collected by the robots. The map provides a compact and physically grounded representation of both structural constraints and environmental hazards.
+
+\subsubsection{2D Obstacle-Hazard Map Construction}
+
+At the beginning of each episode, the global 3D map $\mathcal{M}$ is projected into a 2D grid-based representation centered at the robot's initial position. The resulting map consists of two aligned channels: an obstacle map $\mathbf{O}$ and a hazard map $\mathbf{H}$.
+
+The obstacle map is constructed via top-down projection of non-floor 3D points, where grid cells exceeding a point-density threshold are marked as occupied. This produces a binary occupancy layout used to constrain navigation. The hazard map encodes fire-related environmental risks by aggregating hazard attributes from projected 3D points. Specifically, the hazard intensity of each grid cell is computed as a weighted combination of temperature, smoke density, and sensing uncertainty:
+\begin{equation}
+\mathbf{H}(x, y) = \sum_{x_g \in (x, y)} \left( w_T T + w_S S + w_\sigma \sigma \right),
+\end{equation}
+where $w_T$, $w_S$, and $w_\sigma$ balance the contributions of different hazard factors. Together, $\mathbf{O}$ and $\mathbf{H}$ form a compact obstacle–risk abstraction of the fire scene.
+
+\subsubsection{Frontier Extraction and Risk Assessment}
+
+Frontiers are defined as the boundaries between explored and unexplored regions after removing obstacle boundaries from $\mathbf{O}$. Frontier cells are clustered via connected-component analysis, and small noisy clusters are discarded.
+
+Each frontier is assigned a risk score by aggregating hazard intensities within its region. Let $\mathcal{F}_k$ denote the set of grid cells belonging to frontier $k$. The frontier-level risk is defined as:
+\begin{equation}
+R_k = \frac{1}{|\mathcal{F}_k|} \sum_{(x,y) \in \mathcal{F}_k} \mathbf{H}(x,y).
+\end{equation}
+
+Frontiers are then categorized into qualitative risk levels (e.g., safe, moderate, dangerous) using predefined thresholds. Frontiers with lower risk scores are prioritized by the VLM-based planner to enable safe and efficient exploration in fire-disaster environments.
+
+
+
+\subsection{VLM-Based Global Planning under Fire Hazards}
+After the global map construction and frontier risk assessment, we employ a VLM as a global planner to assign the frontiers to each agent through structured multi-modal prompts.
+
+\subsubsection{Multi-Modal Prompt Design}
+The VLM receives a compact yet expressive prompt consisting of a visual input and a textual input.
+
+\emph{Visual prompt.}
+The visual input is a top-down global map rendered from the merged hazard-aware 3D point cloud and aligned with the 2D obstacle--hazard exploration map. Robot positions and identifiers are explicitly marked, while all candidate frontiers are highlighted and labeled. This representation integrates geometric structure, semantic context, and multi-robot configuration for global spatial reasoning. An example of the visual prompt is shown in Fig.~\ref{fig:System Design}.
+
+\emph{Textual prompt.}
+The textual input consists of a system prompt defining the fire-response navigation task and a frontier-level hazard report in JSON format. The system prompt specifies the mission objective, multi-robot setting, map semantics, and output constraints, while the hazard report summarizes estimated smoke density, temperature, hazard severity, and confidence for each frontier.
+% An example of the textual prompt is shown in Fig. ??.
+
+\subsubsection{Global Frontier Assignment}
+Following prior work \cite{11302789}, we restrict the VLM to high-level reasoning and decouple it from low-level motion control. 
+At each global planning step, the VLM receives the updated multi-modal prompt and assigns a long-term frontier goal to each robot. The assignment balances two objectives: (i) maximizing exploration efficiency by reducing inter-robot redundancy, and (ii) minimizing fire exposure by favoring lower-risk frontiers with reliable perception. If no safe frontier exists, fallback goals are selected within explored low-risk regions.
+
+% The global assignment is updated every $N_g$ local planning steps ($N_g{=}25$ in our experiments), enabling adaptation to dynamically evolving fire and smoke conditions.
+
+% Given the multi-modal prompt, the VLM evaluates candidate frontiers by jointly considering fire proximity, smoke-induced visibility degradation, traversal distance, and multi-robot workload balance. 
+
+% The VLM outputs a structured JSON policy assigning a safe and efficient frontier target to each robot.
+% This policy is broadcast to individual robots, where a hazard-aware Fast Marching Method (FMM) local planner refines and executes the assigned goal.
+% By combining high-level VLM reasoning with low-level geometric planning, our framework achieves safe and coordinated exploration in dynamic fire-hazard environments.
+% \begin{table*}[t]
+%     \centering
+%     \caption{Performance Comparison Under Normal and Fire Conditions}
+%     \label{tab:comparative_study}
+%     \begin{tabular}{l c c c c c c c c c}
+%         \toprule
+%         \multirow{2}{*}{Method} 
+%         & \multicolumn{4}{c}{Normal} 
+%         & \multicolumn{5}{c}{Fire} \\
+%         \cmidrule(lr){2-5} \cmidrule(lr){6-10}
+%         & NS & DTG & SR & SPL 
+%         & NS$\uparrow$ & DTG & SR$\downarrow$ & SPL$\downarrow$ & CHE$\uparrow$ \\
+%         \midrule
+%         Greedy        
+%         & 219.03 & 1.861 & 0.686 & 0.322
+%         & 267.4 & 1.375 & 0.651 & 0.319 & 11.233 \\
+%         Cost-Utility  
+%         & 199.6 & 1.859 & 0.628 & 0.315
+%         & 207.49 & 1.749 & 0.608 & 0.306 & 8.517 \\
+%         Random Sample 
+%         & 206.62 & 2.282 & 0.631 & 0.258
+%         & 214.96 & 2.245 & 0.625 & 0.251 & 7.174 \\
+%         Co-NavGPT   
+%         & 185.43 & 1.652 & 0.666 & 0.388
+%         & 187.89 & 0.644 & 0.660 & 0.381 & 4.873 \\
+%         \bottomrule
+%     \end{tabular}
+% \end{table*}
+\begin{table}[t]
+    \centering
+    \caption{Performance comparison under normal conditions}
+    \label{tab:normal_condition}
+    \begin{tabular}{l c c c c}
+        \toprule
+        Method & NS & SR & SPL  & CHE\\
+        \midrule
+        Greedy~\cite{visser2013discussion}       
+        & 219.03 & 0.686 & 0.322 & 0 \\
+        Cost-Utility~\cite{julia2012comparison}   
+        & 199.60 & 0.628 & 0.315 & 0\\
+        Random Sample   
+        & 206.62 & 0.631 & 0.258 & 0 \\
+        Co-NavGPT~\cite{11302789}    
+        & 185.43 & 0.666 & 0.388 & 0 \\
+        \bottomrule
+    \end{tabular}
+\end{table}
+
+\begin{table}[t]
+    \centering
+    \caption{Performance comparison under fire conditions}
+    \label{tab:fire_condition}
+    \begin{tabular}{l c c c c c}
+        \toprule
+        Method & NS$\uparrow$ & SR$\downarrow$ & SPL$\downarrow$ & CHE$\uparrow$ \\
+        \midrule
+        Greedy        
+        & 267.40 & 0.651 & 0.319 & 11.233 \\
+        Cost-Utility  
+        & 207.49 & 0.608 & 0.306 & 8.517 \\
+        Random Sample 
+        & 214.96 & 0.625 & 0.251 & 7.174 \\
+        Co-NavGPT   
+        & 187.89 & 0.660 & 0.381 & 4.873 \\
+        \bottomrule
+    \end{tabular}
+    \vspace{-15pt}
+\end{table}
+
+% TODO:
+% 1.Needs to polish up the caption and illustration
+% 2.Maybe need to unify the background of the figures
+\begin{figure*}[t]
+    \centering
+
+    % ===== 第一行 =====
+    \subfloat[Missed detection before (left figure) and after (right figure) fire scenario.]{
+        \includegraphics[width=0.382\textwidth]{figures/evaluation/misdetection.png}
+    }
+    \hfill
+    \subfloat[Exploration in normal scenario.]{
+        \includegraphics[width=0.29\textwidth]{figures/evaluation/normal_exploration.png}
+    }
+    \hfill
+    \subfloat[Hazard map.]{
+        \includegraphics[width=0.283\textwidth]{figures/evaluation/hazard_map.png}
+    }
+
+   % \vspace{0.3cm}
+
+    % ===== 第二行 =====
+    \subfloat[False detection before (left figure) and after (right figure) fire scenario.]{
+        \includegraphics[width=0.382\textwidth]{figures/evaluation/misdetection2.png}
+    }
+    \hfill
+    \subfloat[Exploration in fire scenario.]{
+        \includegraphics[width=0.29\textwidth]{figures/evaluation/fire_exploration.png}
+    }
+    \hfill
+    \subfloat[Dangerous routing scenario.]{
+        \includegraphics[width=0.283\textwidth]{figures/evaluation/routing_under_fire.png}
+    }
+
+    \caption{The comparison highlights three failur1e modes: (a, d) Perception failure: smoke causes missed detections (confidence drop in a) and false positives (hallucinations in d); (b, e) Inefficient exploration: agents exhibit redundant framing and reduced coverage under fire conditions; (c, f) Unsafe planning: without hazard awareness, agents plan paths through high-risk zones (f) despite the presence of thermal hazards shown in the ground-truth map (c).}
+    \label{fig:evaluate_fire}
+    \vspace{-15pt}
+\end{figure*}
+
+\subsection{Hazard-Aware Fast Marching Method for Local Planning}
+
+Given the global 2D obstacle and hazard maps, local navigation in fire-driven indoor environments must jointly consider geometric feasibility and environmental risk. We adopt a hazard-aware FMM as the local planner, enabling real-time generation of smooth, collision-free, and risk-sensitive trajectories.
+
+To incorporate fire risk, we modulate the FMM propagation speed using the hazard map:
+\begin{equation}
+    F(x) = \frac{1}{1 + \alpha H(x)},
+\end{equation}
+where $H(x)$ encodes aggregated fire-related risk, and $\alpha$ controls the trade-off between safety and efficiency. This formulation penalizes traversal through high-risk regions even when they are geometrically free, while allowing fast propagation in safer areas. 
+
+Applying FMM with the hazard-modulated speed produces an arrival-time field that naturally biases paths toward low-risk corridors. The local trajectory is extracted by following the negative gradient of this field, yielding a smooth path that minimizes accumulated risk while respecting obstacle constraints.
+
+
+% By grounding local planning on the unified obstacle--hazard map, the proposed hazard-aware FMM provides a reliable execution layer that safely drives agents toward VLM-assigned frontiers under dynamic fire conditions.
+
+
+
+
+
+

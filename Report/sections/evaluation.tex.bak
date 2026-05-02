@@ -1,0 +1,160 @@
+% Using the modified environments, we systematically assess the navigation success rate and exploration efficiency of both VLM-based planners and conventional map-based methods in multi-agent cooperative navigation tasks.
+In this section, we evaluate representative multi-agent, map-based navigation baselines, including both VLM-based planners and conventional map-based methods under normal conditions and simulated indoor fire conditions. 
+\subsection{Datasets}
+To enable a fair and realistic comparison, we extend the Habitat-Matterport3D~\cite{ramakrishnan2021habitat} dataset by injecting fire-specific environmental degradations, including varying levels of smoke density, flame intensity, and heat-induced visibility loss. These modifications emulate the perceptual and navigational challenges commonly encountered in real-world indoor fire scenarios. Following the standard protocol, we use 36 validation scenes containing 200 episodes with semantic object annotations. We select six goal categories: chair, sofa, plant, bed, toilet, and TV. Since the dataset contains no human instances, we use these objects as proxies to simulate human presence.
+\subsection{Metrics}
+ Our evaluation considers not only task completion but also safety related constraints imposed by fire hazards.
+We evaluate all the methods using the following four metrics: Number of Steps (NS), Success Rate (SR), Success weighted by Path Length (SPL), and Cumulative Hazard Exposure (CHE). NS measures exploration efficiency and is defined as the total number of discrete time steps taken before episode termination. The SR is defined as:
+\begin{equation}
+    \mathrm{SR} = \frac{1}{N} \sum_{i=1}^{N} S_i ,
+\end{equation}
+and SPL is defined as:
+\begin{equation}
+    \mathrm{SPL} = \frac{1}{N} \sum_{i=1}^{N} 
+    S_i \frac{l_i}{\max(l_i, p_i)} ,
+\end{equation}
+where $N$ is the number of episodes, $S_i \in \{0,1\}$ indicates success in episode $i$, $l_i$ denotes the shortest path length from the start to any success location, and $p_i$ is the shortest trajectory length executed by any robot in episode $i$. To quantify navigation safety, CHE measures the cumulative risk experienced by all robots and is defined as: 
+\begin{equation}
+    \mathrm{CHE} = \sum_{i=1}^{N} \sum_{a \in \mathcal{A}} \sum_{t=1}^{T_i}
+    H\bigl(x_{a,t}^{(i)}\bigr),
+\end{equation}
+where $\mathcal{A}$ denotes the robot set, $T_i$ is the episode length, $x_{a,t}^{(i)}$ is the position of robot $a$ at time step $t$, and $H(\cdot)$ is the hazard intensity from the global obstacle--hazard map. Lower CHE indicates safer exploration with reduced exposure to fire-related hazards.
+\subsection{Results and Analysis}
+% \begin{table*}[t]
+%     \centering
+%     \caption{Performance Comparison Under Normal and Fire Conditions}
+%     \label{tab:comparative_study}
+%     \begin{tabular}{l c c c c c c c c c}
+%         \toprule
+%         \multirow{2}{*}{Method} 
+%         & \multicolumn{4}{c}{Normal} 
+%         & \multicolumn{5}{c}{Fire} \\
+%         \cmidrule(lr){2-5} \cmidrule(lr){6-10}
+%         & NS & DTO & SR & SPL 
+%         & NS$\uparrow$ & SR$\downarrow$ & SPL$\downarrow$ & DTO$\downarrow$ & CHE$\uparrow$ \\
+%         \midrule
+%         Greedy        
+%         & 1.00 & 0.682 & 0.391 & 0.42
+%         & 1.27 & 0.611 & 0.328 & 0.58 & 2.91 \\
+%         Cost-Utility  
+%         & 1.03 & 0.694 & 0.402 & 0.39
+%         & 1.31 & 0.625 & 0.323 & 0.55 & 2.54 \\
+%         Random Sample 
+%         & 1.05 & 0.701 & 0.410 & 0.37
+%         & 1.29 & 0.636 & 0.336 & 0.53 & 2.47 \\
+%         Multi-SemExp  
+%         & 1.02 & 0.676 & 0.388 & 0.44
+%         & 1.34 & 0.612 & 0.327 & 0.60 & 2.88 \\
+%         Co-NavGPT     
+%         & \textbf{0.94} & \textbf{0.732} & \textbf{0.435} & \textbf{0.31}
+%         & \textbf{1.08} & \textbf{0.666} & \textbf{0.368} & \textbf{0.41} & \textbf{1.73} \\
+%         \bottomrule
+%     \end{tabular}
+% \end{table*}
+
+
+
+
+
+We evaluate all navigation methods under both normal indoor conditions and fire-driven scenarios to assess their navigation success rate, exploration efficiency, and safety awareness. The results are summarized in Table~\ref{tab:normal_condition} and Table~\ref{tab:fire_condition}. 
+
+Comparisons among different methods within the same environment show that 
+% our approach consistently outperforms all baselines across all metrics. 
+% In particular, 
+the VLM-based planner (Co-NavGPT) achieves higher success rates and SPL while requiring fewer steps and significantly reducing cumulative hazard exposure. These results indicate that high-level semantic reasoning enables agents to assign spatially efficient and semantically meaningful exploration goals, thereby improving coordination and reducing redundant exploration.
+
+Furthermore, by comparing the performance of each method across normal and fire scenarios, we observe a substantial performance degradation for existing approaches originally designed for clean indoor environments. 
+% In contrast, our method exhibits significantly improved robustness, maintaining stable performance by explicitly incorporating multi-modal perception and hazard-aware reasoning into both global planning and local navigation.
+We analyze the underlying causes of the observed performance degradation under fire-driven scenarios. As illustrated in Fig.~\ref{fig:evaluate_fire}, these effects are attributed to three key factors. First, visual impairment leads to perception failures. As shown in Fig.~\ref{fig:evaluate_fire}(a), smoke occlusion causes the confidence score of a target object (Chair) to drop significantly ($0.87 \to 0.15$), leading to missed detections. Conversely, Fig.~\ref{fig:evaluate_fire}(d) demonstrates how visual noise triggers false positives, where the agent incorrectly detects a toilet (score $0.71$) in a smoke-filled corridor. Second, these perception errors destabilize exploration. While the agent in normal conditions follows a structured path (Fig.~\ref{fig:evaluate_fire}(b)), the agent under fire scenarios (Fig.~\ref{fig:evaluate_fire}(e)) exhibits erratic trajectories and fails to expand the map frontier effectively due to high sensing uncertainty. Third, the lack of hazard-aware reasoning results in unsafe navigation. Despite the presence of high-temperature zones shown in the hazard map (Fig.~\ref{fig:evaluate_fire}(c)), the standard planner fails to account for these risks. Consequently, as depicted in Fig.~\ref{fig:evaluate_fire}(f), the agent generates a path that traverses directly through hazardous areas. Our future work will include a comprehensive evaluation of \system, with particular emphasis on robustness across diverse fire scenarios.
+%, highlighting the necessity for robust, hazard-aware planning in SAR systems.
+
+
+% % TODO:
+% % 1.Needs to polish up the caption and illustration
+% % 2.Maybe need to unify the background of the figures
+% \begin{figure*}[t]
+%     \centering
+
+%     % ===== 第一行 =====
+%     \subfloat[Missing detection before and after Fire Scenarios]{
+%         \includegraphics[width=0.382\textwidth]{figures/evaluation/misdetection.png}
+%     }
+%     \hfill
+%     \subfloat[Normal Exploration]{
+%         \includegraphics[width=0.29\textwidth]{figures/evaluation/normal_exploration.png}
+%     }
+%     \hfill
+%     \subfloat[Hazard Map]{
+%         \includegraphics[width=0.283\textwidth]{figures/evaluation/hazard_map.png}
+%     }
+
+%     \vspace{0.3cm}
+
+%     % ===== 第二行 =====
+%     \subfloat[False detection before and after Fire Scenarios]{
+%         \includegraphics[width=0.382\textwidth]{figures/evaluation/misdetection2.png}
+%     }
+%     \hfill
+%     \subfloat[Fire Exploration]{
+%         \includegraphics[width=0.29\textwidth]{figures/evaluation/fire_exploration.png}
+%     }
+%     \hfill
+%     \subfloat[False Routing of Entering Fire]{
+%         \includegraphics[width=0.283\textwidth]{figures/evaluation/routing_under_fire.png}
+%     }
+
+%     \caption{The comparison highlights three failure modes: (a, d) Perception Failure: Smoke causes missed detections (confidence drop in a) and false positives (hallucinations in d); (b, e) Inefficient Exploration: Agents exhibit redundant framing and reduced coverage under fire conditions; (c, f) Unsafe Planning: Without hazard awareness, agents plan paths through high-risk zones (f) despite the presence of thermal hazards shown in the ground-truth map (c).}
+%     \label{fig:evaluate_fire}
+% \end{figure*}
+
+
+
+
+
+
+
+
+
+
+% \begin{table}[htbp]
+%     \centering
+%     \caption{Comparative Results Under Normal and Fire Conditions.}
+%     \label{tab:comparative_study}
+%     \begin{tabular}{l c c c c c c c c}
+%         \toprule
+%         \multirow{2}{*}{Method} 
+%         & \multicolumn{4}{c}{No Fire} 
+%         & \multicolumn{4}{c}{Fire} \\
+%         \cmidrule(lr){2-5} \cmidrule(lr){6-9}
+%         & SR$\uparrow$ & SPL$\uparrow$ & DTG$\downarrow$ & Time$\downarrow$
+%         & SR$\uparrow$ & SPL$\uparrow$ & DTG$\downarrow$ & Time$\downarrow$ \\
+%         \midrule
+%         Greedy 
+%         & 0.682 & 0.391 & 1.912 & 1.00
+%         & 0.611 & 0.328 & 2.239 & 1.27 \\
+
+%         Cost-Utility 
+%         & 0.694 & 0.402 & 1.876 & 1.03
+%         & 0.625 & 0.323 & 2.030 & 1.31 \\
+
+%         Random Sample on Map 
+%         & 0.701 & 0.410 & 1.842 & 1.05
+%         & 0.636 & 0.336 & 2.048 & 1.29 \\
+
+%         Multi-SemExp 
+%         & 0.676 & 0.388 & 1.905 & 1.02
+%         & 0.612 & 0.327 & 2.234 & 1.34 \\
+
+%         Co-NavGPT 
+%         & \textbf{0.732} & \textbf{0.435} & \textbf{1.521} & \textbf{0.94}
+%         & \textbf{0.666} & \textbf{0.368} & \textbf{1.684} & \textbf{1.08} \\
+
+%         \bottomrule
+%     \end{tabular}
+% \end{table}
+
+
+
+
+
+% In contrast, our approach maintains robust navigation performance by explicitly modeling hazard-aware perception and planning, highlighting the necessity of fire-aware multi-modal reasoning in multi-agent indoor search and rescue scenarios.

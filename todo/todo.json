@@ -1,0 +1,101 @@
+{
+  "meta": {
+    "project": "Co-NavGPT2 (GNN_Baseline)",
+    "updated_at": "2026-05-01T17:15:00Z",
+    "owner": "copilot"
+  },
+  "items": [
+    {
+      "id": "T001",
+      "title": "Inspect main.py / chat_utils integration points",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "Identified GPT call site, frontier inputs, pose_pred format.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T002",
+      "title": "Create todo/todo.json",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "todo/todo.json exists at project root with valid schema.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T003",
+      "title": "Build feature extractor utils/graph_builder.py",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T001"],
+      "acceptance": "build_features(...) returns dict of torch tensors: robot_feat, frontier_feat, edge_feat with documented dims.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T004",
+      "title": "Implement agents/gnn_assigner.py (model + inference)",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T003"],
+      "acceptance": "GNNAssigner.assign(...) returns {robot_i: frontier_j} dict identical in shape to chat_with_gpt4v output. Loads optional ckpt, falls back to nearest if no ckpt.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T005",
+      "title": "Add GPT trace collection (utils/gpt_trace.py + hook in main.py)",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T003"],
+      "acceptance": "Setting GNN_TRACE_DIR env var writes jsonl lines containing serialized features + GPT assignment per decision step.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T006",
+      "title": "Implement scripts/train_gnn_assigner.py (BC training)",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T004", "T005"],
+      "acceptance": "Loads jsonl traces from data/gnn_traces, trains with CE loss, saves ckpt to outputs/gnn/.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T007",
+      "title": "Wire --nav_mode gnn into arguments.py and main.py",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T004"],
+      "acceptance": "python main.py --nav_mode gnn runs without import error; uses GNNAssigner instead of GPT.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T008",
+      "title": "Smoke-test imports and graph builder",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T003", "T004", "T007"],
+      "acceptance": "python -c smoke test constructs random inputs, runs assigner, prints valid assignment dict.",
+      "last_updated": "2026-04-30T00:00:00Z"
+    },
+    {
+      "id": "T009",
+      "title": "Rewrite Report/*.tex to integrate GNN distillation content",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T008"],
+      "acceptance": "Report/main.tex updated (title/author with NetID/abstract/keywords/section names); Report/sections/{introduction,systemdesign,evaluation,conclusion}.tex rewritten focused on GNN distillation; references.bib appended with yu2023conavgpt, velickovic2018gat, hinton2015distillation, ross2011dagger; original .tex files preserved as .bak.",
+      "notes": "Could not run pdflatex to validate build (conda texlive install missing format files; sudo blocked). Sanity-checked: every \\cite key exists in references.bib; no missing \\includegraphics targets; \\input paths intact.",
+      "last_updated": "2026-05-01T17:15:00Z"
+    },
+    {
+      "id": "T010",
+      "title": "Reframe Report to original Vulcan + GNN-replaces-VLM-planner",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T009"],
+      "acceptance": "Restored original Vulcan structure (intro/systemdesign/evaluation/conclusion). main.tex abstract & title reframed to GNN-Enhanced Vulcan. introduction.tex: added Why-GNN-over-VLM paragraph in challenge #3, fig caption updated, contributions list updated. systemdesign.tex: replaced 'VLM-Based Global Planning under Fire Hazards' subsection with 'GNN-Based Global Planning under Fire Hazards' (bipartite graph, cross-attention, BC). evaluation.tex: added 'GNN Global Planner vs. VLM Teacher' subsection with two real-data tables. conclusion.tex: rewritten to reflect distilled GNN planner.",
+      "notes": "All cite keys validated against references.bib. pdflatex still unavailable to compile.",
+      "last_updated": "2026-05-01T17:30:00Z"
+    }
+  ]
+}

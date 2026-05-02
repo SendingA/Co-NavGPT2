@@ -53,8 +53,15 @@ def get_args():
     
     # train_se_frontier
     parser.add_argument('--nav_mode', type=str, default="gpt",
-                        choices=['nearest', 'co_ut', 'fill', "gpt"])
+                        choices=['nearest', 'co_ut', 'fill', "gpt", "gnn"])
     parser.add_argument('--fill_mode', type=int, default=0)
+    parser.add_argument('--gnn_ckpt', type=str,
+                        default="outputs/gnn/assigner.pt",
+                        help="Path to trained GNN frontier-assigner checkpoint"
+                             " (used when --nav_mode gnn). If missing, falls"
+                             " back to a nearest-frontier heuristic.")
+    parser.add_argument('--max_episodes', type=int, default=0,
+                        help="Stop after this many episodes (0 = run all)")
     parser.add_argument('--gpt_type', type=int, default=2,
                         help="""0: text-davinci-003
                                 1: gpt-3.5-turbo
