@@ -1,0 +1,66 @@
+{
+  "meta": {
+    "project": "Co-NavGPT2",
+    "updated_at": "2026-06-13T00:00:00Z",
+    "owner": "copilot"
+  },
+  "items": [
+    {
+      "id": "T001",
+      "title": "Add 'fire' class to perception vocabulary in all agents",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": "self.classes contains 'fire' in vlm_multi_agents, vlm_agents, ros2_agents, ros2_single_agent",
+      "last_updated": "2026-06-09T00:10:00Z"
+    },
+    {
+      "id": "T002",
+      "title": "Augment Object_Detection_and_Segmentation with HSV flame detector",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T001"],
+      "acceptance": "detect() returns sv.Detections including fire bboxes/masks when 'fire' is in classes",
+      "last_updated": "2026-06-09T00:10:00Z"
+    },
+    {
+      "id": "T003",
+      "title": "Validate edited files",
+      "status": "done",
+      "priority": "P2",
+      "depends_on": ["T001", "T002"],
+      "acceptance": "py_compile passes; HSV smoke test prints OK",
+      "last_updated": "2026-06-09T00:10:00Z"
+    },
+    {
+      "id": "T004",
+      "title": "Reproduce 0.18 false-stop claim",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": "Captured every detection vs sem_threshold decision, confirmed 0.85 threshold is enforced",
+      "notes": "All 10 pass=True events had conf >= 0.888. The screenshot scenario cannot stop on 0.18 in the current code path.",
+      "last_updated": "2026-06-09T01:00:00Z"
+    },
+    {
+      "id": "T005",
+      "title": "Diagnose why episode 0 stops at 17 steps with success=0",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T004"],
+      "acceptance": "Per-step action log identifies which agent emits action=0 and why",
+      "notes": "Root cause: At step=2 a single bed detection (conf=0.888) crosses sem_threshold and locks found_goal=True. Its 3D back-projection writes a wrong target into object_pcd (truth distance 6.6m). For the next 14 steps the ShortestPathFollower drives the agent toward that incorrect 3D point. At step=17 the follower decides the goal is reached and returns 0; because found_goal is True, the override 'if not found_goal and action==0' does NOT trigger, so action=0 propagates to env.step and is_stop_called=True ends the episode. Recommended fixes: (a) require N-frame multi-confirmation before setting found_goal; (b) reset found_goal/object_pcd if proximity to nearest_point disagrees with detection; (c) raise --sem_threshold for synthetic+smoke scenes. Awaiting user choice.",
+      "last_updated": "2026-06-09T01:30:00Z"
+    },
+    {
+      "id": "T006",
+      "title": "Make flames penetrate smoke in the RGB sensor",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": "SmokeRGBSensor preserves flame pixels and adds a soft glow halo under dense smoke; HSV flame detector still fires on the smoke-attenuated RGB.",
+      "notes": "Added flame_* knobs to SmokeRGBConfig (passthrough/glow/color bleed/HSV ranges). Rewrote SmokeRGBSensor: HSV flame mask + Gaussian glow boost transmittance T'=T+(1-T)*boost; surrounding smoke gets tinted by the local fire color; particulate noise is suppressed on the flame core. Verified with scripts/test_rgb_flame_through_smoke.py (flame mean RGB=240,111,44 vs bg 179,179,178 at density=0.9, 4 m) and scripts/test_flame_after_smoke.py (HSV detector returns one box, score 0.950).",
+      "last_updated": "2026-06-13T00:00:00Z"
+    }
+  ]
+}

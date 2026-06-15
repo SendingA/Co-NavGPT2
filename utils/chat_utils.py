@@ -14,7 +14,31 @@ import cv2
 import utils.visualization as vu
 import os
 
-client = OpenAI()
+def _get_openai_client():
+    """Lazy OpenAI client.
+
+    Constructing OpenAI() at module import time crashes with
+    'OPENAI_API_KEY' not set, which prevented main.py from running
+    even when --nav_mode != 'gpt'. Building the client lazily lets
+    every non-gpt path (nearest / co_ut / fill) start without an
+    API key.
+    """
+    global _openai_client
+    try:
+        _openai_client
+    except NameError:
+        _openai_client = OpenAI()
+    return _openai_client
+
+
+# Backwards-compat shim: code that does ``client.chat.completions.create``
+# transparently triggers the lazy build on first attribute access.
+class _LazyClient:
+    def __getattr__(self, name):
+        return getattr(_get_openai_client(), name)
+
+
+client = _LazyClient()
 
 gpt_name = [
             'text-davinci-003',

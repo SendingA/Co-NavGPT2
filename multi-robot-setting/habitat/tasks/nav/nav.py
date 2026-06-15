@@ -124,27 +124,28 @@ def merge_sim_episode_config(sim_config: Config, episode: Episode, sim: Simulato
         episode.start_position is not None
         and episode.start_rotation is not None
     ):
+        # Habitat 中每个 agent 的朝向是 yaw-only 四元数 [0, sin(yaw/2), 0, cos(yaw/2)]
+        # 这里把 agent_i (i>=1) 的朝向设成相对 agent_0 固定旋转 (2π * i / NUM_AGENTS)。
+        # NUM_AGENTS=2 时，agent_1 自动比 agent_0 反向 180°；NUM_AGENTS=3 时，每个相邻 120°，等等。
+        sr = episode.start_rotation  # [x, y, z, w]
+        yaw0 = 2.0 * np.arctan2(sr[1], sr[3])  # 提取 agent_0 的 yaw
         for i in range(sim_config.NUM_AGENTS):
+            agent_name = sim_config.AGENTS[i]
+            agent_cfg = getattr(sim_config, agent_name)
+            agent_cfg.defrost()
+            agent_cfg.START_POSITION = episode.start_position
             if i == 0:
-                agent_name = sim_config.AGENTS[i]
-                agent_cfg = getattr(sim_config, agent_name)
-                agent_cfg.defrost()
-                agent_cfg.START_POSITION = episode.start_position
                 agent_cfg.START_ROTATION = episode.start_rotation
-                agent_cfg.IS_SET_START_STATE = True
-                agent_cfg.freeze()
             else:
-                agent_name = sim_config.AGENTS[i]
-                agent_cfg = getattr(sim_config, agent_name)
-
-                angle = np.random.uniform(0, 2 * np.pi)
-                source_rotation = [0.0, np.sin(angle / 2), 0, np.cos(angle / 2)]
-                
-                agent_cfg.defrost()
-                agent_cfg.START_POSITION = episode.start_position
-                agent_cfg.START_ROTATION = source_rotation
-                agent_cfg.IS_SET_START_STATE = True
-                agent_cfg.freeze()
+                yaw_i = yaw0 + 2.0 * np.pi * i / sim_config.NUM_AGENTS
+                agent_cfg.START_ROTATION = [
+                    0.0,
+                    float(np.sin(yaw_i / 2.0)),
+                    0.0,
+                    float(np.cos(yaw_i / 2.0)),
+                ]
+            agent_cfg.IS_SET_START_STATE = True
+            agent_cfg.freeze()
 
     return sim_config
 

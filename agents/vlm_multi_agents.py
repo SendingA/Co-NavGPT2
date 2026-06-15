@@ -84,7 +84,7 @@ class VLM_Agent():
         # ------------------------------------------------------------------
         ##### Initialize the perception model
         # ------------------------------------------------------------------
-        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch"]
+        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "fire"]
         
         self.obj_det_seg = Object_Detection_and_Segmentation(self.args, self.classes, self.device)
         

@@ -25,6 +25,7 @@ from multiprocessing import Process, Queue
 import multiprocessing as mp
 
 from utils.explored_map_utils import Global_Map_Proc, detect_frontier
+from utils.fire_sensors import FireSensorSuite, FireSensorConfig
 
 def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
     
@@ -51,7 +52,30 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
         agent.append(VLM_Agent(args, i, follower))
         
     map_process = Global_Map_Proc(args)
-    
+
+    # ------------------------------------------------------------------
+    # Fire-scene multi-modal sensor simulator (optional). Per-rank dump
+    # directory keeps multi-process runs from clobbering each other.
+    # ------------------------------------------------------------------
+    fire_suites = None
+    if getattr(args, "fire_sensors", 0):
+        fire_cfg = FireSensorConfig(
+            max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
+            hfov_deg=float(config.SIMULATOR.DEPTH_SENSOR.HFOV),
+            smoke_density=float(args.smoke_density),
+            save_npz=bool(args.fire_save_npz),
+        )
+        fire_suites = [
+            FireSensorSuite(
+                cfg=fire_cfg,
+                dump_dir=os.path.join(
+                    args.fire_dump_dir, f"rank_{rank}", f"agent_{i}"),
+                save_every=int(args.fire_save_every),
+                seed=args.seed + rank * 100 + i,
+            )
+            for i in range(num_agents)
+        ]
+
     start_signal = send_queue.get()
 
     print(start_signal)
@@ -77,6 +101,36 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             point_sum.clear()
             found_goal = False
             clean_diff = True
+            # --------------------------------------------------------
+            # Fire-scene sensor simulator (optional)
+            # --------------------------------------------------------
+            if fire_suites is not None:
+                max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
+                normalize = bool(getattr(
+                    config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
+                for i in range(num_agents):
+                    rgb_i = np.asarray(observations[i]['rgb'])
+                    depth_raw = np.asarray(observations[i]['depth'])
+                    depth_m = depth_raw * max_d if normalize else depth_raw
+
+                    sensors = fire_suites[i].process(rgb_i, depth_m, obs=observations[i])
+                    fire_suites[i].save_step(
+                        sensors,
+                        episode=count_episodes,
+                        step=agent[i].l_step if hasattr(agent[i], 'l_step') else 0,
+                        agent_id=i,
+                    )
+
+                    if args.fire_apply_to_obs:
+                        observations[i]['rgb'] = sensors['rgb_smoke']
+                        d_smoke = sensors['depth_smoke']
+                        if normalize:
+                            d_smoke = np.clip(d_smoke / max_d, 0.0, 1.0)
+                        if depth_raw.ndim == 3 and d_smoke.ndim == 2:
+                            d_smoke = d_smoke[..., None]
+                        observations[i]['depth'] = d_smoke.astype(
+                            depth_raw.dtype)
+
             for i in range(num_agents):
                 agent_state = env.sim.get_agent_state(i)
                 agent[i].mapping(observations[i], agent_state)
@@ -285,6 +339,18 @@ def main():
     config_env.SIMULATOR.NUM_AGENTS = args.num_agents
     config_env.SIMULATOR.AGENTS = ["AGENT_"+str(i) for i in range(args.num_agents)]
     config_env.SIMULATOR.HABITAT_SIM_V0.GPU_DEVICE_ID = args.gpu_id
+    if int(getattr(args, "lidar_360", 0)) and getattr(args, "fire_sensors", 0):
+        from utils.fire_sensors.lidar_360 import (
+            install_lidar_depth_sensors,
+            LIDAR_DEPTH_UUIDS,
+        )
+        install_lidar_depth_sensors(
+            config_env,
+            base_depth_cfg=config_env.SIMULATOR.DEPTH_SENSOR,
+            resolution=int(getattr(args, "lidar_resolution", 320)),
+            num_agents=args.num_agents,
+        )
+        print(f"[lidar_360] installed sensors: {LIDAR_DEPTH_UUIDS}")
     config_env.freeze()
     # ------------------------------------------------------------------
     

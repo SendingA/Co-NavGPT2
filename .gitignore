@@ -8,4 +8,16 @@ mobile_sam.pt
 yolov8l-world.pt
 .history
 exp_*
-human.py
+
+# Heavy artifacts that should never be committed.
+outputs/
+*.glb
+*.mp4
+*.pdf
+*.npz
+*.zip
+=*
+
+# Backup files from text editors.
+*.swp
+*.swo

@@ -76,7 +76,7 @@ class ROS_Agent(VLM_Agent):
         # ------------------------------------------------------------------
         ##### Initialize the perception model
         # ------------------------------------------------------------------
-        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "person", "sink"]
+        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "person", "sink", "fire"]
         
         self.obj_det_seg = Object_Detection_and_Segmentation(self.args, self.classes, self.device)
         

@@ -18,6 +18,7 @@ from utils.explored_map_utils import Global_Map_Proc, detect_frontier
 from agents.vlm_agents import VLM_Agent
 import utils.visualization as vu
 from arguments import get_args
+from utils.fire_sensors import FireSensorSuite, FireSensorConfig, FireSensorViewer
 
 
 import cv2
@@ -75,6 +76,25 @@ def main(args, send_queue, receive_queue):
     config.SIMULATOR.NUM_AGENTS = args.num_agents
     config.SIMULATOR.AGENTS = ["AGENT_"+str(i) for i in range(args.num_agents)]
     config.SIMULATOR.HABITAT_SIM_V0.GPU_DEVICE_ID = args.gpu_id
+    # ------------------------------------------------------------------
+    # 360° LIDAR: install 4 yaw-rotated depth sensors on every agent so
+    # the fire-scene LIDAR simulator can stitch a true 360° point cloud.
+    # Each slice covers HFOV=90°, oriented at yaw {0, +π/2, π, -π/2}.
+    # The 'rgb' / 'depth' UUIDs used by the navigation stack stay
+    # untouched - we only add four extra UUIDs.
+    # ------------------------------------------------------------------
+    if int(getattr(args, "lidar_360", 0)) and getattr(args, "fire_sensors", 0):
+        from utils.fire_sensors.lidar_360 import (
+            install_lidar_depth_sensors,
+            LIDAR_DEPTH_UUIDS,
+        )
+        install_lidar_depth_sensors(
+            config,
+            base_depth_cfg=config.SIMULATOR.DEPTH_SENSOR,
+            resolution=int(args.lidar_resolution),
+            num_agents=args.num_agents,
+        )
+        print(f"[lidar_360] installed sensors: {LIDAR_DEPTH_UUIDS}")
     config.freeze()
     # ------------------------------------------------------------------
     
@@ -99,6 +119,45 @@ def main(args, send_queue, receive_queue):
     map_process = Global_Map_Proc(args)
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    ##### Fire-scene multi-modal sensor simulator (optional)
+    # Pose-process every agent's RGB/Depth into smoke-attenuated RGB,
+    # noisy depth, mmWave-radar-like point cloud, and thermal IR view.
+    # See utils/fire_sensors.py for physical justification (Starr & Lattimer
+    # 2014; RadarHD 2023).
+    # ------------------------------------------------------------------
+    fire_suites = None
+    fire_viewers = None
+    if getattr(args, "fire_sensors", 0):
+        fire_cfg = FireSensorConfig(
+            max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
+            hfov_deg=float(config.SIMULATOR.DEPTH_SENSOR.HFOV),
+            smoke_density=float(args.smoke_density),
+            save_npz=bool(args.fire_save_npz),
+        )
+        fire_suites = [
+            FireSensorSuite(
+                cfg=fire_cfg,
+                dump_dir=os.path.join(args.fire_dump_dir, f"agent_{i}"),
+                save_every=int(args.fire_save_every),
+                seed=args.seed + i,
+            )
+            for i in range(num_agents)
+        ]
+        if int(getattr(args, "fire_show_window", 0)):
+            fire_viewers = [
+                FireSensorViewer.start(
+                    window_name=f"Fire Sensors - agent {i}",
+                    fps=10.0,
+                    fallback_path=os.path.join(
+                        args.fire_dump_dir, f"agent_{i}", "live.png"
+                    ),
+                )
+                for i in range(num_agents)
+            ]
+        print(f"[fire_sensors] enabled, density={args.smoke_density}, "
+              f"dump_dir={args.fire_dump_dir}")
+
     count_episodes = 0
     goal_points = []
     log_start = time.time()
@@ -122,6 +181,41 @@ def main(args, send_queue, receive_queue):
             pose_pred = []
             point_sum.clear()
             found_goal = False
+            # ----------------------------------------------------------
+            # Fire-scene sensor simulator: optionally rewrite obs in-place
+            # so mapping/perception sees smoke-affected RGB-D, while we
+            # also dump radar / thermal modalities for analysis.
+            # ----------------------------------------------------------
+            if fire_suites is not None:
+                max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
+                normalize = bool(getattr(
+                    config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
+                for i in range(num_agents):
+                    rgb_i = np.asarray(observations[i]['rgb'])
+                    depth_raw = np.asarray(observations[i]['depth'])
+                    depth_m = depth_raw * max_d if normalize else depth_raw
+
+                    sensors = fire_suites[i].process(rgb_i, depth_m, obs=observations[i])
+                    fire_suites[i].save_step(
+                        sensors,
+                        episode=count_episodes,
+                        step=agent[i].l_step if hasattr(agent[i], 'l_step') else 0,
+                        agent_id=i,
+                    )
+                    if fire_viewers is not None:
+                        fire_viewers[i].update(sensors.get('dashboard'))
+
+                    if args.fire_apply_to_obs:
+                        observations[i]['rgb'] = sensors['rgb_smoke']
+                        d_smoke = sensors['depth_smoke']
+                        if normalize:
+                            d_smoke = np.clip(d_smoke / max_d, 0.0, 1.0)
+                        # preserve original shape (H,W,1) vs (H,W)
+                        if depth_raw.ndim == 3 and d_smoke.ndim == 2:
+                            d_smoke = d_smoke[..., None]
+                        observations[i]['depth'] = d_smoke.astype(
+                            depth_raw.dtype)
+
             for i in range(num_agents):
                 agent_state = env.sim.get_agent_state(i)
                 agent[i].mapping(observations[i], agent_state)
@@ -283,6 +377,10 @@ def main(args, send_queue, receive_queue):
 
 
     avg_metrics = {k: v / count_episodes for k, v in agg_metrics.items()}
+
+    if fire_viewers is not None:
+        for v in fire_viewers:
+            v.stop()
 
     return avg_metrics
 

@@ -61,7 +61,36 @@ def get_args():
                                 2: gpt-4o
                                 3: gpt-4o-mini
                                 (default: 2)""")
-                                   
+
+    # ----------------------------------------------------------------------
+    # Fire-scene multi-modal sensor simulator
+    # ----------------------------------------------------------------------
+    parser.add_argument('--fire_sensors', type=int, default=0,
+                        help='1: enable smoke/depth-noise/radar/thermal sensor sim; '
+                             'override RGB+Depth observations and dump per-step files')
+    parser.add_argument('--fire_apply_to_obs', type=int, default=1,
+                        help='1: feed degraded RGB+Depth back to mapping pipeline; '
+                             '0: only save degraded sensors but keep clean obs for nav')
+    parser.add_argument('--smoke_density', type=float, default=0.6,
+                        help='[0,1] smoke optical thickness control. '
+                             '0=clear, 1=visibility ~1m')
+    parser.add_argument('--fire_dump_dir', type=str,
+                        default='./outputs/fire_sensors',
+                        help='output directory for per-step sensor images')
+    parser.add_argument('--fire_save_every', type=int, default=1,
+                        help='save every N steps (1 = save every step)')
+    parser.add_argument('--fire_save_npz', type=int, default=0,
+                        help='1: also dump raw numpy arrays as .npz alongside images')
+    parser.add_argument('--fire_show_window', type=int, default=0,
+                        help='1: open a live OpenCV 2x4 dashboard window')
+    parser.add_argument('--lidar_360', type=int, default=0,
+                        help='1: install 4 yaw-rotated depth sensors '
+                             '(front/left/back/right) on each agent so the '
+                             'LIDAR module can stitch a true 360° point cloud')
+    parser.add_argument('--lidar_resolution', type=int, default=320,
+                        help='per-slice depth resolution for the 360° LIDAR '
+                             '(square HxW). Lower = faster.')
+
     # parse arguments
     args = parser.parse_args()
 
