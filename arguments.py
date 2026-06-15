@@ -91,6 +91,25 @@ def get_args():
                         help='per-slice depth resolution for the 360° LIDAR '
                              '(square HxW). Lower = faster.')
 
+    # ----------------------------------------------------------------------
+    # Smoke-scene perception switches: keep depth/thermal trustworthy and
+    # let RGB degrade. Defaults preserve previous behaviour when off.
+    # ----------------------------------------------------------------------
+    parser.add_argument('--depth_use_clean', type=int, default=0,
+                        help='1: keep the original (clean) Habitat depth for '
+                             'mapping/navigation under smoke instead of the '
+                             'sensor-simulated noisy depth. RGB is still the '
+                             'smoke-attenuated version.')
+    parser.add_argument('--use_thermal_perception', type=int, default=1,
+                        help='1: when fire_sensors is enabled, inject the '
+                             'thermal flame mask into observations and let the '
+                             'detector source fire detections from thermal '
+                             'instead of HSV on the smoky RGB.')
+    parser.add_argument('--rgb_dehaze', type=int, default=0,
+                        help='1: apply depth-aware inverse Beer-Lambert + CLAHE '
+                             'on the smoky RGB before object detection. '
+                             'Requires depth_use_clean=1 for best results.')
+
     # parse arguments
     args = parser.parse_args()
 

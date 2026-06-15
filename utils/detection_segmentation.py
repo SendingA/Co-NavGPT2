@@ -114,7 +114,16 @@ class Object_Detection_and_Segmentation():
         )
 
     # ------------------------------------------------------------------
-    def detect(self, image):
+    def detect(self, image, thermal_flame_mask=None):
+        """Run YOLO-World on ``image`` and merge fire detections.
+
+        Args:
+            image: HxWx3 uint8 BGR (matches the rest of the pipeline).
+            thermal_flame_mask: optional float32 in [0, 1], shape (H, W).
+                If provided and the ``fire`` class is registered, fire
+                detections are derived from this mask (smoke-invariant)
+                instead of running HSV on the smoky RGB.
+        """
         # ----------------------- 1) YOLO-World ------------------------
         yolo_s_time = time.time()
         with torch.no_grad():
@@ -140,9 +149,23 @@ class Object_Detection_and_Segmentation():
             masks_tensor = sam_out[0].masks.data
             masks_np = masks_tensor.cpu().numpy().astype(bool)
 
-        # ----------------------- 3) HSV flame fallback ----------------
+        # ----------------------- 3) Fire fallback ---------------------
+        # Prefer thermal: it is unaffected by smoke. Fall back to the HSV
+        # detector on the (possibly smoky) RGB only when thermal is absent.
         if self.fire_class_id >= 0:
-            fire_xyxy, fire_masks, fire_scores = detect_flames_hsv(image)
+            if thermal_flame_mask is not None:
+                from utils.smoke_perception import thermal_mask_to_detections
+
+                target_hw = (
+                    masks_np.shape[1:] if masks_np is not None else image.shape[:2]
+                )
+                fire_xyxy, fire_masks, fire_scores = thermal_mask_to_detections(
+                    np.asarray(thermal_flame_mask, dtype=np.float32),
+                    target_hw=target_hw,
+                )
+            else:
+                fire_xyxy, fire_masks, fire_scores = detect_flames_hsv(image)
+
             if len(fire_xyxy) > 0:
                 # Align mask spatial dims with YOLO/SAM masks if any.
                 if masks_np is not None and masks_np.shape[1:] != fire_masks.shape[1:]:

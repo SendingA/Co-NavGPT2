@@ -1,7 +1,7 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-06-13T00:00:00Z",
+    "updated_at": "2026-06-15T00:00:00Z",
     "owner": "copilot"
   },
   "items": [
@@ -61,6 +61,16 @@
       "acceptance": "SmokeRGBSensor preserves flame pixels and adds a soft glow halo under dense smoke; HSV flame detector still fires on the smoke-attenuated RGB.",
       "notes": "Added flame_* knobs to SmokeRGBConfig (passthrough/glow/color bleed/HSV ranges). Rewrote SmokeRGBSensor: HSV flame mask + Gaussian glow boost transmittance T'=T+(1-T)*boost; surrounding smoke gets tinted by the local fire color; particulate noise is suppressed on the flame core. Verified with scripts/test_rgb_flame_through_smoke.py (flame mean RGB=240,111,44 vs bg 179,179,178 at density=0.9, 4 m) and scripts/test_flame_after_smoke.py (HSV detector returns one box, score 0.950).",
       "last_updated": "2026-06-13T00:00:00Z"
+    },
+    {
+      "id": "T007",
+      "title": "Smoke-scene perception path: clean depth + smoky RGB + thermal",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T006"],
+      "acceptance": "Pipeline keeps Habitat clean depth for mapping, sources fire detections from thermal, and optionally dehazes the smoky RGB before YOLO-World.",
+      "notes": "Added utils/smoke_perception.py (apply_clean_depth_and_thermal, dehaze_with_depth + estimate_smoke_k, thermal_mask_to_detections). Wired three new flags in arguments.py: --depth_use_clean (preserve clean depth obs), --use_thermal_perception (inject thermal channel + use thermal as fire source), --rgb_dehaze (depth-aware inverse Beer-Lambert + CLAHE). main.py and main_vec.py now call apply_clean_depth_and_thermal so observations carry smoky_rgb + clean_depth + thermal_image + thermal_flame_mask. Object_Detection_and_Segmentation.detect() takes thermal_flame_mask=...; when present, fire detections come from thermal (smoke-invariant) instead of HSV-on-smoky-RGB. vlm_agents/vlm_multi_agents pull obs['thermal_flame_mask'] and run the optional dehaze before transform_rgb_bgr. Validated via scripts/test_smoke_perception.py (apply/dehaze/thermal-detections all OK; bg dehazed from 179,179,179 to 150,151,151) and scripts/test_detect_with_thermal.py (gray RGB + thermal mask -> 1 fire detection conf 0.95). Existing tests test_flame_hsv.py and test_flame_after_smoke.py still pass under the project's co-nav env.",
+      "last_updated": "2026-06-15T00:00:00Z"
     }
   ]
 }

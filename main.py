@@ -187,9 +187,14 @@ def main(args, send_queue, receive_queue):
             # also dump radar / thermal modalities for analysis.
             # ----------------------------------------------------------
             if fire_suites is not None:
+                from utils.smoke_perception import apply_clean_depth_and_thermal
+
                 max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
                 normalize = bool(getattr(
                     config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
+                use_clean = bool(int(getattr(args, "depth_use_clean", 0)))
+                use_thermal = bool(int(getattr(args, "use_thermal_perception", 0)))
+                apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
                 for i in range(num_agents):
                     rgb_i = np.asarray(observations[i]['rgb'])
                     depth_raw = np.asarray(observations[i]['depth'])
@@ -205,16 +210,16 @@ def main(args, send_queue, receive_queue):
                     if fire_viewers is not None:
                         fire_viewers[i].update(sensors.get('dashboard'))
 
-                    if args.fire_apply_to_obs:
-                        observations[i]['rgb'] = sensors['rgb_smoke']
-                        d_smoke = sensors['depth_smoke']
-                        if normalize:
-                            d_smoke = np.clip(d_smoke / max_d, 0.0, 1.0)
-                        # preserve original shape (H,W,1) vs (H,W)
-                        if depth_raw.ndim == 3 and d_smoke.ndim == 2:
-                            d_smoke = d_smoke[..., None]
-                        observations[i]['depth'] = d_smoke.astype(
-                            depth_raw.dtype)
+                    apply_clean_depth_and_thermal(
+                        observations[i],
+                        sensors,
+                        clean_depth_raw=depth_raw,
+                        use_clean_depth=use_clean,
+                        use_thermal=use_thermal,
+                        apply_smoky_rgb=apply_smoky_rgb,
+                        normalize_depth=normalize,
+                        max_depth_m=max_d,
+                    )
 
             for i in range(num_agents):
                 agent_state = env.sim.get_agent_state(i)

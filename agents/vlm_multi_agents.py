@@ -215,19 +215,30 @@ class VLM_Agent():
         proc_time = time.time()
         image_rgb = observations['rgb']
         depth = observations['depth']
-        image = transform_rgb_bgr(image_rgb) 
+        if int(getattr(self.args, 'rgb_dehaze', 0)):
+            from utils.smoke_perception import dehaze_with_depth
+            max_d = float(getattr(self.args, 'max_depth_m', 5.0))
+            depth_m = depth[..., 0] if depth.ndim == 3 else depth
+            if depth_m.dtype != np.float32 and depth_m.max() <= 1.0 + 1e-6:
+                depth_m = depth_m.astype(np.float32) * max_d
+            else:
+                depth_m = depth_m.astype(np.float32)
+            image_rgb = dehaze_with_depth(image_rgb, depth_m)
+        image = transform_rgb_bgr(image_rgb)
         self.annotated_image = image
-        
+
         depth = self._preprocess_depth(depth)
-        
+
         camera_matrix_T = self.get_transform_matrix(agent_state)
         self.camera_position = camera_matrix_T[:3, 3]
         self.Open3D_traj.append(camera_matrix_T)
         self.relative_angle = round(np.arctan2(camera_matrix_T[2][0], camera_matrix_T[0][0])* 57.29577951308232 + 180)
         # print("self.relative_angle: ", self.relative_angle)
-        
-        
-        detections = self.obj_det_seg.detect(image) 
+
+
+        thermal_mask = observations.get('thermal_flame_mask') \
+            if int(getattr(self.args, 'use_thermal_perception', 0)) else None
+        detections = self.obj_det_seg.detect(image, thermal_flame_mask=thermal_mask)
         
         n_masks = len(detections.xyxy)
         for mask_idx in range(n_masks):
