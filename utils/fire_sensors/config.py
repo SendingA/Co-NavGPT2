@@ -33,6 +33,25 @@ class SmokeRGBConfig:
     smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
     smoke_k_max: float = 2.3  # density=1 -> V ≈ 1 m
 
+    # --- Spatial turbulence (replaces pixel-wise iid noise) -----------
+    # Multi-octave Gaussian-blurred random fields produce a low-frequency
+    # density modulator. Visually this looks like billowing smoke clouds
+    # rather than camera grain.
+    # Pixel sigmas of each octave (smaller = finer detail).
+    smoke_turbulence_scales: Tuple[int, int, int] = (16, 48, 128)
+    # How strongly the turbulence field modulates the local extinction k.
+    # 0 = uniform fog (old behaviour). 1 = strong billows.
+    smoke_turbulence_strength: float = 0.9
+    # Frame-to-frame coherence of the turbulence field. 0 = independent
+    # frames (flickery), ~0.9 = slow billowing.
+    smoke_turbulence_persist: float = 0.92
+    # Low-frequency brightness fluctuation applied only on the smoke layer
+    # (gated by (1 - transmittance)), in the same units as RGB (0-255).
+    # This is what gives smoke its "drifting" look without the white-noise
+    # frosted-glass artefact.
+    smoke_lowfreq_noise_std: float = 6.0
+    smoke_lowfreq_noise_ksize: int = 9
+
     # --- Flame penetration (visible-band radiation through smoke) -----
     # Per-pixel additional transmittance applied to flame regions: 0 disables
     # the effect, 1 makes flames fully visible regardless of smoke density.
