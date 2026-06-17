@@ -110,6 +110,39 @@ def get_args():
                              'on the smoky RGB before object detection. '
                              'Requires depth_use_clean=1 for best results.')
 
+    # ----------------------------------------------------------------------
+    # FireWorld runtime: replace the global-density SmokeRGBSensor with a
+    # 3D voxel ray-march against a precomputed timeline.npz. Time is
+    # advanced from robot-step counts, so simulator wall-clock is
+    # irrelevant; one "fire-time unit" is consumed every N robot steps.
+    # ----------------------------------------------------------------------
+    parser.add_argument('--fire_world', type=int, default=0,
+                        help='1: enable FireWorld runtime (overrides the '
+                             'SmokeRGBSensor RGB/Thermal output with the 3D '
+                             'voxel composite).')
+    parser.add_argument('--fire_world_plan_id', type=str, default=None,
+                        help='Plan id (12-hex) under scenes/<scene>/plans/. '
+                             'Required when --fire_world=1.')
+    parser.add_argument('--fire_world_scenes_root', type=str, default='scenes',
+                        help='Where to find inventory.json + plan.json.')
+    parser.add_argument('--fire_world_out_root', type=str,
+                        default='outputs/fire_world',
+                        help='Where to find timeline.npz '
+                             '(out_root/<scene>/<plan_id>/timeline.npz).')
+    parser.add_argument('--fire_steps_per_unit', type=int, default=5,
+                        help='Robot steps that elapse for every 1 unit of '
+                             'fire-time. Larger = slower fire vs the agent.')
+    parser.add_argument('--fire_seconds_per_unit', type=float, default=2.0,
+                        help='How many seconds of the fire timeline are '
+                             'consumed per fire-time unit. With the '
+                             'defaults 5/2.0, every 5 robot steps advance '
+                             'the simulated fire by 2 s.')
+    parser.add_argument('--fire_world_smoke_k_ext', type=float, default=4.0,
+                        help='Extinction coefficient multiplier on the smoke '
+                             'voxel field (per metre). Higher = more opaque.')
+    parser.add_argument('--fire_world_n_steps', type=int, default=24,
+                        help='Ray-march samples per pixel inside the renderer.')
+
     # parse arguments
     args = parser.parse_args()
 
