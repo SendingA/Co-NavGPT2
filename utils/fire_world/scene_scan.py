@@ -202,8 +202,22 @@ def assign_floor(inst: InstanceGeom, floors: List[Dict]) -> Optional[int]:
 # ObjectGoal lookup (used to flag is_goal and reuse object_id).
 # ---------------------------------------------------------------------------
 def _scene_short(s: str) -> str:
+    """Normalise an HM3D scene reference to its short id.
+
+    Accepts:
+        Nfvxx8J5NCo
+        00880-Nfvxx8J5NCo
+        data/.../00880-Nfvxx8J5NCo
+        data/.../00880-Nfvxx8J5NCo/Nfvxx8J5NCo.basis.glb
+    """
     s = s.split("/")[-1]
-    return s.replace(".basis.glb", "").replace(".glb", "")
+    s = s.replace(".basis.glb", "").replace(".glb", "")
+    # Strip the optional HM3D numeric prefix like "00880-".
+    if "-" in s:
+        head, tail = s.split("-", 1)
+        if head.isdigit():
+            s = tail
+    return s
 
 
 def _find_objectgoal_shard(scene_short: str, objectgoal_root: Path,

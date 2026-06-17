@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "plan_id": "83679a07b632",
+  "scene_id": "Nfvxx8J5NCo",
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00880-Nfvxx8J5NCo/Nfvxx8J5NCo.basis.glb",
+  "world_aabb": [
+    -16.11662483215332,
+    -0.7191430032253265,
+    -4.802337169647217,
+    5.123380184173584,
+    3.3900370597839355,
+    6.8524489402771
+  ],
+  "fire_type": "bedroom_textile",
+  "intensity": "severe",
+  "seed": 7,
+  "template_version": 1,
+  "duration_s": 900.0,
+  "ignitions": [
+    {
+      "object_id": 110,
+      "category": "bed",
+      "position": [
+        -13.181954383850098,
+        0.5514126420021057,
+        4.911938667297363
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.8,
+      "source_temp_c": 938.0,
+      "fuel_kg": 12.0,
+      "smoke_yield": 0.8
+    },
+    {
+      "object_id": 122,
+      "category": "pillow",
+      "position": [
+        -13.130754470825195,
+        0.8797435164451599,
+        6.012780666351318
+      ],
+      "ignite_time_s": 54.94213781585047,
+      "source_radius_m": 0.42,
+      "source_temp_c": 920.3,
+      "fuel_kg": 12.4,
+      "smoke_yield": 0.55
+    },
+    {
+      "object_id": 108,
+      "category": "curtain",
+      "position": [
+        -15.343667030334473,
+        1.3472912311553955,
+        5.218085765838623
+      ],
+      "ignite_time_s": 82.84913673531065,
+      "source_radius_m": 0.356,
+      "source_temp_c": 967.8,
+      "fuel_kg": 12.8,
+      "smoke_yield": 0.75
+    }
+  ],
+  "propagation_rules": {
+    "flammable_threshold": 0.4,
+    "ignition_temp_c": 350.0,
+    "spread_speed_m_per_s": 0.06,
+    "ceiling_jet_speed_m_per_s": 0.42,
+    "buoyancy_v_m_per_s": 0.65,
+    "thermal_diffusivity": 0.05,
+    "ambient_temp_c": 25.0
+  }
+}
