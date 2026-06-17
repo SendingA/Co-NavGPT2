@@ -182,44 +182,46 @@ class FireWorldRenderer:
             R_cam2world.astype(np.float32),
         )
         H, W = depth_m.shape
-        # (N, H, W, 3) ray sample positions, equally spaced in [0, 1].
         ts = np.linspace(0.0, 1.0, self.n_steps, dtype=np.float32)
-        # broadcast: (N, 1, 1, 1) * (1, H, W, 3) + (1, H, W, 3)
         rays = (
             (1.0 - ts[:, None, None, None]) * start[None]
             + ts[:, None, None, None] * end[None]
         )
 
-        smoke_samples = _sample_voxels(smoke, rays, self.fw.origin, self.fw.voxel_m)
+        smoke_samples = _sample_voxels(smoke, rays, self.fw.origin, self.fw.voxel_m)  # (N, H, W)
         flame_samples = _sample_voxels(flame, rays, self.fw.origin, self.fw.voxel_m)
-
-        # Optical depth integration: each step length = depth(u,v)/N along
-        # the perpendicular component, but we're sampling along the world
-        # ray so use the actual chord length / N.
-        chord = np.linalg.norm(end - start, axis=-1)  # (H, W)
-        step_m = chord / max(self.n_steps - 1, 1)
-        # Mass-weighted optical depth.
-        tau = (smoke_samples.sum(axis=0) * step_m * float(self.smoke_k_ext))
-        T = np.exp(-tau).astype(np.float32)            # transmittance (H, W)
-        T = np.clip(T, 0.0, 1.0)
-
-        # Flame: max along the ray (so the brightest hot voxel wins).
-        flame_along = flame_samples.max(axis=0).astype(np.float32)
-
-        # Thermal: temperature at the *first* voxel above ambient along
-        # the ray, falling back to the depth end-point if none.
-        amb = float(self.fw.ambient_c)
         temp_along = _sample_voxels(temp, rays, self.fw.origin, self.fw.voxel_m)
-        # Pick the maximum (hottest along ray).
+
+        chord = np.linalg.norm(end - start, axis=-1)  # (H, W)
+        step_m = chord / max(self.n_steps - 1, 1)     # (H, W)
+
+        # Optical-depth integration along the ray. We accumulate from the
+        # camera (t=0) outward; the front-to-back transmittance at sample
+        # i is exp(-cumsum(tau_i)).
+        tau_per_step = smoke_samples * step_m[None, ...] * float(self.smoke_k_ext)
+        tau_cum = np.cumsum(tau_per_step, axis=0)        # (N, H, W)
+        T_per_step = np.exp(-tau_cum).astype(np.float32) # transmittance up to step i
+        T_final = T_per_step[-1]                         # (H, W) end-to-end T
+
+        # Flame visibility: per-step flame intensity weighted by the
+        # transmittance from the camera to that step. The first hot
+        # voxel's contribution dominates because everything behind it
+        # gets attenuated by smoke in front.
+        flame_visible = (flame_samples * T_per_step).max(axis=0).astype(np.float32)
+
+        # Thermal: hottest temperature seen along the ray (smoke is
+        # transparent in IR, so we don't apply transmittance here).
         temp_max = temp_along.max(axis=0).astype(np.float32)
 
-        out_rgb = self._composite_rgb(rgb_clean, T, flame_along)
-        thermal_image, thermal_temp = self._compose_thermal(rgb_clean, temp_max, flame_along)
+        out_rgb = self._composite_rgb(rgb_clean, T_final, flame_visible)
+        thermal_image, thermal_temp = self._compose_thermal(
+            rgb_clean, temp_max, flame_visible
+        )
 
         return {
             "image": out_rgb,
-            "transmittance": T,
-            "flame_mask": (flame_along > self.flame_threshold).astype(np.float32),
+            "transmittance": T_final,
+            "flame_mask": (flame_visible > self.flame_threshold).astype(np.float32),
             "thermal_image": thermal_image,
             "thermal_temperature": thermal_temp,
         }

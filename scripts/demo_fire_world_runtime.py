@@ -55,19 +55,33 @@ def look_at(eye: np.ndarray, target: np.ndarray, up=np.array([0.0, 1.0, 0.0])):
     return R
 
 
-def pick_camera_path(plan: dict, n: int = 6) -> np.ndarray:
-    """Sample ``n`` waypoints around the first ignition for visual variety."""
+def pick_camera_path(plan: dict, n: int = 6,
+                     radius: float = 2.5, eye_height_off: float = 1.0,
+                     look_height_off: float = 0.0,
+                     world_aabb: np.ndarray = None) -> np.ndarray:
+    """Sample ``n`` waypoints around the first ignition.
+
+    The camera is placed on a circle of ``radius`` metres around the
+    ignition, ``eye_height_off`` metres above its centre. ``look_height_off``
+    biases the look-at target above/below the ignition (positive looks
+    upward toward the ceiling plume).
+
+    If ``world_aabb`` is supplied, eye points are clamped to stay inside
+    the building so the ray-march does not start from outside the scene.
+    """
     ig = plan["ignitions"][0]
     pos = np.asarray(ig["position"], dtype=np.float64)
-    # Circular path at fixed radius around the ignition, eye height 1.5 m.
-    radius = 2.5
     angles = np.linspace(0.0, 2 * np.pi, n, endpoint=False)
     waypoints = []
     for a in angles:
-        eye = pos + np.array([radius * np.cos(a), 0.5, radius * np.sin(a)])
-        eye[1] = pos[1] + 0.6
+        eye = pos + np.array([radius * np.cos(a), eye_height_off, radius * np.sin(a)])
+        if world_aabb is not None:
+            margin = 0.5
+            eye = np.maximum(eye, np.asarray(world_aabb[:3]) + margin)
+            eye = np.minimum(eye, np.asarray(world_aabb[3:]) - margin)
         waypoints.append(eye)
-    return np.asarray(waypoints)
+    targets = np.tile(pos + np.array([0.0, look_height_off, 0.0]), (n, 1))
+    return np.asarray(waypoints), targets
 
 
 def main(argv=None) -> int:
@@ -83,9 +97,21 @@ def main(argv=None) -> int:
     p.add_argument("--n_steps", type=int, default=24)
     p.add_argument("--smoke_k_ext", type=float, default=1.5)
     p.add_argument("--n_views", type=int, default=8)
+    p.add_argument("--radius_m", type=float, default=2.5,
+                   help="Distance of the orbiting camera from the first ignition.")
+    p.add_argument("--eye_height_off", type=float, default=0.6,
+                   help="Camera height above the first ignition (m). 0.6 m "
+                        "puts a typical robot eye at ~1.4 m floor height.")
+    p.add_argument("--look_up_off", type=float, default=0.6,
+                   help="Bias the look-at target above the ignition (m); "
+                        "increase this to look at the ceiling plume.")
     p.add_argument("--t_sim", type=float, default=120.0,
                    help="Simulation time (s) at which to render. Use a "
                         "negative value to render at peak smoke (auto).")
+    p.add_argument("--time_lapse", type=int, default=0,
+                   help="If >0, render this many frames at evenly spaced "
+                        "times instead of an orbiting camera. Useful to "
+                        "see fire propagation from a fixed viewpoint.")
     args = p.parse_args(argv)
 
     scenes_root = Path(args.scenes_root)
@@ -112,8 +138,14 @@ def main(argv=None) -> int:
         t_sim = float(args.t_sim)
 
     # Build a circular camera path around the first ignition.
-    eyes = pick_camera_path(plan, n=args.n_views)
-    target = np.asarray(plan["ignitions"][0]["position"], dtype=np.float64)
+    inv = json.loads((scenes_root / args.scene / "inventory.json").read_text())
+    eyes, targets = pick_camera_path(
+        plan, n=args.n_views,
+        radius=args.radius_m,
+        eye_height_off=args.eye_height_off,
+        look_height_off=args.look_up_off,
+        world_aabb=np.asarray(inv["world_aabb"]),
+    )
 
     out_dir = Path(args.out_root) / args.scene / args.plan_id / "runtime_demo"
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -121,11 +153,69 @@ def main(argv=None) -> int:
     rgb_clean = synthetic_clean_rgb(args.height, args.width)
     depth_const = np.full((args.height, args.width), args.max_depth_m, dtype=np.float32)
 
+    # ------------------------------------------------------------------
+    # Time-lapse mode: a single fixed camera, sweep over simulation time.
+    # ------------------------------------------------------------------
+    if args.time_lapse > 0:
+        # Fixed eye = first orbit position so the path is reproducible.
+        eye = eyes[0]
+        target = targets[0]
+        R = look_at(eye, target)
+        ts_render = np.linspace(float(fw.times[0]),
+                                float(fw.times[-1]),
+                                int(args.time_lapse))
+        print(f"[demo] time-lapse: {len(ts_render)} frames, "
+              f"t in [{ts_render[0]:.0f}, {ts_render[-1]:.0f}]s")
+        panels = []
+        t0 = time.time()
+        for i, t in enumerate(ts_render):
+            out = renderer.render(
+                rgb_clean=rgb_clean,
+                depth_m=depth_const,
+                cam_pos_world=eye,
+                R_cam2world=R,
+                t_sim=float(t),
+            )
+            rgb_smoky = out["image"]
+            therm = out["thermal_image"]
+            T_mean = float(out["transmittance"].mean())
+            flame_frac = float(out["flame_mask"].mean())
+            label = (f"t={t:.0f}s  T_mean={T_mean:.2f}  flame={flame_frac:.2%}")
+            cv2.putText(rgb_smoky, label, (10, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (40, 40, 40), 2)
+            cv2.putText(rgb_smoky, label, (10, 24),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (240, 240, 240), 1)
+            cv2.imwrite(str(out_dir / f"timelapse_{i:03d}_rgb.png"),
+                        cv2.cvtColor(rgb_smoky, cv2.COLOR_RGB2BGR))
+            cv2.imwrite(str(out_dir / f"timelapse_{i:03d}_thermal.png"), therm)
+            panels.append(np.hstack([cv2.cvtColor(rgb_smoky, cv2.COLOR_RGB2BGR), therm]))
+            print(f"  t={t:>5.0f}s  T_mean={T_mean:.2f} flame={flame_frac:.2%}")
+        # Stitch into one tall image and an mp4.
+        grid = np.vstack(panels)
+        cv2.imwrite(str(out_dir / "timelapse_grid.png"), grid)
+        h, w = panels[0].shape[:2]
+        writer = cv2.VideoWriter(
+            str(out_dir / "timelapse.mp4"),
+            cv2.VideoWriter_fourcc(*"mp4v"), 8.0, (w, h),
+        )
+        for fr in panels:
+            writer.write(fr)
+        writer.release()
+        elapsed = time.time() - t0
+        print(f"[demo] time-lapse done in {elapsed:.1f}s -> "
+              f"{out_dir}/timelapse.mp4 (+ per-frame PNGs)")
+        return 0
+
+    # ------------------------------------------------------------------
+    # Orbit mode: many cameras around the fire at one fixed time.
+    # ------------------------------------------------------------------
+
     print(f"[demo] rendering {len(eyes)} views @ t={t_sim:.0f}s "
           f"-> {out_dir}")
     panels = []
     t0 = time.time()
     for i, eye in enumerate(eyes):
+        target = targets[i]
         R = look_at(eye, target)
         out = renderer.render(
             rgb_clean=rgb_clean,
