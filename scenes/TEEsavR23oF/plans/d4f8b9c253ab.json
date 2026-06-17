@@ -1,0 +1,58 @@
+{
+  "schema_version": 1,
+  "plan_id": "d4f8b9c253ab",
+  "scene_id": "TEEsavR23oF",
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb",
+  "world_aabb": [
+    -12.78351,
+    -1.08662,
+    -8.77924,
+    3.242285,
+    5.21338,
+    1.35931
+  ],
+  "fire_type": "kitchen_grease_fire",
+  "intensity": "medium",
+  "seed": 42,
+  "template_version": 1,
+  "duration_s": 600.0,
+  "ignitions": [
+    {
+      "object_id": 10,
+      "category": "tv_monitor",
+      "position": [
+        -0.15094,
+        4.30008,
+        -4.8529
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.594,
+      "source_temp_c": 761.8,
+      "fuel_kg": 4.6,
+      "smoke_yield": 0.55
+    },
+    {
+      "object_id": 30,
+      "category": "chair",
+      "position": [
+        1.44466,
+        3.56965,
+        -5.65514
+      ],
+      "ignite_time_s": 49.23798065494423,
+      "source_radius_m": 0.403,
+      "source_temp_c": 778.5,
+      "fuel_kg": 5.2,
+      "smoke_yield": 0.5
+    }
+  ],
+  "propagation_rules": {
+    "flammable_threshold": 0.4,
+    "ignition_temp_c": 350.0,
+    "spread_speed_m_per_s": 0.04,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "buoyancy_v_m_per_s": 0.5,
+    "thermal_diffusivity": 0.05,
+    "ambient_temp_c": 25.0
+  }
+}
