@@ -1,0 +1,1132 @@
+{
+  "schema_version": 1,
+  "scene_id": "TEEsavR23oF",
+  "scene_dir": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF",
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb",
+  "objectgoal_shard": "data/datasets/objectnav_hm3d_v2/val_mini/content/TEEsavR23oF.json.gz",
+  "world_aabb": [
+    -12.78351,
+    -1.08662,
+    -8.77924,
+    3.242285,
+    5.21338,
+    1.35931
+  ],
+  "world_aabb_source": "object_union",
+  "footprint": null,
+  "objects": [
+    {
+      "object_id": 10,
+      "category": "tv_monitor",
+      "position": [
+        -0.15094,
+        4.30008,
+        -4.8529
+      ],
+      "aabb_min": [
+        -1.51803,
+        3.0133799999999997,
+        -5.9129
+      ],
+      "aabb_max": [
+        -0.14103,
+        4.21338,
+        -5.3129
+      ],
+      "flammability": 0.4,
+      "smoke_yield": 0.55,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 16,
+      "category": "bed",
+      "position": [
+        -0.11123,
+        4.2913,
+        -7.6972
+      ],
+      "aabb_min": [
+        -1.905256,
+        3.0133799999999997,
+        -7.08094
+      ],
+      "aabb_max": [
+        -0.424384,
+        4.21338,
+        -5.39794
+      ],
+      "flammability": 0.75,
+      "smoke_yield": 0.8,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 30,
+      "category": "chair",
+      "position": [
+        1.44466,
+        3.56965,
+        -5.65514
+      ],
+      "aabb_min": [
+        -0.33017,
+        3.0133799999999997,
+        -6.18263
+      ],
+      "aabb_max": [
+        0.28182999999999997,
+        4.21338,
+        -5.58263
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 51,
+      "category": "toilet",
+      "position": [
+        -5.75198,
+        3.61786,
+        -8.3146
+      ],
+      "aabb_min": [
+        -6.0187029999999995,
+        3.0133799999999997,
+        -7.77924
+      ],
+      "aabb_max": [
+        -5.202697,
+        4.21338,
+        -7.17924
+      ],
+      "flammability": 0.05,
+      "smoke_yield": 0.05,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 132,
+      "category": "sofa",
+      "position": [
+        -4.51569,
+        3.55406,
+        -3.42574
+      ],
+      "aabb_min": [
+        -6.5964,
+        3.0133799999999997,
+        -3.5076259999999997
+      ],
+      "aabb_max": [
+        -4.4034,
+        4.21338,
+        -1.7181739999999999
+      ],
+      "flammability": 0.8,
+      "smoke_yield": 0.85,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 160,
+      "category": "chair",
+      "position": [
+        -3.49151,
+        3.35161,
+        0.42067
+      ],
+      "aabb_min": [
+        -4.3275,
+        3.0133799999999997,
+        -0.67077
+      ],
+      "aabb_max": [
+        -3.7154999999999996,
+        4.21338,
+        -0.07077
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 174,
+      "category": "chair",
+      "position": [
+        -5.27161,
+        3.76114,
+        -0.01359
+      ],
+      "aabb_min": [
+        -5.47738,
+        3.0133799999999997,
+        -1.1076169999999999
+      ],
+      "aabb_max": [
+        -4.30438,
+        4.21338,
+        -0.290963
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 182,
+      "category": "plant",
+      "position": [
+        -6.70184,
+        3.69983,
+        0.19813
+      ],
+      "aabb_min": [
+        -6.1143,
+        3.0133799999999997,
+        -0.5558799999999999
+      ],
+      "aabb_max": [
+        -5.5143,
+        4.21338,
+        0.04411999999999999
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 183,
+      "category": "plant",
+      "position": [
+        -6.4833,
+        3.7593,
+        0.28373
+      ],
+      "aabb_min": [
+        -6.11296,
+        3.0133799999999997,
+        -0.64282
+      ],
+      "aabb_max": [
+        -5.5129600000000005,
+        4.21338,
+        -0.042820000000000025
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 184,
+      "category": "plant",
+      "position": [
+        -6.3462,
+        3.70006,
+        0.3609
+      ],
+      "aabb_min": [
+        -6.12151,
+        3.0133799999999997,
+        -0.68594
+      ],
+      "aabb_max": [
+        -5.52151,
+        4.21338,
+        -0.08594000000000002
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 186,
+      "category": "sofa",
+      "position": [
+        -6.59397,
+        3.52994,
+        -1.46677
+      ],
+      "aabb_min": [
+        -6.104734,
+        3.0133799999999997,
+        -2.911968
+      ],
+      "aabb_max": [
+        -4.988506,
+        4.21338,
+        -0.6693120000000001
+      ],
+      "flammability": 0.8,
+      "smoke_yield": 0.85,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 262,
+      "category": "plant",
+      "position": [
+        -10.51152,
+        1.53519,
+        0.65709
+      ],
+      "aabb_min": [
+        -10.13152,
+        -0.08662,
+        -0.24069
+      ],
+      "aabb_max": [
+        -9.531519999999999,
+        1.11338,
+        0.35931
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 264,
+      "category": "chair",
+      "position": [
+        -11.11151,
+        0.5661,
+        -0.3677
+      ],
+      "aabb_min": [
+        -11.034497,
+        -0.08662,
+        -2.097
+      ],
+      "aabb_max": [
+        -9.453503,
+        1.11338,
+        -0.618
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 266,
+      "category": "chair",
+      "position": [
+        -7.86612,
+        0.49594,
+        -0.01946
+      ],
+      "aabb_min": [
+        -8.991299999999999,
+        -0.08662,
+        -1.44701
+      ],
+      "aabb_max": [
+        -7.001399999999999,
+        1.11338,
+        -0.32501
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 270,
+      "category": "plant",
+      "position": [
+        -8.5715,
+        0.69739,
+        0.4771
+      ],
+      "aabb_min": [
+        -9.6,
+        -0.08662,
+        -0.5739000000000001
+      ],
+      "aabb_max": [
+        -8.732999999999999,
+        1.11338,
+        0.03809999999999997
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 275,
+      "category": "sofa",
+      "position": [
+        -9.24927,
+        0.51143,
+        -3.26289
+      ],
+      "aabb_min": [
+        -10.48601,
+        -0.08662,
+        -2.77839
+      ],
+      "aabb_max": [
+        -7.987010000000001,
+        1.11338,
+        -1.7073900000000002
+      ],
+      "flammability": 0.8,
+      "smoke_yield": 0.85,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 279,
+      "category": "plant",
+      "position": [
+        -10.85151,
+        0.6552,
+        -3.2406
+      ],
+      "aabb_min": [
+        -11.78351,
+        -0.08662,
+        -2.8974
+      ],
+      "aabb_max": [
+        -10.55951,
+        1.11338,
+        -2.1834
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 284,
+      "category": "plant",
+      "position": [
+        -7.72975,
+        0.66945,
+        -3.12466
+      ],
+      "aabb_min": [
+        -7.943350000000001,
+        -0.08662,
+        -3.1604
+      ],
+      "aabb_max": [
+        -6.56635,
+        1.11338,
+        -1.8854
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 318,
+      "category": "chair",
+      "position": [
+        -4.9469,
+        0.47657,
+        -2.11414
+      ],
+      "aabb_min": [
+        -5.27778,
+        -0.08662,
+        -3.4161099999999998
+      ],
+      "aabb_max": [
+        -3.69678,
+        1.11338,
+        -2.03911
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 319,
+      "category": "chair",
+      "position": [
+        -5.66609,
+        0.469,
+        -2.08724
+      ],
+      "aabb_min": [
+        -7.028372,
+        -0.08662,
+        -3.39558
+      ],
+      "aabb_max": [
+        -5.497808,
+        1.11338,
+        -1.9675799999999999
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 321,
+      "category": "plant",
+      "position": [
+        -5.44099,
+        1.00629,
+        -1.45422
+      ],
+      "aabb_min": [
+        -6.74198,
+        -0.08662,
+        -1.45826
+      ],
+      "aabb_max": [
+        -5.56898,
+        1.11338,
+        -0.13226000000000004
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 322,
+      "category": "plant",
+      "position": [
+        -5.2221,
+        0.98636,
+        -1.42289
+      ],
+      "aabb_min": [
+        -5.943200000000001,
+        -0.08662,
+        -1.19539
+      ],
+      "aabb_max": [
+        -4.6172,
+        1.11338,
+        0.07960999999999996
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 389,
+      "category": "toilet",
+      "position": [
+        -4.85591,
+        0.30209,
+        -4.01625
+      ],
+      "aabb_min": [
+        -6.03595,
+        -0.08662,
+        -4.7094000000000005
+      ],
+      "aabb_max": [
+        -4.607950000000001,
+        1.11338,
+        -4.0464
+      ],
+      "flammability": 0.05,
+      "smoke_yield": 0.05,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 445,
+      "category": "chair",
+      "position": [
+        -0.34665,
+        0.48269,
+        -2.54986
+      ],
+      "aabb_min": [
+        -1.8445709999999997,
+        -0.08662,
+        -3.71487
+      ],
+      "aabb_max": [
+        -0.5190089999999999,
+        1.11338,
+        -2.3888700000000003
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 446,
+      "category": "chair",
+      "position": [
+        0.25149,
+        0.48236,
+        -3.14736
+      ],
+      "aabb_min": [
+        -1.168839,
+        -0.08662,
+        -3.9373299999999998
+      ],
+      "aabb_max": [
+        -0.302181,
+        1.11338,
+        -2.86633
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 447,
+      "category": "chair",
+      "position": [
+        0.96682,
+        0.69399,
+        -3.28199
+      ],
+      "aabb_min": [
+        -0.45951,
+        -0.08662,
+        -3.89525
+      ],
+      "aabb_max": [
+        0.14048999999999998,
+        1.11338,
+        -3.2952500000000002
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 448,
+      "category": "chair",
+      "position": [
+        0.35849,
+        0.48435,
+        -1.98906
+      ],
+      "aabb_min": [
+        -1.23651,
+        -0.08662,
+        -2.7679
+      ],
+      "aabb_max": [
+        -0.6365099999999999,
+        1.11338,
+        -2.1679000000000004
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 455,
+      "category": "plant",
+      "position": [
+        0.72988,
+        1.15738,
+        -4.05528
+      ],
+      "aabb_min": [
+        -0.43593,
+        -0.08662,
+        -3.95245
+      ],
+      "aabb_max": [
+        0.16407,
+        1.11338,
+        -3.35245
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 456,
+      "category": "plant",
+      "position": [
+        1.22211,
+        1.18974,
+        -4.2729
+      ],
+      "aabb_min": [
+        -0.18651,
+        -0.08662,
+        -3.9629
+      ],
+      "aabb_max": [
+        0.41348999999999997,
+        1.11338,
+        -3.3629000000000002
+      ],
+      "flammability": 0.5,
+      "smoke_yield": 0.45,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 516,
+      "category": "bed",
+      "position": [
+        1.7875,
+        0.81575,
+        -7.53384
+      ],
+      "aabb_min": [
+        -0.212105,
+        -0.08662,
+        -7.022762
+      ],
+      "aabb_max": [
+        2.242285,
+        1.11338,
+        -5.236777999999999
+      ],
+      "flammability": 0.75,
+      "smoke_yield": 0.8,
+      "notes": "from objectgoal goals_by_category"
+    },
+    {
+      "object_id": 642,
+      "category": "chair",
+      "position": [
+        -3.17651,
+        3.40279,
+        0.0527
+      ],
+      "aabb_min": [
+        -4.27151,
+        3.0133799999999997,
+        -0.81321
+      ],
+      "aabb_max": [
+        -3.67151,
+        4.21338,
+        -0.15021000000000007
+      ],
+      "flammability": 0.55,
+      "smoke_yield": 0.5,
+      "notes": "from objectgoal goals_by_category"
+    }
+  ],
+  "semantic_summary": {
+    "per_region": {
+      "1": {
+        "ceiling": 1,
+        "wall": 4,
+        "door": 2,
+        "handle": 1,
+        "chandelier": 1,
+        "wardrobe": 2,
+        "tv": 1,
+        "cabinet": 2,
+        "blanket": 1,
+        "pad": 1,
+        "bed": 1,
+        "pillow": 2,
+        "nightstand": 2,
+        "book": 2,
+        "table lamp": 2,
+        "plush toy": 2,
+        "window": 2,
+        "window frame": 1,
+        "armchair": 1,
+        "floor": 1,
+        "door frame": 3
+      },
+      "2": {
+        "wall": 9,
+        "floor": 1,
+        "mat": 1,
+        "towel": 1,
+        "bucket": 1,
+        "cabinet": 1,
+        "tap": 1,
+        "hand soap": 1,
+        "door": 2,
+        "door frame": 5,
+        "toilet": 1,
+        "toilet brush": 1,
+        "lamp": 2,
+        "ceiling": 1,
+        "shower curtain": 1
+      },
+      "3": {
+        "ceiling": 1,
+        "wall": 12,
+        "curtain": 2,
+        "window frame": 8,
+        "window": 2,
+        "photo": 1,
+        "sheet": 4,
+        "frame": 8,
+        "door frame": 3,
+        "door": 2,
+        "toy": 10,
+        "board": 2,
+        "ventilation": 1,
+        "attic door": 1,
+        "chandelier": 2,
+        "light": 4,
+        "vent": 1,
+        "bicycle": 1,
+        "box": 6,
+        "unknown": 14,
+        "couch": 2,
+        "basket": 2,
+        "floor": 1,
+        "wardrobe": 2,
+        "magazine": 2,
+        "book": 1,
+        "stack of papers": 10,
+        "picture": 1,
+        "folder": 1,
+        "table": 3,
+        "chair": 4,
+        "handbag": 2,
+        "pc tower": 1,
+        "trashcan": 1,
+        "computer desk": 1,
+        "plush toy": 2,
+        "printer": 1,
+        "telephone": 1,
+        "desk lamp": 1,
+        "plant": 3,
+        "shirt": 1,
+        "bag": 1,
+        "blanket": 1,
+        "newspaper": 2,
+        "balustrade": 1
+      },
+      "4": {
+        "stairs": 32,
+        "wall": 5,
+        "picture": 7,
+        "door": 1,
+        "window curtain": 1,
+        "curtain rod": 3,
+        "speaker": 2,
+        "ceiling": 1,
+        "window": 2,
+        "window frame": 6,
+        "curtain": 4,
+        "led tv": 1,
+        "fireplace": 1,
+        "unknown": 10,
+        "flower": 4,
+        "chandelier": 1,
+        "armchair": 2,
+        "table": 3,
+        "decorative plate": 1,
+        "floor mat": 1,
+        "pillar": 1,
+        "fire alarm": 1,
+        "couch": 1,
+        "book": 1,
+        "lamp": 2,
+        "plate": 1,
+        "alarm control": 1,
+        "balustrade": 1,
+        "floor": 1
+      },
+      "5": {
+        "floor": 1,
+        "floor mat": 2,
+        "plate": 2,
+        "ceiling": 1,
+        "ceiling lamp": 3,
+        "light": 4,
+        "ceiling vent": 1,
+        "wall": 9,
+        "wall clock": 1,
+        "flag": 1,
+        "unknown": 6,
+        "chair": 2,
+        "flower": 2,
+        "refrigerator": 1,
+        "kitchen cabinet": 3,
+        "curtain": 1,
+        "window": 1,
+        "window frame": 1,
+        "kitchen appliance": 8,
+        "coffee machine": 2,
+        "coffee mug": 1,
+        "worktop": 1,
+        "sink": 1,
+        "tap": 1,
+        "knife holder": 1,
+        "microwave": 1,
+        "kitchen countertop item": 1,
+        "oven and stove": 1,
+        "door frame": 8,
+        "fruit bowl": 1,
+        "dishwasher": 1
+      },
+      "6": {
+        "floor": 2,
+        "wall": 4,
+        "door": 2,
+        "door frame": 4,
+        "ceiling": 1
+      },
+      "7": {
+        "floor": 1,
+        "wall": 4,
+        "picture": 2,
+        "towel": 3,
+        "handle": 1,
+        "ceiling": 1,
+        "ventilation": 1,
+        "bath sink": 1,
+        "tap": 1,
+        "unknown": 2,
+        "toilet paper": 2,
+        "toilet seat": 1,
+        "door": 1,
+        "door handle": 1,
+        "ceiling lamp": 1,
+        "hand soap": 1,
+        "bathroom shelf": 1
+      },
+      "8": {
+        "bathroom shelf": 1,
+        "wall": 10,
+        "door": 3,
+        "alarm": 2,
+        "picture": 1,
+        "floor": 1,
+        "doormat": 1,
+        "window curtain": 2,
+        "window": 1,
+        "window frame": 1,
+        "unknown": 1,
+        "ceiling": 2,
+        "ventilation hood": 1,
+        "ceiling lamp": 2
+      },
+      "9": {
+        "wall": 5,
+        "door frame": 3,
+        "curtain": 2,
+        "window": 2,
+        "window frame": 2,
+        "picture": 1,
+        "ceiling": 1,
+        "floor": 1,
+        "chair": 8,
+        "table": 1,
+        "cabinet": 1,
+        "flower": 3,
+        "pad": 2,
+        "ventilation hood": 1
+      },
+      "10": {
+        "ceiling": 1,
+        "chandelier": 1,
+        "wall": 6,
+        "curtain": 4,
+        "alarm": 1,
+        "curtain rod": 2,
+        "window": 2,
+        "window frame": 2,
+        "dresser": 1,
+        "casket": 1,
+        "unknown": 9,
+        "wall hanging decoration": 22,
+        "laundry basket": 2,
+        "led tv": 1,
+        "wardrobe": 1,
+        "electric box": 2,
+        "electrical controller": 1,
+        "bed": 2,
+        "pillow": 4,
+        "nightstand": 2,
+        "table lamp": 2,
+        "tissue box": 1,
+        "floor": 1,
+        "door": 1,
+        "door frame": 6,
+        "ventilation hood": 1
+      },
+      "11": {
+        "ceiling": 1,
+        "ceiling vent": 1,
+        "ventilation hood": 1,
+        "wall": 10,
+        "floor": 1,
+        "bath mat": 3,
+        "trashcan": 1,
+        "door": 2,
+        "shower dial": 1,
+        "tap": 3,
+        "bath": 1,
+        "towel": 2,
+        "unknown": 1,
+        "bathroom cabinet": 2,
+        "bathroom accessory": 3,
+        "mirror": 2,
+        "soap bottle": 1,
+        "mirror frame": 2,
+        "bath sink": 2,
+        "wall lamp": 4
+      },
+      "12": {
+        "ceiling": 1,
+        "wall": 6,
+        "floor": 1,
+        "shoe": 18,
+        "iron board": 1,
+        "iron": 1,
+        "clothes": 6,
+        "unknown": 3,
+        "pillow": 3,
+        "blanket": 1,
+        "clothes hanger rod": 2,
+        "case": 1,
+        "stack of papers": 1,
+        "storage box": 1,
+        "briefcase": 2,
+        "backpack": 1,
+        "boxes": 1,
+        "door": 1,
+        "door frame": 3,
+        "ceiling lamp": 1,
+        "ventilation hood": 1
+      },
+      "13": {
+        "floor": 1,
+        "unknown": 3,
+        "door": 1,
+        "wall": 4,
+        "ceiling": 1,
+        "picture": 1,
+        "towel": 1,
+        "kitchen shelf": 1,
+        "bathroom shelf": 1,
+        "toilet paper": 1,
+        "bottle of soap": 1
+      }
+    },
+    "global": {
+      "ceiling": 14,
+      "wall": 88,
+      "door": 18,
+      "handle": 2,
+      "chandelier": 5,
+      "wardrobe": 5,
+      "tv": 1,
+      "cabinet": 4,
+      "blanket": 3,
+      "pad": 3,
+      "bed": 3,
+      "pillow": 9,
+      "nightstand": 4,
+      "book": 4,
+      "table lamp": 4,
+      "plush toy": 4,
+      "window": 12,
+      "window frame": 21,
+      "armchair": 3,
+      "floor": 14,
+      "door frame": 35,
+      "mat": 1,
+      "towel": 7,
+      "bucket": 1,
+      "tap": 6,
+      "hand soap": 2,
+      "toilet": 1,
+      "toilet brush": 1,
+      "lamp": 4,
+      "shower curtain": 1,
+      "curtain": 13,
+      "photo": 1,
+      "sheet": 4,
+      "frame": 8,
+      "toy": 10,
+      "board": 2,
+      "ventilation": 2,
+      "attic door": 1,
+      "light": 8,
+      "vent": 1,
+      "bicycle": 1,
+      "box": 6,
+      "unknown": 49,
+      "couch": 3,
+      "basket": 2,
+      "magazine": 2,
+      "stack of papers": 11,
+      "picture": 13,
+      "folder": 1,
+      "table": 7,
+      "chair": 14,
+      "handbag": 2,
+      "pc tower": 1,
+      "trashcan": 2,
+      "computer desk": 1,
+      "printer": 1,
+      "telephone": 1,
+      "desk lamp": 1,
+      "plant": 3,
+      "shirt": 1,
+      "bag": 1,
+      "newspaper": 2,
+      "balustrade": 2,
+      "stairs": 32,
+      "window curtain": 3,
+      "curtain rod": 5,
+      "speaker": 2,
+      "led tv": 2,
+      "fireplace": 1,
+      "flower": 9,
+      "decorative plate": 1,
+      "floor mat": 3,
+      "pillar": 1,
+      "fire alarm": 1,
+      "plate": 3,
+      "alarm control": 1,
+      "ceiling lamp": 7,
+      "ceiling vent": 2,
+      "wall clock": 1,
+      "flag": 1,
+      "refrigerator": 1,
+      "kitchen cabinet": 3,
+      "kitchen appliance": 8,
+      "coffee machine": 2,
+      "coffee mug": 1,
+      "worktop": 1,
+      "sink": 1,
+      "knife holder": 1,
+      "microwave": 1,
+      "kitchen countertop item": 1,
+      "oven and stove": 1,
+      "fruit bowl": 1,
+      "dishwasher": 1,
+      "bath sink": 3,
+      "toilet paper": 3,
+      "toilet seat": 1,
+      "door handle": 1,
+      "bathroom shelf": 3,
+      "alarm": 3,
+      "doormat": 1,
+      "ventilation hood": 5,
+      "dresser": 1,
+      "casket": 1,
+      "wall hanging decoration": 22,
+      "laundry basket": 2,
+      "electric box": 2,
+      "electrical controller": 1,
+      "tissue box": 1,
+      "bath mat": 3,
+      "shower dial": 1,
+      "bath": 1,
+      "bathroom cabinet": 2,
+      "bathroom accessory": 3,
+      "mirror": 2,
+      "soap bottle": 1,
+      "mirror frame": 2,
+      "wall lamp": 4,
+      "shoe": 18,
+      "iron board": 1,
+      "iron": 1,
+      "clothes": 6,
+      "clothes hanger rod": 2,
+      "case": 1,
+      "storage box": 1,
+      "briefcase": 2,
+      "backpack": 1,
+      "boxes": 1,
+      "kitchen shelf": 1,
+      "bottle of soap": 1
+    },
+    "n_instances": 660
+  }
+}
