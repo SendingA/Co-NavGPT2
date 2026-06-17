@@ -78,9 +78,12 @@ def draw_object_footprints(
     floor_band_m: float,
     origin_xz: Tuple[float, float],
     voxel_xz: float,
+    skip_structural: bool = True,
 ) -> None:
     H, W = img.shape[:2]
     for obj in objects:
+        if skip_structural and bool(obj.get("structural", False)):
+            continue
         bb_min = np.asarray(obj["aabb_min"])
         bb_max = np.asarray(obj["aabb_max"])
         # Drop objects whose vertical centre is far from the active floor.
@@ -102,11 +105,53 @@ def draw_object_footprints(
         if x1 <= x0 or y1 <= y0:
             continue
         color = category_color(obj["category"])
-        # Translucent fill.
         sub = img[y0:y1, x0:x1].copy()
         cv2.rectangle(img, (x0, y0), (x1, y1), color, thickness=-1)
         cv2.addWeighted(img[y0:y1, x0:x1], 0.35, sub, 0.65, 0, dst=img[y0:y1, x0:x1])
         cv2.rectangle(img, (x0, y0), (x1, y1), color, thickness=1)
+
+
+def draw_walls(
+    img: np.ndarray,
+    walls_voxel: np.ndarray,
+    voxel_world_origin: Tuple[float, float, float],
+    voxel_m: float,
+    floor_y_idx: int,
+    band_cells: int,
+    image_origin_xz: Tuple[float, float],
+    px_per_m: float,
+) -> None:
+    """Draw wall slabs at the active floor by collapsing the vertical band
+    into a 2D mask, then overlaying a dark grey footprint."""
+    Nx, Ny, Nz = walls_voxel.shape
+    y0 = max(0, floor_y_idx - band_cells)
+    y1 = min(Ny, floor_y_idx + band_cells + 1)
+    band = walls_voxel[:, y0:y1, :]
+    wall_xz = band.any(axis=1).astype(np.uint8) * 255  # (Nx, Nz)
+
+    H, W = img.shape[:2]
+    grid_w = int(round(Nx * voxel_m * px_per_m))
+    grid_h = int(round(Nz * voxel_m * px_per_m))
+    if grid_w <= 0 or grid_h <= 0:
+        return
+    wall_img = cv2.resize(wall_xz.T, (grid_w, grid_h), interpolation=cv2.INTER_NEAREST)
+    wall_img = np.flipud(wall_img)
+
+    dx = int(round((voxel_world_origin[0] - image_origin_xz[0]) * px_per_m))
+    dz = int(round((voxel_world_origin[2] - image_origin_xz[1]) * px_per_m))
+    x0 = dx
+    y0 = H - dz - grid_h
+    x1 = x0 + grid_w
+    y1 = y0 + grid_h
+    sx0 = max(0, -x0); sy0 = max(0, -y0)
+    dx0 = max(0, x0); dy0 = max(0, y0)
+    dx1 = min(W, x1); dy1 = min(H, y1)
+    if dx1 <= dx0 or dy1 <= dy0:
+        return
+    fw = dx1 - dx0; fh = dy1 - dy0
+    mask = wall_img[sy0:sy0 + fh, sx0:sx0 + fw] > 0
+    sub = img[dy0:dy1, dx0:dx1]
+    sub[mask] = (60, 60, 60)  # dark grey walls
 
 
 def project_top_down(
@@ -273,8 +318,38 @@ def render_topdown_video(
 
     # Floor-plan background (constant across frames).
     floor_plan = np.full((img_h, img_w, 3), 245, dtype=np.uint8)
-    draw_object_footprints(floor_plan, inventory["objects"], floor_y, floor_band_m,
-                           image_origin_xz, voxel_xz_image)
+    # Walls (if available) form the strongest visual anchor for the floor
+    # plan; draw them first so object footprints and overlays read above.
+    walls_path = (inventory.get("structural") or {}).get("wall_voxel_path")
+    if walls_path:
+        try:
+            walls_vox = np.load(walls_path)
+            struct_origin = (inventory["structural"].get("origin")
+                             or list(grid_origin))
+            struct_voxel = float(inventory["structural"].get("voxel_m", voxel_m))
+            wall_floor_y_idx = int(round((floor_y - struct_origin[1]) / struct_voxel))
+            wall_band = max(1, int(round(floor_band_m / struct_voxel)))
+            draw_walls(
+                floor_plan, walls_vox,
+                voxel_world_origin=tuple(struct_origin),
+                voxel_m=struct_voxel,
+                floor_y_idx=int(np.clip(wall_floor_y_idx, 0, walls_vox.shape[1] - 1)),
+                band_cells=wall_band,
+                image_origin_xz=image_origin_xz,
+                px_per_m=px_per_m,
+            )
+        except Exception as e:
+            print(f"[topdown_video] failed to draw walls from {walls_path}: {e}")
+
+    # Object footprints: prefer schema-v2 ``instances`` (everything
+    # inventory tracks), fall back to legacy ``objects``. Structural
+    # items are rendered via draw_walls already, so we skip them here.
+    items_for_footprints = (
+        inventory.get("instances") or inventory.get("objects", [])
+    )
+    draw_object_footprints(floor_plan, items_for_footprints, floor_y, floor_band_m,
+                           image_origin_xz, voxel_xz_image,
+                           skip_structural=True)
 
     # Video writer.
     out_mp4 = out_dir / f"{out_basename}.mp4"

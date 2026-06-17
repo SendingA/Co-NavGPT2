@@ -1,350 +1,297 @@
-"""Build a deterministic ``inventory.json`` for a Habitat HM3D scene.
+"""Build a deterministic ``inventory.json`` (schema v2) for an HM3D scene.
 
-The inventory is the **single source of truth** for downstream stages
-(planner, propagation). It is intentionally small and human-readable so
-it can live in the repo as a fixture and be reviewed in a PR diff.
+This rewrite of the scan stage uses the per-vertex colour information in
+``*.semantic.glb`` (decoded with the sRGB OETF, see
+``utils/fire_world/hm3d_semantic.py``) to recover **every** instance, not
+just the 5-6 goal categories that the v1 scan harvested from
+ObjectGoal-NAV.
 
-Why not parse ``*.semantic.glb``?
-    HM3D v0.2 ships per-instance vertex colours but does not ship the
-    ``.scn`` descriptor that Habitat needs to populate
-    ``sim.semantic_scene.objects``, and the colour <-> instance ID
-    mapping in the GLB does not match ``*.semantic.txt`` directly. Going
-    through that path is brittle and slow (60s+ per scene with trimesh).
+Output schema v2:
 
-What we use instead - all small, all already present in the repo:
-  1. The ObjectGoal dataset shard ``data/datasets/.../{scene}.json.gz``
-     gives us, for every goal-category object in the scene:
-        - ``position`` (world XYZ),
-        - ``object_id`` (the HM3D instance id we keep as primary key),
-        - ``object_category`` (chair / bed / sofa / toilet / tv_monitor),
-        - ``view_points`` (used to derive a tight 2D footprint).
-  2. The Habitat ``*.semantic.txt`` table gives us the full per-instance
-     category histogram for the scene, even for non-goal objects, so the
-     downstream LLM planner can ground its prompt with what is actually
-     in the building (kitchens, bathrooms, etc.).
-  3. The ``*.basis.navmesh`` (loaded via habitat_sim) gives us the floor
-     polygon from which we derive a per-floor world AABB and a 2D
-     occupancy mask later used by the propagation engine.
+    {
+      "schema_version": 2,
+      "scene_id": "TEEsavR23oF",
+      "scene_dir": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF",
+      "scene_glb": "...basis.glb",
+      "objectgoal_shard": "data/datasets/.../{scene}.json.gz" | null,
+      "world_aabb": [xmin, ymin, zmin, xmax, ymax, zmax],
+      "world_aabb_source": "semantic_glb" | "object_union" | "navmesh",
+      "voxel_m": 0.10,
+      "floors": [{"id": int, "y": float, "y_min": float, "y_max": float}, ...],
+      "instances": [
+        {"instance_id", "category", "color_hex", "region_id",
+         "aabb_min", "aabb_max", "centroid",
+         "n_vertices", "n_faces",
+         "structural": bool, "is_goal": bool, "goal_object_id": int|null,
+         "flammability", "smoke_yield",
+         "floor_id": int|null}
+      ],
+      "structural": {
+        "wall_voxel_path":     "scenes/{id}/structural/walls.npy",
+        "floor_voxel_path":    "scenes/{id}/structural/floors.npy",
+        "ceiling_voxel_path":  "scenes/{id}/structural/ceilings.npy",
+        "voxel_m": 0.10,
+        "origin": [x, y, z]
+      },
+      "semantic_summary": { ... per-region histograms ... }
+    }
 
-The output schema is documented at the top of ``write_inventory``.
+Rationale:
+    - ``instances`` is the world model used everywhere downstream (planner,
+      voxel propagation, top-down rendering).
+    - ``structural`` carries pre-rasterised obstacle masks for walls,
+      floors, ceilings; the propagation engine uses them for zero-flux
+      boundary conditions and ceiling jets.
+    - The legacy ``objects`` field is kept as a *backward-compat* alias
+      pointing to the goal-flagged instances so older planners (template
+      v1) keep running. New code should read ``instances`` instead.
 """
 from __future__ import annotations
 
+import argparse
 import dataclasses
 import gzip
 import json
-import os
 import re
 from collections import Counter, defaultdict
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 
-
-# ---------------------------------------------------------------------------
-# Lightweight schema (kept as plain dicts for forward-compat / JSON I/O).
-# ---------------------------------------------------------------------------
-@dataclasses.dataclass
-class GoalObject:
-    object_id: int
-    category: str
-    position: Tuple[float, float, float]
-    aabb_min: Tuple[float, float, float]
-    aabb_max: Tuple[float, float, float]
-    flammability: float
-    smoke_yield: float
-    notes: str = ""
-
-    def as_dict(self) -> Dict:
-        return {
-            "object_id": int(self.object_id),
-            "category": self.category,
-            "position": list(map(float, self.position)),
-            "aabb_min": list(map(float, self.aabb_min)),
-            "aabb_max": list(map(float, self.aabb_max)),
-            "flammability": float(self.flammability),
-            "smoke_yield": float(self.smoke_yield),
-            "notes": self.notes,
-        }
+from .hm3d_semantic import (
+    InstanceGeom,
+    aggregate_instances,
+    read_semantic_txt,
+)
 
 
 # ---------------------------------------------------------------------------
-# Material table (per-category flammability + smoke yield).
+# Material table - per-category fire properties.
 # ---------------------------------------------------------------------------
-# Numbers are dimensionless [0, 1]: flammability ~ relative ignition speed,
-# smoke_yield ~ relative dense smoke produced when burning. These are
-# intentionally rough; the LLM planner can override on a per-fire basis.
+# Numbers are dimensionless [0, 1]: flammability ~ relative ignition
+# speed, smoke_yield ~ relative dense smoke produced when burning.
 MATERIAL_TABLE: Dict[str, Tuple[float, float]] = {
-    # furniture (cloth / wood / foam dominated -> high)
+    # furniture (cloth / wood / foam)
     "bed":         (0.75, 0.80),
     "couch":       (0.80, 0.85),
     "sofa":        (0.80, 0.85),
+    "armchair":    (0.75, 0.75),
     "chair":       (0.55, 0.50),
-    # bathroom / utilities (porcelain / metal / water -> low)
-    "toilet":      (0.05, 0.05),
-    "bathtub":     (0.05, 0.05),
-    "sink":        (0.05, 0.05),
-    # appliances (mostly metal but with cabling / plastic)
-    "tv_monitor":  (0.40, 0.55),
-    "tv":          (0.40, 0.55),
-    "monitor":     (0.40, 0.55),
-    "stove":       (0.85, 0.70),  # source of grease fires
-    "refrigerator": (0.30, 0.40),
+    "stool":       (0.50, 0.45),
+    "ottoman":     (0.55, 0.55),
+    "wardrobe":    (0.60, 0.55),
+    "cabinet":     (0.55, 0.50),
+    "shelf":       (0.55, 0.45),
+    "bookshelf":   (0.70, 0.55),
+    "dresser":     (0.55, 0.50),
+    "nightstand":  (0.50, 0.40),
+    "desk":        (0.55, 0.45),
+    "table":       (0.55, 0.45),
+    "side table":  (0.55, 0.45),
+    "coffee table": (0.55, 0.45),
+    "drawer":      (0.55, 0.45),
+    # textiles
+    "curtain":     (0.85, 0.75),
+    "blanket":     (0.80, 0.60),
+    "pillow":      (0.80, 0.55),
+    "rug":         (0.65, 0.55),
+    "carpet":      (0.65, 0.55),
+    "towel":       (0.75, 0.55),
+    "clothes":     (0.75, 0.55),
+    "plush toy":   (0.70, 0.55),
+    # paper / books
+    "book":        (0.75, 0.50),
+    "stack of papers": (0.85, 0.55),
+    "magazine":    (0.85, 0.55),
     # plants
     "potted plant": (0.50, 0.45),
     "plant":        (0.50, 0.45),
-    # default fallback
+    # appliances / electronics
+    "tv":          (0.40, 0.55),
+    "tv_monitor":  (0.40, 0.55),
+    "monitor":     (0.40, 0.55),
+    "computer":    (0.50, 0.55),
+    "table lamp":  (0.40, 0.40),
+    "lamp":        (0.40, 0.40),
+    "chandelier":  (0.30, 0.30),
+    "stove":       (0.85, 0.70),
+    "ventilation hood": (0.20, 0.30),
+    "refrigerator": (0.30, 0.40),
+    # bathroom / utilities (porcelain / metal / water)
+    "toilet":      (0.05, 0.05),
+    "bathtub":     (0.05, 0.05),
+    "sink":        (0.05, 0.05),
+    "bottle of soap": (0.10, 0.10),
+    "toilet paper":   (0.85, 0.55),
+    # structural -> not flammable; tagged in STRUCTURAL_CATEGORIES below
     "_default":    (0.30, 0.30),
+}
+
+STRUCTURAL_CATEGORIES = {
+    "wall", "floor", "ceiling", "door", "door frame", "window",
+    "window frame", "stairs", "staircase", "balustrade", "handrail",
+    "handle", "column", "beam", "wall hanging decoration", "picture",
+    "moulding",
 }
 
 
 def lookup_material(category: str) -> Tuple[float, float]:
     cat = category.lower().strip()
+    if cat in STRUCTURAL_CATEGORIES:
+        return (0.0, 0.0)
     return MATERIAL_TABLE.get(cat, MATERIAL_TABLE["_default"])
 
 
 # ---------------------------------------------------------------------------
-# ObjectGoal dataset reader.
+# Floor clustering (1D k-means-lite on instance-y).
 # ---------------------------------------------------------------------------
-def _scene_short_id(scene_id_or_path: str) -> str:
-    """Normalise either ``00800-TEEsavR23oF`` or its glb path to short id."""
-    s = scene_id_or_path.split("/")[-1]
-    s = s.replace(".basis.glb", "").replace(".glb", "")
-    return s
+def cluster_floors(instances: List[InstanceGeom],
+                   y_gap_m: float = 1.5) -> List[Dict]:
+    """Group instances into floors by their y_min, then pick a stable
+    ``floor_y`` for each group as the median of the instance y_min values."""
+    if not instances:
+        return []
+    floor_inst = [i for i in instances if i.category.lower() == "floor"]
+    if floor_inst:
+        ys = sorted(i.aabb_min[1] for i in floor_inst)
+    else:
+        ys = sorted(i.aabb_min[1] for i in instances)
+    # Chain merge: clusters bounded by y_gap_m gaps.
+    clusters: List[List[float]] = []
+    for y in ys:
+        if not clusters or y - clusters[-1][-1] > y_gap_m:
+            clusters.append([y])
+        else:
+            clusters[-1].append(y)
+    floors: List[Dict] = []
+    for fi, cl in enumerate(clusters):
+        y_floor = float(np.median(cl))
+        floors.append({
+            "id": fi,
+            "y": float(y_floor),
+            "y_min": float(min(cl) - 0.10),
+            "y_max": float(min(cl) + 3.20),  # typical floor-to-ceiling
+        })
+    # The next-floor's y is also an upper bound for this floor.
+    for fi in range(len(floors) - 1):
+        floors[fi]["y_max"] = float(floors[fi + 1]["y"]) - 0.10
+    return floors
 
 
-def _find_dataset_shard(scene_short: str, splits: List[str], dataset_root: Path) -> Optional[Path]:
-    for split in splits:
-        cand = dataset_root / split / "content" / f"{scene_short}.json.gz"
+def assign_floor(inst: InstanceGeom, floors: List[Dict]) -> Optional[int]:
+    if not floors:
+        return None
+    cy = 0.5 * (inst.aabb_min[1] + inst.aabb_max[1])
+    best, best_d = None, float("inf")
+    for f in floors:
+        if f["y_min"] - 0.20 <= cy <= f["y_max"] + 0.20:
+            d = abs(cy - f["y"])
+            if d < best_d:
+                best, best_d = f["id"], d
+    if best is None:
+        # fall back to closest by y centre
+        for f in floors:
+            d = abs(cy - f["y"])
+            if d < best_d:
+                best, best_d = f["id"], d
+    return int(best) if best is not None else None
+
+
+# ---------------------------------------------------------------------------
+# ObjectGoal lookup (used to flag is_goal and reuse object_id).
+# ---------------------------------------------------------------------------
+def _scene_short(s: str) -> str:
+    s = s.split("/")[-1]
+    return s.replace(".basis.glb", "").replace(".glb", "")
+
+
+def _find_objectgoal_shard(scene_short: str, objectgoal_root: Path,
+                           splits: Iterable[str]) -> Optional[Path]:
+    for sp in splits:
+        cand = objectgoal_root / sp / "content" / f"{scene_short}.json.gz"
         if cand.exists():
             return cand
     return None
 
 
-def _read_objectgoal_shard(path: Path) -> Dict:
-    if path.suffix == ".gz":
-        return json.loads(gzip.open(path, "rt").read())
-    return json.loads(path.read_text())
-
-
-def _aabb_from_view_points(view_points: List[Dict]) -> Tuple[np.ndarray, np.ndarray]:
-    """Approximate an object AABB from the agent view-points around it.
-
-    The view-points sit on a circle around the object at agent height.
-    Radius ~ 1.0 m by HM3D convention (success_distance = 0.2 m + agent
-    radius). We collapse them to an XZ AABB; the Y span comes from the
-    object's height clamped between [floor, floor+2.5 m] which is enough
-    for 'is this voxel inside the object'.
-    """
-    if not view_points:
-        return np.zeros(3), np.zeros(3)
-    pts = np.array(
-        [vp["agent_state"]["position"] for vp in view_points], dtype=np.float64
-    )
-    # Tight 2D box: median +/- a fixed shrink so AABB sits inside the
-    # view-circle, i.e. closer to the object centroid than to its viewers.
-    xs, zs = pts[:, 0], pts[:, 2]
-    cx, cz = float(np.median(xs)), float(np.median(zs))
-    rx = max(0.3, 0.6 * (xs.max() - xs.min()) / 2)
-    rz = max(0.3, 0.6 * (zs.max() - zs.min()) / 2)
-    y_min = float(np.percentile(pts[:, 1], 5)) - 0.10
-    y_max = y_min + 1.20  # heuristic furniture height
-    return (
-        np.array([cx - rx, y_min, cz - rz]),
-        np.array([cx + rx, y_max, cz + rz]),
-    )
-
-
-def _harvest_goal_objects(
-    shard: Dict,
-    scene_short: str,
-) -> List[GoalObject]:
-    seen: Dict[int, GoalObject] = {}
-    for cat_key, goals in shard.get("goals_by_category", {}).items():
-        # cat_key like 'TEEsavR23oF.basis.glb_bed' -> trailing token is cat.
+def _read_objectgoal_ids(shard: Path) -> Dict[int, Dict]:
+    if shard.suffix == ".gz":
+        d = json.loads(gzip.open(shard, "rt").read())
+    else:
+        d = json.loads(shard.read_text())
+    out: Dict[int, Dict] = {}
+    for cat_key, goals in d.get("goals_by_category", {}).items():
         cat = cat_key.split("_", 1)[-1] if "_" in cat_key else cat_key
         for g in goals:
             oid = g.get("object_id")
-            if oid is None or oid in seen:
-                continue
-            pos = tuple(g.get("position", [0.0, 0.0, 0.0]))
-            aabb_min, aabb_max = _aabb_from_view_points(g.get("view_points", []))
-            if np.allclose(aabb_min, aabb_max):
-                # Fallback: tiny box around the position.
-                aabb_min = np.array(pos) - 0.30
-                aabb_max = np.array(pos) + 0.30
-            f, sy = lookup_material(cat)
-            seen[oid] = GoalObject(
-                object_id=int(oid),
-                category=str(cat),
-                position=pos,
-                aabb_min=tuple(aabb_min.tolist()),
-                aabb_max=tuple(aabb_max.tolist()),
-                flammability=f,
-                smoke_yield=sy,
-                notes="from objectgoal goals_by_category",
-            )
-    return sorted(seen.values(), key=lambda o: o.object_id)
+            if oid is not None:
+                out[int(oid)] = {
+                    "object_category": g.get("object_category", cat),
+                    "position": g.get("position"),
+                }
+    return out
 
 
 # ---------------------------------------------------------------------------
-# Semantic.txt category histogram (helps the LLM planner ground the scene).
+# Structural voxel rasterisation.
 # ---------------------------------------------------------------------------
-_TXT_LINE_RE = re.compile(r"^(\d+),([0-9A-Fa-f]{6}),\"([^\"]+)\",(\d+)$")
-
-
-def _read_semantic_categories(semantic_txt: Path) -> Dict:
-    if not semantic_txt.exists():
-        return {"per_region": {}, "global": {}, "n_instances": 0}
-    per_region: Dict[str, Counter] = defaultdict(Counter)
-    global_counter: Counter = Counter()
-    n = 0
-    for line in semantic_txt.read_text().splitlines():
-        m = _TXT_LINE_RE.match(line.strip())
-        if not m:
+def rasterise_structural_voxels(
+    instances: List[InstanceGeom],
+    world_aabb: List[float],
+    voxel_m: float,
+) -> Dict[str, np.ndarray]:
+    """Stamp wall / floor / ceiling instance AABBs into 3D voxel masks."""
+    amin = np.array(world_aabb[:3], dtype=np.float64)
+    amax = np.array(world_aabb[3:], dtype=np.float64)
+    extent = np.maximum(amax - amin, voxel_m)
+    Nx, Ny, Nz = (np.ceil(extent / voxel_m).astype(int))
+    walls = np.zeros((Nx, Ny, Nz), dtype=bool)
+    floors = np.zeros_like(walls)
+    ceilings = np.zeros_like(walls)
+    for inst in instances:
+        cat = inst.category.lower()
+        i0 = np.maximum(np.floor((inst.aabb_min - amin) / voxel_m).astype(int), 0)
+        i1 = np.minimum(np.ceil((inst.aabb_max - amin) / voxel_m).astype(int),
+                        np.array([Nx, Ny, Nz]))
+        if np.any(i1 <= i0):
             continue
-        n += 1
-        _id, _hex, cat, region = m.groups()
-        global_counter[cat.lower()] += 1
-        per_region[str(region)][cat.lower()] += 1
+        sl = (slice(i0[0], i1[0]), slice(i0[1], i1[1]), slice(i0[2], i1[2]))
+        if cat in {"wall", "door", "door frame", "window", "window frame",
+                   "balustrade", "handrail", "moulding", "column", "beam"}:
+            walls[sl] = True
+        elif cat in {"floor", "stairs", "staircase"}:
+            floors[sl] = True
+        elif cat == "ceiling":
+            ceilings[sl] = True
     return {
-        "per_region": {r: dict(c) for r, c in per_region.items()},
-        "global": dict(global_counter),
-        "n_instances": n,
+        "walls": walls,
+        "floors": floors,
+        "ceilings": ceilings,
+        "shape": (int(Nx), int(Ny), int(Nz)),
+        "origin": amin.tolist(),
+        "voxel_m": float(voxel_m),
     }
 
 
 # ---------------------------------------------------------------------------
-# Navmesh footprint -> 2D occupancy + world AABB.
-# ---------------------------------------------------------------------------
-def _navmesh_footprint(
-    navmesh_path: Path,
-    scene_glb: Path,
-    scene_dataset_cfg: Path,
-    voxel_xy: float = 0.10,
-    use_sim: bool = False,
-) -> Optional[Dict]:
-    """Build a 2D walkable footprint from a Habitat navmesh.
-
-    Two paths:
-        - default (``use_sim=False``): try ``habitat_sim.PathFinder`` standalone.
-          Fast (no rendering) but HM3D v0.2 navmeshes sometimes refuse to
-          load this way; we silently fall back to "no footprint".
-        - ``use_sim=True``: spin up a full ``habitat_sim.Simulator`` so its
-          pathfinder is guaranteed to be populated. This is **slow on WSL**
-          (cold EGL+CUDA context can take 60-120 s) and is opt-in.
-
-    Returns:
-      dict with keys aabb_min / aabb_max / origin_xz / voxel_xy / shape /
-      floors_y / walkable_mask (numpy uint8 HxW; 1 = walkable),
-      or None if neither path worked.
-    """
-    if not navmesh_path.exists():
-        print(f"[scene_scan] navmesh not found: {navmesh_path}")
-        return None
-
-    samples: Optional[np.ndarray] = None
-    bb: Optional[Tuple[Tuple[float, float, float], Tuple[float, float, float]]] = None
-    try:
-        import habitat_sim  # type: ignore
-    except Exception as e:  # pragma: no cover - habitat optional
-        print(f"[scene_scan] habitat_sim not importable ({e}); skipping footprint")
-        return None
-
-    if not use_sim:
-        pn = habitat_sim.PathFinder()
-        pn.load_nav_mesh(str(navmesh_path))
-        if pn.is_loaded:
-            bb = pn.get_bounds()
-            samples = _sample_navmesh(pn)
-        else:
-            print(f"[scene_scan] standalone navmesh load failed: {navmesh_path}; "
-                  "rerun with --use_sim to use the full simulator path")
-            return None
-    else:
-        sim_cfg = habitat_sim.SimulatorConfiguration()
-        sim_cfg.scene_id = str(scene_glb)
-        sim_cfg.scene_dataset_config_file = str(scene_dataset_cfg)
-        sim_cfg.gpu_device_id = 0
-        ac = habitat_sim.agent.AgentConfiguration()
-        cfg = habitat_sim.Configuration(sim_cfg, [ac])
-        sim = habitat_sim.Simulator(cfg)
-        try:
-            pn = sim.pathfinder
-            if not pn.is_loaded:
-                print(f"[scene_scan] sim navmesh not loaded; aborting footprint")
-                return None
-            bb = pn.get_bounds()
-            samples = _sample_navmesh(pn)
-        finally:
-            sim.close()
-
-    if samples is None or bb is None:
-        return None
-
-    aabb_min = np.array(bb[0], dtype=np.float64)
-    aabb_max = np.array(bb[1], dtype=np.float64)
-
-    # Floors: cluster Y coords with a 1D histogram.
-    ys = samples[:, 1]
-    hist, edges = np.histogram(ys, bins=64)
-    floors: List[float] = []
-    threshold = max(50, hist.max() // 10)
-    for i, c in enumerate(hist):
-        if c >= threshold:
-            floors.append(float(0.5 * (edges[i] + edges[i + 1])))
-    merged: List[float] = []
-    for f in sorted(set(round(f, 2) for f in floors)):
-        if not merged or abs(f - merged[-1]) > 0.5:
-            merged.append(f)
-    floors = merged
-
-    nx = max(1, int(np.ceil((aabb_max[0] - aabb_min[0]) / voxel_xy)))
-    nz = max(1, int(np.ceil((aabb_max[2] - aabb_min[2]) / voxel_xy)))
-    walkable = np.zeros((nx, nz), dtype=np.uint8)
-    ix = np.clip(((samples[:, 0] - aabb_min[0]) / voxel_xy).astype(int), 0, nx - 1)
-    iz = np.clip(((samples[:, 2] - aabb_min[2]) / voxel_xy).astype(int), 0, nz - 1)
-    walkable[ix, iz] = 1
-
-    return {
-        "aabb_min": aabb_min.tolist(),
-        "aabb_max": aabb_max.tolist(),
-        "origin_xz": [float(aabb_min[0]), float(aabb_min[2])],
-        "voxel_xy": float(voxel_xy),
-        "shape": [int(nx), int(nz)],
-        "floors_y": floors,
-        "walkable_mask": walkable,
-    }
-
-
-def _sample_navmesh(pn, n_samples: int = 50000) -> np.ndarray:
-    samples: List[List[float]] = []
-    for _ in range(n_samples):
-        p = pn.get_random_navigable_point()
-        if not np.isfinite(p).all():
-            continue
-        samples.append(list(p))
-    if not samples:
-        return np.zeros((0, 3))
-    return np.asarray(samples, dtype=np.float64)
-
-
-# ---------------------------------------------------------------------------
-# Public entry point.
+# Public API
 # ---------------------------------------------------------------------------
 def build_inventory(
     scene_id: str,
     scene_dataset_root: Path = Path("data/scene_datasets/hm3d_v0.2"),
     objectgoal_root: Path = Path("data/datasets/objectnav_hm3d_v2"),
     splits: Tuple[str, ...] = ("val_mini", "val", "train"),
-    voxel_xy: float = 0.10,
-    use_sim: bool = False,
-    scene_dataset_cfg: Optional[Path] = None,
-) -> Dict:
-    """Scan a single scene and return its inventory dict (no I/O)."""
-    scene_short = _scene_short_id(scene_id)
+    voxel_m: float = 0.10,
+    progress: bool = False,
+) -> Tuple[Dict, Dict[str, np.ndarray]]:
+    """Return ``(inventory_dict, structural_voxels_dict)``.
 
+    The dict is JSON-serialisable; the voxel dict is kept separate so
+    callers can decide whether to persist the (potentially large)
+    boolean masks to .npy files alongside the JSON.
+    """
+    scene_short = _scene_short(scene_id)
     candidates = list(scene_dataset_root.rglob(f"{scene_short}.basis.glb"))
     if not candidates:
         raise FileNotFoundError(
@@ -352,128 +299,200 @@ def build_inventory(
         )
     scene_dir = candidates[0].parent
     scene_glb = scene_dir / f"{scene_short}.basis.glb"
+    semantic_glb = scene_dir / f"{scene_short}.semantic.glb"
     semantic_txt = scene_dir / f"{scene_short}.semantic.txt"
-    navmesh = scene_dir / f"{scene_short}.basis.navmesh"
 
-    if scene_dataset_cfg is None:
-        scene_dataset_cfg = scene_dataset_root / "hm3d_annotated_basis.scene_dataset_config.json"
+    # 1) ObjectGoal lookup (optional)
+    shard = _find_objectgoal_shard(scene_short, objectgoal_root, splits)
+    goal_by_id: Dict[int, Dict] = _read_objectgoal_ids(shard) if shard else {}
 
-    shard_path = _find_dataset_shard(scene_short, list(splits), objectgoal_root)
-    goal_objects: List[GoalObject] = []
-    if shard_path is not None:
-        shard = _read_objectgoal_shard(shard_path)
-        goal_objects = _harvest_goal_objects(shard, scene_short)
-
-    semantic_summary = _read_semantic_categories(semantic_txt)
-    footprint = _navmesh_footprint(
-        navmesh,
-        scene_glb=scene_glb,
-        scene_dataset_cfg=scene_dataset_cfg,
-        voxel_xy=voxel_xy,
-        use_sim=use_sim,
+    # 2) Per-instance geometry from semantic.glb
+    if not semantic_glb.exists():
+        raise FileNotFoundError(f"missing {semantic_glb}")
+    if not semantic_txt.exists():
+        raise FileNotFoundError(f"missing {semantic_txt}")
+    instances, agg_summary = aggregate_instances(
+        semantic_glb, semantic_txt, progress=progress
     )
 
-    # If the navmesh path failed, derive a coarse world_aabb from the goal
-    # objects so the rest of the pipeline still has a bounding box to work
-    # with. This is intentionally a *loose* fallback: 1 m padding around the
-    # union of object AABBs.
-    if footprint is None and goal_objects:
-        all_min = np.min([np.array(o.aabb_min) for o in goal_objects], axis=0)
-        all_max = np.max([np.array(o.aabb_max) for o in goal_objects], axis=0)
-        all_min -= 1.0
-        all_max += 1.0
+    # 3) World AABB from the union of all instances
+    if instances:
+        all_min = np.min([i.aabb_min for i in instances], axis=0) - 0.50
+        all_max = np.max([i.aabb_max for i in instances], axis=0) + 0.50
         world_aabb = all_min.tolist() + all_max.tolist()
-    elif footprint is not None:
-        world_aabb = footprint["aabb_min"] + footprint["aabb_max"]
+        world_aabb_source = "semantic_glb"
     else:
         world_aabb = None
+        world_aabb_source = "unknown"
 
-    inventory = {
-        "schema_version": 1,
+    # 4) Floor clustering
+    floors = cluster_floors(instances)
+
+    # 5) Build per-instance dicts
+    instance_dicts: List[Dict] = []
+    for inst in instances:
+        cat = inst.category.lower()
+        is_struct = cat in STRUCTURAL_CATEGORIES
+        flammability, smoke_yield = lookup_material(cat)
+        floor_id = assign_floor(inst, floors)
+        d = inst.as_dict()
+        d.update({
+            "structural": bool(is_struct),
+            "is_goal": int(inst.instance_id) in goal_by_id,
+            "goal_object_id": (
+                int(inst.instance_id) if int(inst.instance_id) in goal_by_id else None
+            ),
+            "flammability": float(flammability),
+            "smoke_yield": float(smoke_yield),
+            "floor_id": int(floor_id) if floor_id is not None else None,
+        })
+        instance_dicts.append(d)
+
+    # 6) Structural voxel masks
+    structural_voxels = (
+        rasterise_structural_voxels(instances, world_aabb, voxel_m)
+        if world_aabb is not None else
+        {"walls": None, "floors": None, "ceilings": None,
+         "shape": None, "origin": None, "voxel_m": voxel_m}
+    )
+
+    # 7) Semantic summary (region histograms) - kept for the LLM planner
+    by_hex, rows = read_semantic_txt(semantic_txt)
+    per_region: Dict[str, Counter] = defaultdict(Counter)
+    global_counter: Counter = Counter()
+    for r in rows:
+        per_region[str(r.region_id)][r.category.lower()] += 1
+        global_counter[r.category.lower()] += 1
+
+    # 8) Backward-compat 'objects' alias = goal-flagged instances only
+    legacy_objects: List[Dict] = []
+    for d in instance_dicts:
+        if not d["is_goal"]:
+            continue
+        if d["structural"]:
+            continue
+        legacy_objects.append({
+            "object_id": d["instance_id"],
+            "category": d["category"],
+            "position": (
+                goal_by_id[d["instance_id"]]["position"]
+                if d["instance_id"] in goal_by_id else d["centroid"]
+            ),
+            "aabb_min": d["aabb_min"],
+            "aabb_max": d["aabb_max"],
+            "flammability": d["flammability"],
+            "smoke_yield": d["smoke_yield"],
+            "notes": "auto from semantic_glb (v2)",
+        })
+
+    inventory: Dict = {
+        "schema_version": 2,
         "scene_id": scene_short,
         "scene_dir": str(scene_dir),
         "scene_glb": str(scene_glb),
-        "objectgoal_shard": str(shard_path) if shard_path else None,
+        "semantic_glb": str(semantic_glb),
+        "semantic_txt": str(semantic_txt),
+        "objectgoal_shard": str(shard) if shard else None,
         "world_aabb": world_aabb,
-        "world_aabb_source": (
-            "navmesh" if footprint is not None else
-            "object_union" if goal_objects else "unknown"
-        ),
-        "footprint": (
-            {k: v for k, v in footprint.items() if k != "walkable_mask"}
-            if footprint
-            else None
-        ),
-        "objects": [o.as_dict() for o in goal_objects],
-        "semantic_summary": semantic_summary,
-        "_walkable_mask_in_memory": footprint.get("walkable_mask")
-        if footprint is not None
-        else None,
+        "world_aabb_source": world_aabb_source,
+        "voxel_m": float(voxel_m),
+        "floors": floors,
+        "instances": instance_dicts,
+        "objects": legacy_objects,
+        "structural": {
+            "voxel_m": float(voxel_m),
+            "shape": list(structural_voxels["shape"]) if structural_voxels["shape"] else None,
+            "origin": structural_voxels["origin"],
+            # Paths are filled in by write_inventory once we know out_dir.
+            "wall_voxel_path": None,
+            "floor_voxel_path": None,
+            "ceiling_voxel_path": None,
+        },
+        "semantic_summary": {
+            "n_instances": int(len(rows)),
+            "global": dict(global_counter),
+            "per_region": {r: dict(c) for r, c in per_region.items()},
+        },
+        "build_summary": {
+            **agg_summary,
+            "n_floors": len(floors),
+            "n_structural_instances": int(sum(1 for d in instance_dicts if d["structural"])),
+            "n_flammable_instances": int(sum(
+                1 for d in instance_dicts
+                if (not d["structural"]) and d["flammability"] >= 0.30
+            )),
+        },
     }
-    return inventory
+    return inventory, structural_voxels
 
 
 def write_inventory(
     scene_id: str,
     out_root: Path = Path("scenes"),
+    save_structural_voxels: bool = True,
     **kwargs,
 ) -> Path:
-    """Build and persist an inventory.json (+ optional walkable mask)."""
-    inv = build_inventory(scene_id, **kwargs)
-    scene_short = inv["scene_id"]
-    out_dir = out_root / scene_short
+    inv, voxels = build_inventory(scene_id, **kwargs)
+    out_dir = out_root / inv["scene_id"]
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    walkable = inv.pop("_walkable_mask_in_memory", None)
-    if walkable is not None and inv["footprint"] is not None:
-        mask_path = out_dir / "walkable_mask.npy"
-        np.save(mask_path, walkable)
-        inv["footprint"]["walkable_mask_path"] = str(mask_path)
+    if save_structural_voxels and voxels.get("shape"):
+        struct_dir = out_dir / "structural"
+        struct_dir.mkdir(exist_ok=True)
+        np.save(struct_dir / "walls.npy", voxels["walls"])
+        np.save(struct_dir / "floors.npy", voxels["floors"])
+        np.save(struct_dir / "ceilings.npy", voxels["ceilings"])
+        inv["structural"]["wall_voxel_path"] = str(struct_dir / "walls.npy")
+        inv["structural"]["floor_voxel_path"] = str(struct_dir / "floors.npy")
+        inv["structural"]["ceiling_voxel_path"] = str(struct_dir / "ceilings.npy")
 
     out_path = out_dir / "inventory.json"
     out_path.write_text(json.dumps(inv, indent=2))
     return out_path
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 def _cli() -> int:
-    import argparse
-    parser = argparse.ArgumentParser(
-        description="Build inventory.json for a Habitat HM3D scene."
+    p = argparse.ArgumentParser(
+        description="Build an inventory.json (schema v2) for an HM3D scene."
     )
-    parser.add_argument("--scene", required=True,
-                        help="scene short id, e.g. 00800-TEEsavR23oF or "
-                             "TEEsavR23oF (the prefix is auto-resolved).")
-    parser.add_argument("--scene_dataset_root", default="data/scene_datasets/hm3d_v0.2")
-    parser.add_argument("--objectgoal_root", default="data/datasets/objectnav_hm3d_v2")
-    parser.add_argument("--out_root", default="scenes")
-    parser.add_argument("--voxel_xy", type=float, default=0.10)
-    parser.add_argument("--use_sim", action="store_true",
-                        help="spin up a habitat_sim.Simulator to extract the "
-                             "navmesh footprint. Slow on WSL; off by default.")
-    args = parser.parse_args()
+    p.add_argument("--scene", required=True)
+    p.add_argument("--scene_dataset_root", default="data/scene_datasets/hm3d_v0.2")
+    p.add_argument("--objectgoal_root", default="data/datasets/objectnav_hm3d_v2")
+    p.add_argument("--out_root", default="scenes")
+    p.add_argument("--voxel_m", type=float, default=0.10)
+    p.add_argument("--no_structural_voxels", action="store_true")
+    p.add_argument("--quiet", action="store_true")
+    args = p.parse_args()
 
     out = write_inventory(
         scene_id=args.scene,
         out_root=Path(args.out_root),
         scene_dataset_root=Path(args.scene_dataset_root),
         objectgoal_root=Path(args.objectgoal_root),
-        voxel_xy=args.voxel_xy,
-        use_sim=args.use_sim,
+        voxel_m=args.voxel_m,
+        progress=not args.quiet,
+        save_structural_voxels=not args.no_structural_voxels,
     )
     inv = json.loads(out.read_text())
-    n_obj = len(inv["objects"])
-    n_cat = len(inv["semantic_summary"].get("global", {}))
-    print(f"[scene_scan] {inv['scene_id']}: "
-          f"{n_obj} goal objects, {n_cat} semantic categories")
+    bs = inv["build_summary"]
+    print(f"[scene_scan v2] {inv['scene_id']}: "
+          f"{bs['n_instances_recovered']}/{bs['n_instances_in_txt']} instances "
+          f"({bs['n_structural_instances']} structural, "
+          f"{bs['n_flammable_instances']} flammable), "
+          f"{bs['n_floors']} floor(s)")
     if inv["world_aabb"]:
         bb = inv["world_aabb"]
-        print(f"  world aabb: min={[round(x,2) for x in bb[:3]]} "
-              f"max={[round(x,2) for x in bb[3:]]} "
-              f"(extent {[round(bb[i+3]-bb[i],2) for i in range(3)]})")
-    if inv["footprint"]:
-        print(f"  navmesh: shape={inv['footprint']['shape']} "
-              f"floors_y={inv['footprint']['floors_y']}")
-    print(f"[scene_scan] wrote {out}")
+        ext = [round(bb[i + 3] - bb[i], 2) for i in range(3)]
+        print(f"  world aabb: min={[round(x, 2) for x in bb[:3]]} "
+              f"max={[round(x, 2) for x in bb[3:]]} extent={ext}")
+    if inv["floors"]:
+        print(f"  floors: " + ", ".join(
+            f"#{f['id']} y={f['y']:.2f}m" for f in inv["floors"]
+        ))
+    print(f"[scene_scan v2] wrote {out}")
     return 0
 
 

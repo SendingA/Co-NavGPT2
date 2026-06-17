@@ -172,20 +172,27 @@ class FirePropagation:
         w = self.world
         v = w.voxel
 
+        # Solid (impermeable to heat/smoke). Wall + ceiling block the
+        # plume from leaking through; floor blocks downward leakage.
+        solid: Optional[np.ndarray] = None
+        for m in (w.walls, w.ceilings, w.floors):
+            if m is not None:
+                solid = m if solid is None else (solid | m)
+
         # 1) Heat diffusion (sub-stepped to respect CFL: alpha*dt/v^2 <= 0.16).
         max_diff_dt = 0.16 * v * v / max(self.alpha, 1e-6)
         n_sub = max(1, int(np.ceil(dt / max_diff_dt)))
         sub_dt = dt / n_sub
         coeff = self.alpha * sub_dt / max(v * v, 1e-6)
         for _ in range(n_sub):
-            w.temp = w.temp + coeff * _laplacian_3d(w.temp)
-        # Hard clip to keep fp32 sane no matter what.
+            lap = _laplacian_3d(w.temp)
+            w.temp = w.temp + coeff * lap
+            if solid is not None:
+                w.temp[solid] = self.ambient
         np.clip(w.temp, -50.0, 1500.0, out=w.temp)
 
         # 2) Vertical buoyancy: hot temp + smoke drift upward.
-        # Convert m/s to cell-fractions per dt.
         frac_b = float(np.clip(self.buoy * dt / v, 0.0, 0.95))
-        # Apply only where temp is above ambient (cold air doesn't rise).
         hot_mask = w.temp > self.ambient + 5.0
         if frac_b > 0.0 and hot_mask.any():
             t_excess = (w.temp - self.ambient) * hot_mask
@@ -193,38 +200,38 @@ class FirePropagation:
             shifted[:, 1:, :] += frac_b * t_excess[:, :-1, :]
             shifted[:, 0, :] += frac_b * t_excess[:, 0, :]
             w.temp = self.ambient + shifted
-            # Smoke buoyancy: only inside the hot-air column do we lift
-            # smoke; this avoids continuously pumping cold-region smoke
-            # straight to the ceiling and losing it.
+            if solid is not None:
+                w.temp[solid] = self.ambient
+
             smoke_hot = w.smoke * hot_mask.astype(np.float32)
             smoke_cold = w.smoke - smoke_hot
             shifted_s = _shift_up_y(smoke_hot, frac_b)
             w.smoke = np.clip(smoke_cold + shifted_s, 0.0, 1.0)
+            if solid is not None:
+                w.smoke[solid] = 0.0
 
-        # 3) Ceiling jet (only if the buoyancy reached the ceiling layer).
-        # Apply twice per step so the plume actually spreads sideways at
-        # roughly the configured speed even after the box-blur saturates.
+        # 3) Ceiling jet (under the actual ceiling surface if available).
         frac_cj = float(np.clip(self.cj * dt / v, 0.0, 0.95))
         if frac_cj > 0.0:
             for _ in range(2):
                 _ceiling_jet(w.temp, self.ceiling_y, frac_cj)
                 _ceiling_jet(w.smoke, self.ceiling_y, frac_cj)
+            if solid is not None:
+                w.temp[solid] = self.ambient
+                w.smoke[solid] = 0.0
 
         # 4) Reaction.
         ignitable = (w.fuel > self.flammable_threshold) & (w.temp > self.t_ignite)
         if ignitable.any():
             burn_rate = self.k_burn * dt * w.fuel * ignitable
-            burn_rate = np.minimum(burn_rate, 0.25)  # cap per step
+            burn_rate = np.minimum(burn_rate, 0.25)
             w.flame = np.clip(w.flame + burn_rate, 0.0, 1.0)
             w.fuel = np.clip(w.fuel - burn_rate, 0.0, 1.0)
-            # Cap heat injection per step so we don't blow past 1500 C.
             heat = np.minimum(self.q_release_c * burn_rate, 200.0)
             w.temp = np.clip(w.temp + heat, -50.0, 1500.0)
             w.smoke = np.clip(w.smoke + 0.5 * burn_rate, 0.0, 1.0)
 
-        # Surface flame spread along the fuel field (gives a non-zero
-        # propagation speed along furniture even before adjacent voxels
-        # cross the ignition threshold).
+        # Surface flame spread along the fuel field.
         if self.spread > 0.0:
             kernel_frac = float(np.clip(self.spread * dt / v, 0.0, 0.30))
             if kernel_frac > 0.0:
@@ -233,6 +240,8 @@ class FirePropagation:
                     w.flame + kernel_frac * lap * (w.fuel > 0).astype(np.float32),
                     0.0, 1.0,
                 )
+                if solid is not None:
+                    w.flame[solid] = 0.0
 
         # 5) Decay.
         decay = 0.05 * dt
@@ -292,7 +301,18 @@ def run_propagation(
 
     world = VoxelWorld.from_aabb(plan["world_aabb"], voxel=voxel_m,
                                  ambient_c=float(rules.get("ambient_temp_c", 25.0)))
-    world.stamp_object_aabbs(inventory["objects"])
+    # Prefer schema v2 'instances' (full inventory); fall back to legacy
+    # 'objects' so older plan/inventory pairs keep working.
+    items = inventory.get("instances") or inventory.get("objects", [])
+    world.stamp_object_aabbs(items)
+    # Attach structural masks if the inventory points to them. Walls and
+    # ceilings then act as zero-flux barriers in propagation.step().
+    struct = inventory.get("structural") or {}
+    world.attach_structural_masks(
+        wall_path=struct.get("wall_voxel_path"),
+        floor_path=struct.get("floor_voxel_path"),
+        ceiling_path=struct.get("ceiling_voxel_path"),
+    )
 
     sim = FirePropagation(world, rules, seed=seed)
 

@@ -28,6 +28,10 @@ class VoxelWorld:
       flame:  ``(Nx, Ny, Nz)`` float32, [0, 1].
       smoke:  ``(Nx, Ny, Nz)`` float32, [0, 1].
       ambient_c: scalar background temperature (deg C).
+      walls:    ``(Nx, Ny, Nz)`` bool, structural barriers (impermeable
+                to heat/smoke). When None, treated as all-False.
+      floors:   ``(Nx, Ny, Nz)`` bool, walkable floor voxels.
+      ceilings: ``(Nx, Ny, Nz)`` bool, ceiling voxels (cap on plumes).
     """
 
     origin: np.ndarray
@@ -39,6 +43,9 @@ class VoxelWorld:
     smoke: np.ndarray
     ambient_c: float = 25.0
     object_id_field: Optional[np.ndarray] = None  # (Nx,Ny,Nz) int32, -1 = none
+    walls: Optional[np.ndarray] = None
+    floors: Optional[np.ndarray] = None
+    ceilings: Optional[np.ndarray] = None
 
     @classmethod
     def from_aabb(
@@ -65,6 +72,39 @@ class VoxelWorld:
         )
 
     # ------------------------------------------------------------------
+    # Structural masks
+    # ------------------------------------------------------------------
+    def attach_structural_masks(
+        self,
+        wall_path: Optional[str] = None,
+        floor_path: Optional[str] = None,
+        ceiling_path: Optional[str] = None,
+    ) -> None:
+        """Load wall/floor/ceiling boolean masks and resize to current
+        voxel grid shape via nearest-neighbour. Mismatched grid spacing
+        between scan-time and run-time is tolerated.
+        """
+        def _load_and_fit(path: Optional[str]) -> Optional[np.ndarray]:
+            if not path:
+                return None
+            try:
+                arr = np.load(path)
+            except Exception as e:
+                print(f"[voxel_world] failed to load {path}: {e}")
+                return None
+            if arr.shape == self.shape:
+                return arr.astype(bool)
+            # Nearest-neighbour resample to self.shape (cheap; rarely run).
+            ix = np.linspace(0, arr.shape[0] - 1, self.shape[0]).astype(int)
+            iy = np.linspace(0, arr.shape[1] - 1, self.shape[1]).astype(int)
+            iz = np.linspace(0, arr.shape[2] - 1, self.shape[2]).astype(int)
+            return arr[ix[:, None, None], iy[None, :, None], iz[None, None, :]].astype(bool)
+
+        self.walls = _load_and_fit(wall_path)
+        self.floors = _load_and_fit(floor_path)
+        self.ceilings = _load_and_fit(ceiling_path)
+
+    # ------------------------------------------------------------------
     # World <-> grid
     # ------------------------------------------------------------------
     def world_to_grid(self, p: np.ndarray) -> np.ndarray:
@@ -77,10 +117,21 @@ class VoxelWorld:
     # Field initialisers
     # ------------------------------------------------------------------
     def stamp_object_aabbs(self, objects: List[Dict]) -> None:
-        """Bake fuel + object id from a list of inventory objects."""
+        """Bake fuel + object id from a list of inventory entries.
+
+        Accepts either:
+          - schema v1 ``objects`` items (with ``object_id``), OR
+          - schema v2 ``instances`` items (with ``instance_id`` and a
+            ``structural`` flag we honour to skip walls/floors/etc.).
+
+        Walls and structural items contribute nothing to the fuel field;
+        their geometry is consumed via ``attach_structural_masks``.
+        """
         if self.object_id_field is None:
             self.object_id_field = np.full(self.shape, -1, dtype=np.int32)
         for obj in objects:
+            if bool(obj.get("structural", False)):
+                continue
             f = float(obj.get("flammability", 0.0))
             if f <= 0.0:
                 continue
@@ -96,7 +147,8 @@ class VoxelWorld:
                 slice(int(i0[2]), int(i1[2]) + 1),
             )
             self.fuel[sl] = np.maximum(self.fuel[sl], f)
-            self.object_id_field[sl] = int(obj["object_id"])
+            obj_id = int(obj.get("object_id", obj.get("instance_id", -1)))
+            self.object_id_field[sl] = obj_id
 
     def kindle_ignition(self, position: np.ndarray, radius_m: float,
                         temp_c: float, smoke_yield: float = 0.5) -> Tuple[Tuple[slice, slice, slice], np.ndarray]:

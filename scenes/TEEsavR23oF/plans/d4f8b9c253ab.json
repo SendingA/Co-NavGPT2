@@ -4,12 +4,12 @@
   "scene_id": "TEEsavR23oF",
   "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb",
   "world_aabb": [
-    -12.78351,
-    -1.08662,
-    -8.77924,
-    3.242285,
-    5.21338,
-    1.35931
+    -12.947001457214355,
+    -0.7366210073232651,
+    -9.556449890136719,
+    4.6296257972717285,
+    6.369441032409668,
+    1.6548290252685547
   ],
   "fire_type": "kitchen_grease_fire",
   "intensity": "medium",
@@ -18,32 +18,32 @@
   "duration_s": 600.0,
   "ignitions": [
     {
-      "object_id": 10,
-      "category": "tv_monitor",
+      "object_id": 639,
+      "category": "ventilation hood",
       "position": [
-        -0.15094,
-        4.30008,
-        -4.8529
+        -5.7214837074279785,
+        2.7331812381744385,
+        -6.4162278175354
       ],
       "ignite_time_s": 0.0,
-      "source_radius_m": 0.594,
+      "source_radius_m": 0.285,
       "source_temp_c": 761.8,
-      "fuel_kg": 4.6,
-      "smoke_yield": 0.55
+      "fuel_kg": 3.8,
+      "smoke_yield": 0.3
     },
     {
-      "object_id": 30,
-      "category": "chair",
+      "object_id": 616,
+      "category": "clothes",
       "position": [
-        1.44466,
-        3.56965,
-        -5.65514
+        -5.808019161224365,
+        1.7760449647903442,
+        -7.977800369262695
       ],
       "ignite_time_s": 49.23798065494423,
-      "source_radius_m": 0.403,
+      "source_radius_m": 0.41,
       "source_temp_c": 778.5,
-      "fuel_kg": 5.2,
-      "smoke_yield": 0.5
+      "fuel_kg": 6.0,
+      "smoke_yield": 0.55
     }
   ],
   "propagation_rules": {

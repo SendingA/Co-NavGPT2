@@ -15,6 +15,7 @@ outputs/
 *.mp4
 *.pdf
 *.npz
+*.npy
 *.zip
 =*
 

@@ -65,6 +65,42 @@ def _filter_by_category(objects: List[Dict], cats: List[str]) -> List[Dict]:
     return [o for o in objects if o["category"].lower() in cats]
 
 
+def _inventory_pool(inv: Dict) -> List[Dict]:
+    """Return the per-object pool used by templates.
+
+    Schema v2 carries an ``instances`` list with every recovered HM3D
+    instance (628+ entries on a typical scene); each entry has the same
+    keys ``aabb_min/aabb_max/category/flammability/structural`` we rely
+    on. Schema v1 only has ``objects``. We dedupe by id and drop
+    structural items (walls, floors, ceilings) so they can never be
+    picked as ignition sources.
+    """
+    items = inv.get("instances")
+    if not items:
+        items = inv.get("objects", [])
+    out: List[Dict] = []
+    seen = set()
+    for it in items:
+        if bool(it.get("structural", False)):
+            continue
+        oid = it.get("object_id", it.get("instance_id"))
+        if oid is None or oid in seen:
+            continue
+        seen.add(oid)
+        # Normalise to the shape templates expect.
+        norm = {
+            "object_id": int(oid),
+            "category": it["category"],
+            "position": it.get("position", it.get("centroid")),
+            "aabb_min": it["aabb_min"],
+            "aabb_max": it["aabb_max"],
+            "flammability": float(it.get("flammability", 0.0)),
+            "smoke_yield": float(it.get("smoke_yield", 0.4)),
+        }
+        out.append(norm)
+    return out
+
+
 def _pick_primary(
     objects: List[Dict],
     rng: np.random.Generator,
@@ -173,13 +209,12 @@ def _default_propagation_rules(intensity: str) -> Dict:
 # ---------------------------------------------------------------------------
 def _template_kitchen_grease_fire(inv: Dict, rng: np.random.Generator,
                                   preset: IntensityPreset) -> List[Dict]:
-    objs = inv["objects"]
-    # HM3D goals don't include stove; prefer plant/tv_monitor/chair as a
-    # rough stand-in for "warm appliance area" then propagate to nearby
-    # flammables. We keep the scenario semantically labelled regardless.
+    objs = _inventory_pool(inv)
+    # v2 inventory finally exposes `stove`; older v1 fixtures only have
+    # goal categories so we keep TV / chair / plant as stand-ins.
     primary = _pick_primary(objs, rng,
-                            preferred_cats=["stove", "tv_monitor"],
-                            fallback_cats=["chair", "plant", "sofa"])
+                            preferred_cats=["stove", "ventilation hood"],
+                            fallback_cats=["tv_monitor", "chair", "plant", "sofa"])
     if primary is None:
         return []
     n_extra = rng.integers(preset.n_ignitions_min - 1,
@@ -194,10 +229,10 @@ def _template_kitchen_grease_fire(inv: Dict, rng: np.random.Generator,
 
 def _template_bedroom_textile(inv: Dict, rng: np.random.Generator,
                               preset: IntensityPreset) -> List[Dict]:
-    objs = inv["objects"]
+    objs = _inventory_pool(inv)
     primary = _pick_primary(objs, rng,
-                            preferred_cats=["bed", "sofa"],
-                            fallback_cats=["chair", "plant"])
+                            preferred_cats=["bed", "sofa", "couch"],
+                            fallback_cats=["chair", "armchair", "plant"])
     if primary is None:
         return []
     n_extra = rng.integers(preset.n_ignitions_min - 1,
@@ -212,10 +247,10 @@ def _template_bedroom_textile(inv: Dict, rng: np.random.Generator,
 
 def _template_living_room_electric(inv: Dict, rng: np.random.Generator,
                                    preset: IntensityPreset) -> List[Dict]:
-    objs = inv["objects"]
+    objs = _inventory_pool(inv)
     primary = _pick_primary(objs, rng,
-                            preferred_cats=["tv_monitor", "tv", "monitor"],
-                            fallback_cats=["sofa", "chair"])
+                            preferred_cats=["tv_monitor", "tv", "monitor", "computer"],
+                            fallback_cats=["sofa", "couch", "armchair", "chair"])
     if primary is None:
         return []
     n_extra = rng.integers(preset.n_ignitions_min - 1,
@@ -231,7 +266,7 @@ def _template_living_room_electric(inv: Dict, rng: np.random.Generator,
 def _template_multi_origin(inv: Dict, rng: np.random.Generator,
                            preset: IntensityPreset) -> List[Dict]:
     """Multiple ignitions on the *same floor* (stress test)."""
-    candidates = [o for o in inv["objects"] if o.get("flammability", 0) >= 0.4]
+    candidates = [o for o in _inventory_pool(inv) if o.get("flammability", 0) >= 0.4]
     if len(candidates) < 2:
         return []
     # Cluster by Y so we keep all picks on a single floor.
