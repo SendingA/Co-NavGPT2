@@ -146,6 +146,85 @@ def _sample_voxels(
     return sampled * valid
 
 
+def _sample_voxels_trilinear(
+    field_xyz: np.ndarray,
+    points_world: np.ndarray,
+    origin: np.ndarray,
+    voxel_m: float,
+) -> np.ndarray:
+    """Trilinear sample of ``field_xyz`` at world ``points_world``.
+
+    Removes the blocky aliasing of nearest-neighbour sampling so flame
+    and smoke voxels appear as smooth volumetric blobs in screen space.
+    Outside-of-grid samples return 0 (Neumann fade-out).
+    """
+    Nx, Ny, Nz = field_xyz.shape
+    coord = (points_world - origin) / voxel_m - 0.5  # cell-centre alignment
+    i0 = np.floor(coord).astype(np.int32)
+    f = (coord - i0).astype(np.float32)              # fractional offsets
+    i1 = i0 + 1
+    # Clip indices and zero-out contributions for out-of-grid samples.
+    valid = (
+        (coord[..., 0] >= -0.5) & (coord[..., 0] <= Nx - 0.5)
+        & (coord[..., 1] >= -0.5) & (coord[..., 1] <= Ny - 0.5)
+        & (coord[..., 2] >= -0.5) & (coord[..., 2] <= Nz - 0.5)
+    )
+    i0[..., 0] = np.clip(i0[..., 0], 0, Nx - 1)
+    i0[..., 1] = np.clip(i0[..., 1], 0, Ny - 1)
+    i0[..., 2] = np.clip(i0[..., 2], 0, Nz - 1)
+    i1[..., 0] = np.clip(i1[..., 0], 0, Nx - 1)
+    i1[..., 1] = np.clip(i1[..., 1], 0, Ny - 1)
+    i1[..., 2] = np.clip(i1[..., 2], 0, Nz - 1)
+
+    # 8-corner gather.
+    c000 = field_xyz[i0[..., 0], i0[..., 1], i0[..., 2]]
+    c100 = field_xyz[i1[..., 0], i0[..., 1], i0[..., 2]]
+    c010 = field_xyz[i0[..., 0], i1[..., 1], i0[..., 2]]
+    c110 = field_xyz[i1[..., 0], i1[..., 1], i0[..., 2]]
+    c001 = field_xyz[i0[..., 0], i0[..., 1], i1[..., 2]]
+    c101 = field_xyz[i1[..., 0], i0[..., 1], i1[..., 2]]
+    c011 = field_xyz[i0[..., 0], i1[..., 1], i1[..., 2]]
+    c111 = field_xyz[i1[..., 0], i1[..., 1], i1[..., 2]]
+
+    fx, fy, fz = f[..., 0], f[..., 1], f[..., 2]
+    c00 = c000 * (1.0 - fx) + c100 * fx
+    c01 = c001 * (1.0 - fx) + c101 * fx
+    c10 = c010 * (1.0 - fx) + c110 * fx
+    c11 = c011 * (1.0 - fx) + c111 * fx
+    c0 = c00 * (1.0 - fy) + c10 * fy
+    c1 = c01 * (1.0 - fy) + c11 * fy
+    out = c0 * (1.0 - fz) + c1 * fz
+    return out.astype(np.float32) * valid.astype(np.float32)
+
+
+# ---------------------------------------------------------------------------
+# Flame colour LUT (black -> dark red -> orange -> yellow -> near white)
+# ---------------------------------------------------------------------------
+# RGB stops in [0,1]; the renderer interpolates linearly on the sampled
+# flame intensity to get the per-voxel emission colour. This is what gives
+# the flame its volumetric look: hot core voxels glow yellow-white, mid
+# intensity voxels are saturated orange, cool tongue tips fade through
+# deep red into a smoky brown before vanishing.
+_FLAME_LUT_X = np.array([0.00, 0.10, 0.30, 0.55, 0.80, 1.00], dtype=np.float32)
+_FLAME_LUT_RGB = np.array([
+    [0.05, 0.00, 0.00],   # almost black (very faint embers)
+    [0.40, 0.05, 0.02],   # dark red
+    [0.95, 0.30, 0.05],   # deep orange
+    [1.00, 0.60, 0.10],   # orange
+    [1.00, 0.85, 0.30],   # yellow
+    [1.00, 0.97, 0.78],   # near white core
+], dtype=np.float32)
+
+
+def _flame_lut(intensity: np.ndarray) -> np.ndarray:
+    """Map (..., ) flame intensity in [0, 1] to (..., 3) RGB in [0, 1]."""
+    x = np.clip(intensity, 0.0, 1.0)
+    out = np.empty(x.shape + (3,), dtype=np.float32)
+    for ch in range(3):
+        out[..., ch] = np.interp(x, _FLAME_LUT_X, _FLAME_LUT_RGB[:, ch])
+    return out
+
+
 @dataclass
 class FireWorldRenderer:
     """Composite RGB / Thermal observations from the live FireWorld."""
@@ -154,12 +233,13 @@ class FireWorldRenderer:
     camera_K: object
     max_depth_m: float = 5.0
     n_steps: int = 16              # ray-march samples per pixel
-    smoke_k_ext: float = 1.5       # extinction coefficient (per metre, scaled)
+    smoke_k_ext: float = 1.5       # smoke extinction coefficient (per metre)
     smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
-    flame_threshold: float = 0.25
-    flame_color_lo_rgb: Tuple[int, int, int] = (210, 90, 20)    # deep orange
-    flame_color_hi_rgb: Tuple[int, int, int] = (255, 220, 130)  # bright yellow
-    flame_glow_ksize: int = 31
+    flame_threshold: float = 0.20  # below this voxels emit nothing
+    flame_emission_gain: float = 4.0  # multiplier on per-voxel flame contribution
+    flame_k_ext: float = 0.8       # extinction added by flames themselves
+    flame_glow_ksize: int = 41     # Gaussian halo around the flame core
+    flame_glow_gain: float = 0.55
     thermal_color_blend: float = 0.0   # 0=grayscale, 1=full INFERNO
 
     # ------------------------------------------------------------------
@@ -171,99 +251,132 @@ class FireWorldRenderer:
         R_cam2world: np.ndarray,
         t_sim: float,
     ) -> Dict[str, np.ndarray]:
+        """Volumetric front-to-back composite of flame + smoke onto rgb_clean.
+
+        Per-step emission-absorption integration::
+
+            sigma_i  = smoke_k_ext * smoke_i  +  flame_k_ext * flame_i
+            T_i      = exp(-sigma_i * step_m)               # transmittance of step i
+            emission_i = flame_color_lut(flame_i) * gain * flame_i * step_m
+            scatter_i  = smoke_color * smoke_i * step_m * smoke_k_ext
+
+            color_acc += T_acc * (emission_i + scatter_i)
+            T_acc     *= T_i
+
+        At the end the remaining ``T_acc`` weights the original scene
+        colour (rgb_clean), so distant geometry is dimmed by the
+        accumulated optical depth, exactly like a real foreground plume
+        eating the background's contrast.
+        """
         if depth_m.ndim == 3:
             depth_m = depth_m[..., 0]
         depth_m = np.clip(depth_m.astype(np.float32), 0.0, self.max_depth_m)
 
-        flame, smoke, temp = self.fw.query(t_sim)
+        flame_field, smoke_field, temp_field = self.fw.query(t_sim)
 
         start, end = _build_pixel_rays(
             depth_m, self.camera_K, cam_pos_world.astype(np.float32),
             R_cam2world.astype(np.float32),
         )
         H, W = depth_m.shape
-        ts = np.linspace(0.0, 1.0, self.n_steps, dtype=np.float32)
-        rays = (
-            (1.0 - ts[:, None, None, None]) * start[None]
-            + ts[:, None, None, None] * end[None]
-        )
 
-        smoke_samples = _sample_voxels(smoke, rays, self.fw.origin, self.fw.voxel_m)  # (N, H, W)
-        flame_samples = _sample_voxels(flame, rays, self.fw.origin, self.fw.voxel_m)
-        temp_along = _sample_voxels(temp, rays, self.fw.origin, self.fw.voxel_m)
+        # Sample positions along each ray. We use n_steps + 1 break-points
+        # so each "step" corresponds to one segment with a finite length.
+        N = max(2, int(self.n_steps))
+        ts = np.linspace(0.0, 1.0, N, dtype=np.float32)
+        chord = np.linalg.norm(end - start, axis=-1).astype(np.float32)  # (H, W)
+        step_m = chord / float(N - 1)                                    # (H, W)
 
-        chord = np.linalg.norm(end - start, axis=-1)  # (H, W)
-        step_m = chord / max(self.n_steps - 1, 1)     # (H, W)
+        smoke_color = (
+            np.array(self.smoke_color_rgb, dtype=np.float32) / 255.0
+        ).reshape(1, 1, 3)
 
-        # Optical-depth integration along the ray. We accumulate from the
-        # camera (t=0) outward; the front-to-back transmittance at sample
-        # i is exp(-cumsum(tau_i)).
-        tau_per_step = smoke_samples * step_m[None, ...] * float(self.smoke_k_ext)
-        tau_cum = np.cumsum(tau_per_step, axis=0)        # (N, H, W)
-        T_per_step = np.exp(-tau_cum).astype(np.float32) # transmittance up to step i
-        T_final = T_per_step[-1]                         # (H, W) end-to-end T
+        # Accumulators.
+        color_acc = np.zeros((H, W, 3), dtype=np.float32)
+        T_acc = np.ones((H, W), dtype=np.float32)
+        flame_seen = np.zeros((H, W), dtype=np.float32)
+        temp_max = np.full((H, W), float(self.fw.ambient_c), dtype=np.float32)
 
-        # Flame visibility: per-step flame intensity weighted by the
-        # transmittance from the camera to that step. The first hot
-        # voxel's contribution dominates because everything behind it
-        # gets attenuated by smoke in front.
-        flame_visible = (flame_samples * T_per_step).max(axis=0).astype(np.float32)
+        for i, t in enumerate(ts):
+            pts = (1.0 - t) * start + t * end                        # (H, W, 3)
+            sm = _sample_voxels_trilinear(
+                smoke_field, pts, self.fw.origin, self.fw.voxel_m,
+            )
+            fl = _sample_voxels_trilinear(
+                flame_field, pts, self.fw.origin, self.fw.voxel_m,
+            )
+            te = _sample_voxels_trilinear(
+                temp_field, pts, self.fw.origin, self.fw.voxel_m,
+            )
 
-        # Thermal: hottest temperature seen along the ray (smoke is
-        # transparent in IR, so we don't apply transmittance here).
-        temp_max = temp_along.max(axis=0).astype(np.float32)
+            # Threshold flame so faint diffusion noise doesn't pre-light
+            # the whole frustum. A soft ramp ([thr, 1.5*thr]) keeps the
+            # boundary smooth instead of clipping to a binary mask.
+            t_lo = float(self.flame_threshold)
+            t_hi = max(t_lo * 1.5, t_lo + 0.05)
+            fl_used = np.clip((fl - t_lo) / max(t_hi - t_lo, 1e-3), 0.0, 1.0) * fl
 
-        out_rgb = self._composite_rgb(rgb_clean, T_final, flame_visible)
-        thermal_image, thermal_temp = self._compose_thermal(
-            rgb_clean, temp_max, flame_visible
-        )
+            # Per-voxel optical depth and transmittance for this step.
+            sigma = self.smoke_k_ext * sm + self.flame_k_ext * fl_used
+            tau_step = sigma * step_m
+            T_step = np.exp(-tau_step).astype(np.float32)
 
-        return {
-            "image": out_rgb,
-            "transmittance": T_final,
-            "flame_mask": (flame_visible > self.flame_threshold).astype(np.float32),
-            "thermal_image": thermal_image,
-            "thermal_temperature": thermal_temp,
-        }
+            # Emission: flame self-luminance + smoke in-scatter from ambient.
+            flame_rgb = _flame_lut(fl_used)                          # (H, W, 3) in [0, 1]
+            emission = (
+                flame_rgb * (fl_used * self.flame_emission_gain)[..., None]
+                * step_m[..., None]
+            )
+            scatter = (
+                smoke_color * (sm * self.smoke_k_ext)[..., None]
+                * step_m[..., None]
+            )
 
-    # ------------------------------------------------------------------
-    def _composite_rgb(
-        self,
-        rgb_clean: np.ndarray,
-        T: np.ndarray,
-        flame_along: np.ndarray,
-    ) -> np.ndarray:
-        smoke_col = np.array(self.smoke_color_rgb, dtype=np.float32).reshape(1, 1, 3)
-        T_3 = T[..., None]
-        out = rgb_clean.astype(np.float32) * T_3 + smoke_col * (1.0 - T_3)
+            color_acc = color_acc + T_acc[..., None] * (emission + scatter)
+            T_acc = T_acc * T_step
 
-        if flame_along.max() > 1e-6:
-            flame_alpha = np.clip(flame_along, 0.0, 1.0)
-            # Soft glow halo via Gaussian blur on the flame mask.
+            flame_seen = np.maximum(flame_seen, fl_used)
+            temp_max = np.maximum(temp_max, te)
+
+        # Final composite: the remaining transmittance multiplies the
+        # clean scene RGB; the accumulated colour adds on top.
+        scene = rgb_clean.astype(np.float32) / 255.0
+        out = scene * T_acc[..., None] + color_acc
+        out_u8 = np.clip(out * 255.0, 0, 255).astype(np.uint8)
+
+        # Optional soft glow halo around the flame: it's mostly a
+        # cosmetic touch but matches real video where flame edges leak
+        # warm light into nearby smoke.
+        if self.flame_glow_gain > 0.0 and flame_seen.max() > 1e-3:
             try:
                 import cv2
                 k = max(3, int(self.flame_glow_ksize) | 1)
-                glow = cv2.GaussianBlur(flame_alpha, (k, k), 0)
+                glow = cv2.GaussianBlur(flame_seen, (k, k), 0)
                 m = float(glow.max())
                 if m > 1e-6:
                     glow = glow / m
+                glow = np.clip(glow * float(self.flame_glow_gain), 0.0, 1.0)
+                halo_col = np.array([1.00, 0.55, 0.10], dtype=np.float32) * 255.0
+                halo = halo_col.reshape(1, 1, 3) * glow[..., None]
+                out_u8 = np.clip(
+                    out_u8.astype(np.float32) * (1.0 - 0.35 * glow[..., None])
+                    + 0.35 * halo,
+                    0, 255,
+                ).astype(np.uint8)
             except Exception:
-                glow = flame_alpha
-            lo = np.array(self.flame_color_lo_rgb, dtype=np.float32)
-            hi = np.array(self.flame_color_hi_rgb, dtype=np.float32)
-            flame_col = (
-                (1.0 - flame_alpha[..., None]) * lo
-                + flame_alpha[..., None] * hi
-            )
-            # Direct flame pixels: replace with hot colour. Halo: blend.
-            out = (
-                (1.0 - flame_alpha[..., None]) * out
-                + flame_alpha[..., None] * flame_col
-            )
-            halo_w = (glow * 0.4)[..., None]
-            out = out * (1.0 - halo_w) + lo * halo_w
+                pass
 
-        return np.clip(out, 0, 255).astype(np.uint8)
+        thermal_image, thermal_temp = self._compose_thermal(
+            rgb_clean, temp_max, flame_seen
+        )
+
+        return {
+            "image": out_u8,
+            "transmittance": T_acc,
+            "flame_mask": (flame_seen > self.flame_threshold).astype(np.float32),
+            "thermal_image": thermal_image,
+            "thermal_temperature": thermal_temp,
+        }
 
     # ------------------------------------------------------------------
     def _compose_thermal(
