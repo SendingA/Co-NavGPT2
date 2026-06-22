@@ -38,7 +38,11 @@ sys.path.insert(0, str(ROOT))
 from habitat import Env  # noqa: E402
 from habitat.config.default import get_config  # noqa: E402
 
-from utils.fire_world.controller import FireWorldController  # noqa: E402
+from utils.fire_world.scene import FireScene  # noqa: E402
+from utils.fire_pipeline import step_fire_observation  # noqa: E402
+from utils.fire_sensors import FireSensorConfig, FireSensorSuite  # noqa: E402
+from utils.fire_sensors.config import VoxelSmokeConfig  # noqa: E402
+from utils.general_utils import get_camera_K  # noqa: E402
 
 
 def parse_args():
@@ -58,12 +62,48 @@ def parse_args():
     p.add_argument("--steps-per-unit", type=int, default=5)
     p.add_argument("--seconds-per-unit", type=float, default=2.0)
     p.add_argument("--smoke-k-ext", type=float, default=4.0)
-    p.add_argument("--n-steps", type=int, default=24)
+    p.add_argument("--n-steps", type=int, default=16,
+                   help="Ray-march samples per pixel. 12-16 = fast "
+                        "teleop, 24-32 = sharper but slower.")
+    p.add_argument("--render-scale", type=float, default=0.5,
+                   help="Volume integrator render scale. 0.5 cuts cost "
+                        "by ~4x with negligible visual loss; 1.0 = full "
+                        "camera resolution.")
     p.add_argument("--depth_use_clean", type=int, default=1,
                    help="1: keep Habitat's clean depth (recommended). "
                         "0: keep whatever the simulator produced.")
     p.add_argument("--save-frames-to", type=str, default=None,
                    help="Optional directory to dump per-step PNGs.")
+
+    # ------------------------------------------------------------------
+    # Beer-Lambert sensor suite is always on under the new architecture
+    # (the suite is the observation layer of the fire scene). The
+    # remaining flags below tune *what* the suite does.
+    # ------------------------------------------------------------------
+    p.add_argument("--enable-suite", type=int, default=1,
+                   help="Deprecated: kept for back-compat. The suite is "
+                        "always on now; toggle individual modalities via "
+                        "--smoke-density / --compound-rgb / etc.")
+    p.add_argument("--smoke-density", type=float, default=0.6,
+                   help="Beer-Lambert smoke density [0,1] applied to the "
+                        "suite's noisy depth model and (when "
+                        "--compound-rgb=1) to the global RGB pass.")
+    p.add_argument("--compound-rgb", type=int, default=0,
+                   help="1: stack a global Beer-Lambert pass on top of "
+                        "the FireWorld voxel RGB so areas outside the "
+                        "active fire room still feel smoky.")
+    p.add_argument("--show-dashboard", type=int, default=1,
+                   help="1: open a second window with the suite's 2x4 "
+                        "dashboard (RGB clean/smoke, Depth clean/smoke, "
+                        "Thermal, Radar, LIDAR).")
+    p.add_argument("--save-npz", type=int, default=0,
+                   help="1: dump raw .npz per step alongside PNGs.")
+    p.add_argument("--flame-smoke-passthrough", type=float, default=0.85,
+                   dest="flame_smoke_passthrough",
+                   help="Fraction of smoke extinction the flame radiation "
+                        "ignores. 0=flame is eaten by smoke just like the "
+                        "scene; 1=smoke is invisible to flame. Realistic "
+                        "values are 0.7-0.9 (Starr & Lattimer 2014).")
     return p.parse_args()
 
 
@@ -110,7 +150,7 @@ def main():
     env.current_episode = matching[0]
     print(f"[teleop] scene={args.scene_id} ep={env.current_episode.episode_id}")
 
-    # ---------- FireWorld controller ----------
+    # ---------- FireScene (the world model) ----------
     fw_args = SimpleNamespace(
         fire_world=1,
         fire_world_plan_id=args.plan_id,
@@ -124,8 +164,54 @@ def main():
         frame_height=config.SIMULATOR.RGB_SENSOR.HEIGHT,
         hfov=config.SIMULATOR.RGB_SENSOR.HFOV,
     )
-    ctrl = FireWorldController.from_args(fw_args, config)
-    print(f"[teleop] {ctrl.describe()}")
+    scene = FireScene.from_args(fw_args, config)
+    print(f"[teleop] {scene.describe()}")
+
+    # ---------- FireSensorSuite (the observation layer) ----------
+    suite_cfg = FireSensorConfig(
+        max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
+        hfov_deg=float(config.SIMULATOR.DEPTH_SENSOR.HFOV),
+        smoke_density=float(args.smoke_density),
+        save_npz=bool(int(args.save_npz)),
+        rgb_source="voxel",
+        thermal_source="voxel",
+        compound_rgb=bool(int(args.compound_rgb)),
+        voxel=VoxelSmokeConfig(
+            n_steps=int(args.n_steps),
+            smoke_k_ext=float(args.smoke_k_ext),
+            render_scale=float(args.render_scale),
+            flame_smoke_passthrough=float(args.flame_smoke_passthrough),
+            # Force INFERNO-blended thermal so it visually differs from
+            # the JET-colored depth panel sitting next to it.
+            thermal_color_blend=1.0,
+        ),
+    )
+    K = get_camera_K(
+        config.SIMULATOR.RGB_SENSOR.WIDTH,
+        config.SIMULATOR.RGB_SENSOR.HEIGHT,
+        config.SIMULATOR.RGB_SENSOR.HFOV,
+    )
+    dump_dir = (
+        args.save_frames_to if args.save_frames_to else "./outputs/teleop_fire"
+    )
+    suite = FireSensorSuite(
+        cfg=suite_cfg,
+        dump_dir=os.path.join(str(dump_dir), "suite"),
+        save_every=1,
+        seed=0,
+        scene=scene,
+        camera_K=K,
+    )
+    print(f"[teleop] suite enabled (rgb_source=voxel, thermal_source=voxel, "
+          f"compound_rgb={bool(int(args.compound_rgb))}, "
+          f"depth_use_clean={bool(int(args.depth_use_clean))})")
+
+    # `step_fire_observation` reads these flags by name.
+    pipeline_args = SimpleNamespace(
+        depth_use_clean=int(args.depth_use_clean),
+        use_thermal_perception=1,
+        fire_apply_to_obs=1,
+    )
 
     # ---------- driving loop ----------
     obs = env.reset()
@@ -133,15 +219,19 @@ def main():
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, 1280, 480)
 
+    dashboard_window = None
+    if int(args.show_dashboard):
+        dashboard_window = "FireWorld Teleop - Sensor Dashboard"
+        cv2.namedWindow(dashboard_window, cv2.WINDOW_NORMAL)
+        cv2.resizeWindow(dashboard_window, 1600, 720)
+
     out_dir = Path(args.save_frames_to) if args.save_frames_to else None
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
 
     # Local step counter; the real env doesn't expose one.
     robot_step = 0
-    base_t0 = float(ctrl.fw.times[0])
     max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
-    normalize = bool(getattr(config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
 
     key_map = {
         ord("w"): "MOVE_FORWARD",
@@ -157,33 +247,63 @@ def main():
     try:
         while True:
             agent_state = env.sim.get_agent_state(args.agent_id)
-            sensors = ctrl.render_for_agent(
-                obs[args.agent_id], agent_state,
+
+            sensors = step_fire_observation(
+                observations=obs[args.agent_id],
+                suite=suite,
+                agent_state=agent_state,
                 robot_step=robot_step,
-                max_depth_m=max_d,
-                normalize_depth=normalize,
+                config=config,
+                args=pipeline_args,
             )
-            rgb_smoky = sensors["rgb_smoke"]      # uint8 RGB
-            therm_bgr = sensors["thermal_image"]  # uint8 BGR
-            depth_panel = colorize_depth(
-                obs[args.agent_id]["depth"], max_d=max_d
+            assert sensors is not None  # suite is always on here
+
+            suite.save_step(
+                sensors,
+                episode=0,
+                step=robot_step,
+                agent_id=args.agent_id,
             )
 
-            t_sim = sensors["t_sim_s"]
-            T_mean = float(np.mean(sensors["transmittance"]))
-            flame_frac = float(np.mean(sensors["thermal_flame_mask"]))
+            rgb_used = obs[args.agent_id]["rgb"]   # what the nav stack sees
+            therm_bgr = sensors["thermal_image"]   # INFERNO-blended LWIR
 
-            rgb_bgr = cv2.cvtColor(rgb_smoky, cv2.COLOR_RGB2BGR)
+            # Always show the suite's *degraded* depth here so the
+            # panel reflects what the depth sensor would actually see
+            # in smoke. Independent of --depth_use_clean (that flag
+            # only controls what gets written back into observations).
+            depth_smoke = sensors.get("depth_smoke", obs[args.agent_id]["depth"])
+            if depth_smoke.ndim == 3:
+                depth_smoke = depth_smoke[..., 0]
+            depth_used_panel = colorize_depth(depth_smoke, max_d=max_d)
+
+            t_sim = float(sensors.get("t_sim_s", 0.0))
+            T_mean = float(np.mean(sensors.get("transmittance", np.ones((1, 1)))))
+            flame_frac = float(np.mean(sensors.get("thermal_flame_mask", np.zeros((1, 1)))))
+
+            rgb_bgr = cv2.cvtColor(rgb_used, cv2.COLOR_RGB2BGR)
             label_lines = [
                 f"step={robot_step:>4d}  t_sim={t_sim:>6.1f}s  "
                 f"T_mean={T_mean:.2f}  flame={flame_frac:.1%}",
-                f"clock: {ctrl.clock.steps_per_unit} steps/unit, "
-                f"{ctrl.clock.seconds_per_unit:.2f} s/unit",
+                f"clock: {scene.clock.steps_per_unit} steps/unit, "
+                f"{scene.clock.seconds_per_unit:.2f} s/unit  "
+                f"compound={'on' if int(args.compound_rgb) else 'off'}  "
+                f"clean_depth={'on' if int(args.depth_use_clean) else 'off'}  "
+                f"flame_passthrough={float(args.flame_smoke_passthrough):.2f}",
             ]
             overlay_label(rgb_bgr, label_lines)
 
-            panels = [rgb_bgr, therm_bgr, depth_panel]
-            # Match heights
+            # Mark the panels so users know exactly what they're looking at.
+            depth_panel = depth_used_panel.copy()
+            cv2.putText(depth_panel, "Depth (smoke-degraded)", (8, 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (240, 240, 240),
+                        1, cv2.LINE_AA)
+            therm_panel = therm_bgr.copy()
+            cv2.putText(therm_panel, "Thermal IR", (8, 18),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.55, (240, 240, 240),
+                        1, cv2.LINE_AA)
+
+            panels = [rgb_bgr, depth_panel, therm_panel]
             target_h = panels[0].shape[0]
             for i, p in enumerate(panels):
                 if p.shape[0] != target_h:
@@ -194,8 +314,16 @@ def main():
 
             cv2.imshow(window, grid)
 
+            if dashboard_window is not None and "dashboard" in sensors:
+                cv2.imshow(dashboard_window, sensors["dashboard"])
+
             if out_dir is not None:
                 cv2.imwrite(str(out_dir / f"step_{robot_step:05d}.png"), grid)
+                if "dashboard" in sensors:
+                    cv2.imwrite(
+                        str(out_dir / f"step_{robot_step:05d}_dashboard.png"),
+                        sensors["dashboard"],
+                    )
 
             key = cv2.waitKey(0) & 0xFF
             if key == 27:  # ESC
@@ -221,7 +349,7 @@ def main():
                 break
             robot_step += 1
             print(f"  step={robot_step:>4d}  action={action_name:<12s}  "
-                  f"t_sim={ctrl.clock.t_sim_for_step(robot_step):>6.1f}s")
+                  f"t_sim={scene.t_sim_for_step(robot_step):>6.1f}s")
 
     except KeyboardInterrupt:
         pass

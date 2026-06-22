@@ -39,6 +39,7 @@ import open3d.visualization.gui as gui
 
 from utils.vis_gui import ReconstructionWindow
 
+
 def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
     
@@ -120,27 +121,50 @@ def main(args, send_queue, receive_queue):
     # ------------------------------------------------------------------
 
     # ------------------------------------------------------------------
-    ##### Fire-scene multi-modal sensor simulator (optional)
-    # Pose-process every agent's RGB/Depth into smoke-attenuated RGB,
-    # noisy depth, mmWave-radar-like point cloud, and thermal IR view.
-    # See utils/fire_sensors.py for physical justification (Starr & Lattimer
-    # 2014; RadarHD 2023).
+    ##### Fire scene + sensor suite
+    # The fire-world side owns the *what* (3D voxel timeline of flames
+    # / smoke / temperature). The sensor suite owns the *how the agent
+    # sees it* (Beer-Lambert RGB + noisy depth + radar/lidar/thermal +
+    # voxel observer). Scene is optional; suite handles "no scene"
+    # gracefully and falls back to Beer-Lambert / HSV thermal.
     # ------------------------------------------------------------------
+    fire_scene = None
+    if int(getattr(args, "fire_world", 0)):
+        from utils.fire_world.scene import FireScene
+        fire_scene = FireScene.from_args(args, config)
+        print(f"[fire_world] {fire_scene.describe()}")
+
     fire_suites = None
     fire_viewers = None
-    if getattr(args, "fire_sensors", 0):
+    if getattr(args, "fire_sensors", 0) or fire_scene is not None:
+        from utils.general_utils import get_camera_K
+        from utils.fire_sensors.config import VoxelSmokeConfig
+
+        rgb_source = "voxel" if fire_scene is not None else "beer_lambert"
+        thermal_source = "voxel" if fire_scene is not None else "hsv"
         fire_cfg = FireSensorConfig(
             max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
             hfov_deg=float(config.SIMULATOR.DEPTH_SENSOR.HFOV),
             smoke_density=float(args.smoke_density),
             save_npz=bool(args.fire_save_npz),
+            rgb_source=rgb_source,
+            thermal_source=thermal_source,
+            compound_rgb=bool(int(getattr(args, "fire_world_compound_rgb", 0))),
+            voxel=VoxelSmokeConfig(
+                n_steps=int(args.fire_world_n_steps),
+                smoke_k_ext=float(args.fire_world_smoke_k_ext),
+                render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),
+            ),
         )
+        K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
         fire_suites = [
             FireSensorSuite(
                 cfg=fire_cfg,
                 dump_dir=os.path.join(args.fire_dump_dir, f"agent_{i}"),
                 save_every=int(args.fire_save_every),
                 seed=args.seed + i,
+                scene=fire_scene,
+                camera_K=K,
             )
             for i in range(num_agents)
         ]
@@ -156,16 +180,10 @@ def main(args, send_queue, receive_queue):
                 for i in range(num_agents)
             ]
         print(f"[fire_sensors] enabled, density={args.smoke_density}, "
+              f"rgb_source={rgb_source}, thermal_source={thermal_source}, "
               f"dump_dir={args.fire_dump_dir}")
 
-    # ------------------------------------------------------------------
-    ##### FireWorld runtime: 3D voxel-driven RGB/Thermal, indexed by step
-    # ------------------------------------------------------------------
-    fire_world_ctrl = None
-    if int(getattr(args, "fire_world", 0)):
-        from utils.fire_world.controller import FireWorldController
-        fire_world_ctrl = FireWorldController.from_args(args, config)
-        print(f"[fire_world] {fire_world_ctrl.describe()}")
+    from utils.fire_pipeline import step_fire_observation
 
     count_episodes = 0
     goal_points = []
@@ -191,85 +209,31 @@ def main(args, send_queue, receive_queue):
             point_sum.clear()
             found_goal = False
             # ----------------------------------------------------------
-            # Fire-scene sensor simulator: optionally rewrite obs in-place
-            # so mapping/perception sees smoke-affected RGB-D, while we
-            # also dump radar / thermal modalities for analysis.
+            # Fire-scene perception: run the sensor suite on the agent
+            # observations. The suite owns whether RGB/thermal come
+            # from FireWorld voxels or Beer-Lambert/HSV; the world
+            # model is bound once at construction time.
             # ----------------------------------------------------------
-            if fire_world_ctrl is not None:
-                # Voxel-driven RGB / Thermal that tracks the per-step
-                # robot pose against a precomputed FireWorld timeline.
-                from utils.smoke_perception import apply_clean_depth_and_thermal
-
-                max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
-                normalize = bool(getattr(
-                    config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
-                use_clean = bool(int(getattr(args, "depth_use_clean", 0)))
-                use_thermal = bool(int(getattr(args, "use_thermal_perception", 1)))
-                apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
+            if fire_suites is not None:
                 for i in range(num_agents):
                     a_state = env.sim.get_agent_state(i)
-                    sensors = fire_world_ctrl.render_for_agent(
-                        observations[i], a_state,
+                    sensors = step_fire_observation(
+                        observations=observations[i],
+                        suite=fire_suites[i],
+                        agent_state=a_state,
                         robot_step=int(getattr(agent[i], "l_step", 0)),
-                        max_depth_m=max_d,
-                        normalize_depth=normalize,
+                        config=config,
+                        args=args,
                     )
-                    if fire_suites is not None:
-                        # Persist (and forward to viewer) using the same
-                        # plumbing as the legacy suite.
+                    if sensors is not None:
                         fire_suites[i].save_step(
                             sensors,
                             episode=count_episodes,
                             step=int(getattr(agent[i], "l_step", 0)),
                             agent_id=i,
                         )
-
-                    depth_raw = np.asarray(observations[i]['depth'])
-                    apply_clean_depth_and_thermal(
-                        observations[i],
-                        sensors,
-                        clean_depth_raw=depth_raw,
-                        use_clean_depth=use_clean,
-                        use_thermal=use_thermal,
-                        apply_smoky_rgb=apply_smoky_rgb,
-                        normalize_depth=normalize,
-                        max_depth_m=max_d,
-                    )
-
-            elif fire_suites is not None:
-                from utils.smoke_perception import apply_clean_depth_and_thermal
-
-                max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
-                normalize = bool(getattr(
-                    config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
-                use_clean = bool(int(getattr(args, "depth_use_clean", 0)))
-                use_thermal = bool(int(getattr(args, "use_thermal_perception", 0)))
-                apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
-                for i in range(num_agents):
-                    rgb_i = np.asarray(observations[i]['rgb'])
-                    depth_raw = np.asarray(observations[i]['depth'])
-                    depth_m = depth_raw * max_d if normalize else depth_raw
-
-                    sensors = fire_suites[i].process(rgb_i, depth_m, obs=observations[i])
-                    fire_suites[i].save_step(
-                        sensors,
-                        episode=count_episodes,
-                        step=agent[i].l_step if hasattr(agent[i], 'l_step') else 0,
-                        agent_id=i,
-                    )
-                    if fire_viewers is not None:
-                        fire_viewers[i].update(sensors.get('dashboard'))
-
-                    apply_clean_depth_and_thermal(
-                        observations[i],
-                        sensors,
-                        clean_depth_raw=depth_raw,
-                        use_clean_depth=use_clean,
-                        use_thermal=use_thermal,
-                        apply_smoky_rgb=apply_smoky_rgb,
-                        normalize_depth=normalize,
-                        max_depth_m=max_d,
-                    )
+                        if fire_viewers is not None:
+                            fire_viewers[i].update(sensors.get("dashboard"))
 
             for i in range(num_agents):
                 agent_state = env.sim.get_agent_state(i)

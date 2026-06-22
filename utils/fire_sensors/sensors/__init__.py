@@ -10,6 +10,7 @@ from .depth_smoke import SmokeDepthSensor
 from .radar import RadarSensor
 from .thermal import ThermalSensor
 from .lidar import LidarSensor
+from .voxel_smoke import VoxelSmokeSensor
 
 __all__ = [
     "BaseSensor",
@@ -18,4 +19,5 @@ __all__ = [
     "RadarSensor",
     "ThermalSensor",
     "LidarSensor",
+    "VoxelSmokeSensor",
 ]

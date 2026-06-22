@@ -405,13 +405,20 @@ def run_propagation(
 
     if out_dir is not None:
         out_dir.mkdir(parents=True, exist_ok=True)
+        # Save meta as a 0-d numpy *unicode* array, never as pickled
+        # object. This way an npz baked with one numpy minor version
+        # loads cleanly under another (older numpys 1.x can't depickle
+        # objects whose qualname mentions ``numpy._core`` because that
+        # private path is new in 2.x). The plain unicode path needs no
+        # pickle at all.
+        meta_json_str = json.dumps(meta)
         np.savez_compressed(
             out_dir / "timeline.npz",
             flame=flame_t,
             smoke=smoke_t,
             temp=temp_t,
             times=times,
-            meta=np.array([json.dumps(meta)], dtype=object),
+            meta_json=np.array(meta_json_str),
         )
         (out_dir / "timeline_meta.json").write_text(json.dumps(meta, indent=2))
 

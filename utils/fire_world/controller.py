@@ -1,155 +1,122 @@
-"""Glue between the navigation loop and the FireWorld runtime.
+"""Backwards-compatible entry point used by older code paths.
 
-Time semantics
---------------
-Wall-clock time is meaningless in a Habitat simulation. We instead let
-the user fix two integers:
+After the architecture refactor, ``main.py`` / the keyboard teleop
+script construct :class:`utils.fire_world.scene.FireScene` directly and
+let :class:`utils.fire_sensors.FireSensorSuite` observe it. This module
+keeps the old ``FireWorldController`` / ``FireClock`` names alive so
+external scripts and tests don't break.
 
-  * ``steps_per_unit``       (e.g. 5) - how many robot steps make one
-                             "fire-time unit"
-  * ``seconds_per_unit``     (e.g. 2 s) - how much of the precomputed
-                             timeline is consumed per fire-time unit
+What you'll find here:
 
-So if the agent has taken ``N`` env.step() calls, the rendering layer
-queries the timeline at::
-
-    t_sim = (N // steps_per_unit) * seconds_per_unit  +  base_t0_s
-
-and the timeline is clamped at its maximum so it stays at the burnt-out
-state once the agent has been around long enough.
-
-Pose conversion
----------------
-Habitat reports the depth sensor's world position and rotation. The
-camera looks along its local -Z axis (OpenGL convention). The
-FireWorldRenderer wants a 3x3 ``R_cam2world`` whose columns are the
-camera's right/up/forward-as-(-Z) axes in world space - exactly what
-quaternion.as_rotation_matrix() returns for Habitat agent state.
+* ``FireClock``               -> re-export from :mod:`utils.fire_world.scene`
+* ``FireScene``               -> re-export
+* ``FireWorldController``     -> ``FireScene`` + a legacy
+                                 ``render_for_agent`` method that runs
+                                 the voxel ray-march via the sensor-side
+                                 :func:`utils.fire_sensors.voxel_render.volumetric_composite`
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
 import numpy as np
 
-try:
-    import quaternion  # noqa: F401  (used by habitat-sim Python bindings)
-    _HAS_QUAT = True
-except Exception:
-    _HAS_QUAT = False
+from utils.fire_world.scene import (
+    FireClock,
+    FireScene,
+    habitat_agent_state_to_cam,
+)
+from utils.fire_world.runtime import FireWorld
 
-from utils.general_utils import get_camera_K
-from utils.fire_world.runtime import FireWorld, FireWorldRenderer
-
-
-# ---------------------------------------------------------------------------
-# Time mapping
-# ---------------------------------------------------------------------------
-@dataclass
-class FireClock:
-    """Translates per-robot-step counters into FireWorld timeline seconds."""
-
-    steps_per_unit: int = 5
-    seconds_per_unit: float = 2.0
-    base_t0_s: float = 0.0
-
-    def t_sim_for_step(self, robot_step: int) -> float:
-        units = max(0, int(robot_step)) // max(1, int(self.steps_per_unit))
-        return float(self.base_t0_s + units * self.seconds_per_unit)
-
-
-def _habitat_agent_state_to_cam(agent_state) -> Tuple[np.ndarray, np.ndarray]:
-    """Return (cam_pos_world, R_cam2world) for the agent's depth sensor.
-
-    R_cam2world has columns = camera's right / up / -forward in world
-    coordinates. This matches what FireWorldRenderer._build_pixel_rays
-    expects: a point at ``(x_cam, y_cam, z_cam=-d)`` projected via
-    ``R @ pt + cam_pos`` lands at ``cam_pos + d * (-z_axis)`` along the
-    camera's forward direction.
-    """
-    sensor_state = agent_state.sensor_states.get("depth", agent_state)
-    pos = np.asarray(sensor_state.position, dtype=np.float64)
-    rot = sensor_state.rotation
-    if hasattr(rot, "x"):  # numpy.quaternion
-        if not _HAS_QUAT:
-            raise RuntimeError("habitat returned a quaternion but the "
-                               "`quaternion` module is not importable")
-        import quaternion as q
-        R = q.as_rotation_matrix(rot)
-    else:
-        R = np.asarray(rot, dtype=np.float64)
-        if R.shape == (4,):
-            # (w, x, y, z) Habitat-lab ordering -> rotation matrix.
-            w, x, y, z = R
-            R = np.array([
-                [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
-                [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
-                [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
-            ])
-    return pos, R
+__all__ = [
+    "FireClock",
+    "FireScene",
+    "FireWorldController",
+    "habitat_agent_state_to_cam",
+]
 
 
 # ---------------------------------------------------------------------------
-# Top-level controller plugged into main.py
+# Top-level controller (legacy API)
 # ---------------------------------------------------------------------------
-@dataclass
 class FireWorldController:
-    """One per-run object that feeds the runtime renderer for every agent."""
+    """Legacy wrapper kept for back-compat.
 
-    fw: FireWorld
-    renderer: FireWorldRenderer
-    clock: FireClock
+    The new code path is::
+
+        scene = FireScene.from_args(args, config)
+        suite = FireSensorSuite(cfg=..., scene=scene, camera_K=...)
+        sensors = suite.process(rgb, depth_m,
+                                agent_state=state, robot_step=k)
+
+    Old call sites that still expect ``ctrl.render_for_agent(...)`` keep
+    working through the method below.
+    """
+
+    # Legacy positional/keyword fields. The previous version of this
+    # class used (fw, renderer, clock) as init args. We accept them for
+    # back-compat and synthesise a FireScene + camera_K + params on the
+    # fly.
+    def __init__(self, scene=None, camera_K=None, _params=None,
+                 fw=None, renderer=None, clock=None):
+        from utils.fire_sensors.voxel_render import VoxelRenderParams
+        if scene is None and fw is not None:
+            if clock is None:
+                clock = FireClock(steps_per_unit=5, seconds_per_unit=2.0,
+                                  base_t0_s=float(fw.times[0]))
+            scene = FireScene(fw=fw, clock=clock)
+        if scene is None:
+            raise ValueError(
+                "FireWorldController needs either `scene` or `fw` (legacy)."
+            )
+        if _params is None:
+            _params = VoxelRenderParams()
+            if renderer is not None and getattr(renderer, "params", None) is not None:
+                _params = renderer.params
+            elif renderer is not None:
+                # legacy FireWorldRenderer with attribute-style params
+                _params.render_scale = getattr(renderer, "render_scale",
+                                               _params.render_scale)
+                _params.n_steps = getattr(renderer, "n_steps", _params.n_steps)
+                _params.smoke_k_ext = getattr(renderer, "smoke_k_ext",
+                                              _params.smoke_k_ext)
+        if camera_K is None and renderer is not None:
+            camera_K = getattr(renderer, "camera_K", None)
+        self.scene = scene
+        self.camera_K = camera_K
+        self._params = _params
+
+    @property
+    def fw(self) -> FireWorld:
+        return self.scene.fw
+
+    @property
+    def clock(self) -> FireClock:
+        return self.scene.clock
+
+    @property
+    def renderer(self):
+        """Legacy attribute. Returns a small object whose mutable
+        attributes (``render_scale``, ``n_steps``, ``smoke_k_ext``)
+        are forwarded onto the cached VoxelRenderParams.
+        """
+        return _ParamsView(self._params)
 
     @classmethod
-    def from_args(
-        cls,
-        args,
-        config,
-    ) -> "FireWorldController":
-        if not getattr(args, "fire_world_plan_id", None):
-            raise ValueError(
-                "FireWorldController requires --fire_world_plan_id to point "
-                "at a plan.json under scenes/<scene>/plans/."
-            )
+    def from_args(cls, args, config) -> "FireWorldController":
+        from utils.general_utils import get_camera_K
+        from utils.fire_sensors.voxel_render import VoxelRenderParams
 
-        # Resolve the scene id from the simulator config (Habitat sets
-        # SCENE to the absolute glb path on each reset).
-        scene_glb = config.SIMULATOR.SCENE
-        scene_short = (
-            scene_glb.split("/")[-1]
-                     .replace(".basis.glb", "")
-                     .replace(".glb", "")
-        )
-
-        scenes_root = Path(args.fire_world_scenes_root)
-        out_root = Path(args.fire_world_out_root)
-        plan_path = scenes_root / scene_short / "plans" / f"{args.fire_world_plan_id}.json"
-        if not plan_path.exists():
-            raise FileNotFoundError(
-                f"plan not found: {plan_path}. Build inventory.json + "
-                f"plan.json + run propagation for scene {scene_short} first."
-            )
-
-        fw = FireWorld.load(scene_short, args.fire_world_plan_id, out_root=out_root)
-
-        K = get_camera_K(
-            args.frame_width, args.frame_height, args.hfov,
-        )
-        renderer = FireWorldRenderer(
-            fw=fw,
-            camera_K=K,
+        scene = FireScene.from_args(args, config)
+        K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
+        params = VoxelRenderParams(
             max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
             n_steps=int(args.fire_world_n_steps),
             smoke_k_ext=float(args.fire_world_smoke_k_ext),
+            render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),
         )
-        clock = FireClock(
-            steps_per_unit=int(args.fire_steps_per_unit),
-            seconds_per_unit=float(args.fire_seconds_per_unit),
-            base_t0_s=float(fw.times[0]),
-        )
-        return cls(fw=fw, renderer=renderer, clock=clock)
+        return cls(scene=scene, camera_K=K, _params=params)
 
     # ------------------------------------------------------------------
     def render_for_agent(
@@ -160,11 +127,14 @@ class FireWorldController:
         max_depth_m: float,
         normalize_depth: bool,
     ) -> Dict[str, np.ndarray]:
-        """Render the active fire frame from the agent's pose and return
-        a dict in the same shape that ``FireSensorSuite.process`` returns.
+        """Render the active fire frame from the agent's pose.
 
-        ``observations`` provides the **clean** RGB and metric depth.
+        Returns the same dict shape as the original
+        ``FireWorldController.render_for_agent`` so callers that haven't
+        migrated to :class:`FireSensorSuite` yet keep working.
         """
+        from utils.fire_sensors.voxel_render import volumetric_composite
+
         rgb = np.asarray(observations["rgb"])[..., :3]
         if rgb.dtype != np.uint8:
             rgb = np.clip(rgb, 0, 255).astype(np.uint8)
@@ -173,38 +143,57 @@ class FireWorldController:
         depth_m = depth_m.astype(np.float32)
         if normalize_depth:
             depth_m = depth_m * float(max_depth_m)
-        cam_pos, R = _habitat_agent_state_to_cam(agent_state)
-        t_sim = self.clock.t_sim_for_step(robot_step)
-        out = self.renderer.render(
+
+        cam_pos, R = self.scene.camera_pose(agent_state)
+        t_sim = self.scene.t_sim_for_step(robot_step)
+        flame_field, smoke_field, temp_field = self.scene.query(t_sim)
+
+        out = volumetric_composite(
             rgb_clean=rgb,
             depth_m=depth_m,
             cam_pos_world=cam_pos.astype(np.float32),
             R_cam2world=R.astype(np.float32),
-            t_sim=t_sim,
+            flame_field=flame_field,
+            smoke_field=smoke_field,
+            temp_field=temp_field,
+            origin=self.scene.origin,
+            voxel_m=self.scene.voxel_m,
+            grid_shape=self.scene.shape,
+            ambient_c=self.scene.ambient_c,
+            camera_K=self.camera_K,
+            params=self._params,
         )
         return {
-            # raw clean
             "rgb": rgb,
             "depth_clean": depth_m.astype(np.float32),
-            # rendered
             "rgb_smoke": out["image"],
-            "depth_smoke": depth_m.astype(np.float32),  # geometry unchanged
+            "depth_smoke": depth_m.astype(np.float32),
             "transmittance": out["transmittance"],
             "thermal_image": out["thermal_image"],
             "thermal_temperature": out["thermal_temperature"],
             "thermal_flame_mask": out["flame_mask"],
-            # bookkeeping for the dashboard / logger
             "t_sim_s": float(t_sim),
             "robot_step": int(robot_step),
         }
 
-    # Quick descriptor for log lines.
     def describe(self) -> str:
-        return (
-            f"FireWorldController(scene={self.fw.scene_id} "
-            f"plan={self.fw.plan_id} "
-            f"timeline=[{float(self.fw.times[0]):.0f}, "
-            f"{float(self.fw.times[-1]):.0f}]s @ {len(self.fw.times)} frames; "
-            f"clock: {self.clock.steps_per_unit} steps/unit, "
-            f"{self.clock.seconds_per_unit:.2f} s/unit)"
-        )
+        return self.scene.describe()
+
+
+# ---------------------------------------------------------------------------
+class _ParamsView:
+    """Tiny proxy so ``ctrl.renderer.render_scale = 1.0`` keeps working
+    after the refactor — it now mutates the underlying VoxelRenderParams.
+    """
+
+    def __init__(self, params):
+        self._params = params
+
+    def __getattr__(self, name):
+        return getattr(self._params, name)
+
+    def __setattr__(self, name, value):
+        if name == "_params":
+            object.__setattr__(self, name, value)
+        else:
+            setattr(self._params, name, value)

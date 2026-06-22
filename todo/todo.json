@@ -1,7 +1,7 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-06-15T00:00:00Z",
+    "updated_at": "2026-06-21T00:00:00Z",
     "owner": "copilot"
   },
   "items": [
@@ -71,6 +71,96 @@
       "acceptance": "Pipeline keeps Habitat clean depth for mapping, sources fire detections from thermal, and optionally dehazes the smoky RGB before YOLO-World.",
       "notes": "Added utils/smoke_perception.py (apply_clean_depth_and_thermal, dehaze_with_depth + estimate_smoke_k, thermal_mask_to_detections). Wired three new flags in arguments.py: --depth_use_clean (preserve clean depth obs), --use_thermal_perception (inject thermal channel + use thermal as fire source), --rgb_dehaze (depth-aware inverse Beer-Lambert + CLAHE). main.py and main_vec.py now call apply_clean_depth_and_thermal so observations carry smoky_rgb + clean_depth + thermal_image + thermal_flame_mask. Object_Detection_and_Segmentation.detect() takes thermal_flame_mask=...; when present, fire detections come from thermal (smoke-invariant) instead of HSV-on-smoky-RGB. vlm_agents/vlm_multi_agents pull obs['thermal_flame_mask'] and run the optional dehaze before transform_rgb_bgr. Validated via scripts/test_smoke_perception.py (apply/dehaze/thermal-detections all OK; bg dehazed from 179,179,179 to 150,151,151) and scripts/test_detect_with_thermal.py (gray RGB + thermal mask -> 1 fire detection conf 0.95). Existing tests test_flame_hsv.py and test_flame_after_smoke.py still pass under the project's co-nav env.",
       "last_updated": "2026-06-15T00:00:00Z"
+    },
+    {
+      "id": "T008",
+      "title": "Document main.py CLI flags and keyboard teleop controls",
+      "status": "done",
+      "priority": "P2",
+      "depends_on": [],
+      "acceptance": "docs/main_usage.md lists all argparse flags from arguments.py plus teleop keymaps from scripts/keyboard_teleop*.py.",
+      "notes": "main.py itself has no key handler; keyboard control lives in scripts/keyboard_teleop.py and scripts/keyboard_teleop_fire.py. Both keymaps and CLI args captured in docs/main_usage.md.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T009",
+      "title": "Run FireWorld voxel + Beer-Lambert RGB-D degradation together",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T007"],
+      "acceptance": "main.py / main_vec.py / scripts/keyboard_teleop_fire.py can enable --fire_world and --fire_sensors simultaneously; obs carry voxel RGB + suite-noisy depth + thermal; dashboard reflects what the agent actually sees.",
+      "notes": "Added utils/fire_pipeline.compose_fire_step that runs FireWorldController.render_for_agent and FireSensorSuite.process on the clean RGB-D, then merges the outputs (FireWorld RGB + thermal + flame, suite depth_smoke + radar + lidar + dashboard) and patches observations in place. New flag --fire_world_compound_rgb stacks an extra global Beer-Lambert pass on top of the voxel RGB. main.py/main_vec.py replace the old if/elif with a single call. scripts/keyboard_teleop_fire.py gained --enable-suite/--smoke-density/--compound-rgb/--show-dashboard so the teleop window can show the voxel RGB while a second window shows the suite dashboard. Verified with a stub-driven smoke test (fw-only / suite-only / fw+suite all pass).",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T010",
+      "title": "Refactor architecture: fire_world = world model, fire_sensors = observation",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T009"],
+      "acceptance": "fire_world only owns FireWorld + FireClock + FireScene; the voxel ray-march renderer + VoxelSmokeSensor live under fire_sensors; FireSensorSuite picks RGB/thermal source via cfg.rgb_source / cfg.thermal_source; legacy FireWorldController / FireWorldRenderer keep working through shims.",
+      "notes": "Created utils/fire_world/scene.py (FireScene + FireClock + habitat_agent_state_to_cam). Trimmed utils/fire_world/runtime.py to host only FireWorld; FireWorldRenderer is now a back-compat shim that delegates to utils/fire_sensors/voxel_render.py. New utils/fire_sensors/voxel_render.py centralises the ray-march math and the volumetric_composite() entry point. New utils/fire_sensors/sensors/voxel_smoke.py wraps it as a BaseSensor. utils/fire_sensors/config.py gained VoxelSmokeConfig + rgb_source / thermal_source / compound_rgb. FireSensorSuite now accepts scene=FireScene + camera_K, instantiates VoxelSmokeSensor and uses it whenever rgb_source/thermal_source resolve to 'voxel'. utils/fire_pipeline.py shrank to a small step_fire_observation helper (compose_fire_step kept as alias). main.py / main_vec.py / scripts/keyboard_teleop_fire.py all rewritten around FireScene + FireSensorSuite. Verified by stub-driven tests (Beer-Lambert / voxel / voxel+compound) and by re-running the existing scripts/test_fire_world_step_clock.py against the real timeline.npz.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T011",
+      "title": "Voxel renderer: flame penetrates smoke; teleop dashboard layout fix",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T010"],
+      "acceptance": "Volumetric composite uses two transmittance accumulators so flame emission isn't eaten by smoke; teleop window shows RGB / Depth (smoke-degraded) / Thermal (INFERNO) instead of two depth-like panels.",
+      "notes": "Added VoxelRenderParams.flame_smoke_passthrough (default 0.85). The marcher now keeps a separate T_acc_flame that uses (1-passthrough)*smoke_k + flame_k as the optical depth, so flame radiation leaks through smoke just like real visible-band fire imagery (Starr & Lattimer 2014 Fig. 7). Exposed via VoxelSmokeConfig + the legacy FireWorldRenderer shim. keyboard_teleop_fire.py now renders 3 panels (RGB / Depth-smoke / Thermal-INFERNO), forces thermal_color_blend=1.0 so it visually differs from JET-colored depth, always shows the suite's degraded depth (independent of --depth_use_clean), and exposes --flame-smoke-passthrough. Verified with a 1-ray micro test: with passthrough=0.0 a flame behind a smoke wall yields neutral grey RGB (R-B=0); with passthrough=0.85 the same configuration produces a warm tint (R=230, B=207). Existing scripts/test_fire_world_step_clock.py still passes against the real timeline.npz.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T012",
+      "title": "Fix flame visibility through smoke (teleop screenshot showed 2-pixel speck)",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T011"],
+      "acceptance": "Voxel-rendered flame is clearly visible behind dense smoke even with --compound-rgb=1; the second Beer-Lambert pass no longer erases the flame.",
+      "notes": "Root causes: (a) flame_threshold=0.20 was higher than what trilinear interpolation yields at the flame envelope (0.05-0.30) so only the 0.6 source core survived as 1-2 pixels; (b) flame_emission_gain=4 was too low to penetrate dense smoke after attenuation; (c) compound_rgb=1 ran a second global Beer-Lambert that fogs flame pixels alongside everything else. Fix: lowered flame_threshold to 0.04 (and widened the smooth-step ramp to 0.05 above), bumped flame_emission_gain to 8.0, raised flame_smoke_passthrough default to 0.95, and added an optional flame_mask guard to _global_beer_lambert that blends the original voxel RGB back over flame pixels (with a Gaussian-dilated mask so the warm halo is preserved too). Quantified with a synthetic teleop-style scene (smoke wall in front of a 3x3x3 flame source): old defaults produced 0 warm pixels and max R-B=2; new defaults produce 24 warm pixels and max R-B=54; compound pass with the flame guard preserves all 24 pixels (without guard: 0).",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T013",
+      "title": "Document plan.json schema and add kitchen + chair ignitions to 83679a07b632",
+      "status": "done",
+      "priority": "P2",
+      "depends_on": ["T012"],
+      "acceptance": "User-facing explanation of every key in plan.json; 4 new ignitions appended to scenes/Nfvxx8J5NCo/plans/83679a07b632.json (1 kitchen-grease near sink + 3 chairs).",
+      "notes": "Documented schema_version, plan_id, world_aabb, ignitions[i] (object_id/category/position/ignite_time_s/source_radius_m/source_temp_c/fuel_kg/smoke_yield) and propagation_rules with their physical meaning. Appended ignitions for object_id=50 (kitchen sink anchor, 870C, fuel 8kg, smoke_yield 0.85), object_id=340/339 (kitchen chairs, 780/760C), object_id=93 (chair in another region, 800C). Times staggered 120/150/200/240s so the user can watch the fire spread in teleop. Plan parses cleanly and now lists 7 ignitions; plan_id is unchanged but no longer matches the deterministic seed hash, which is fine because runtime.py only consumes the body. To pick up the new ignitions in the renderer the user has to rerun: python -m utils.fire_world.propagation --scene Nfvxx8J5NCo --plan-id 83679a07b632 --voxel-m 0.15.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T014",
+      "title": "Fix cross-numpy-version load failure in timeline.npz; restore staggered ignite times",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T013"],
+      "acceptance": "FireWorld.load works in conda env co-nav (numpy 1.24) regardless of which numpy wrote the npz; plan ignite_time_s values for the 4 new ignitions persisted.",
+      "notes": "Root cause: propagation.py was saving meta as np.array([..], dtype=object) which forces pickle. The pickled string carried a numpy 2.x qualname (numpy._core), so loading under numpy 1.x raised ModuleNotFoundError: No module named 'numpy._core'. Fix: write meta as a 0-d numpy unicode array under key 'meta_json' (no pickle), still emit the timeline_meta.json sidecar, and have FireWorld.load prefer the JSON sidecar -> meta_json -> legacy 'meta' (in that order) so old npzs keep loading too. Also: the kitchen/chair ignite_time_s values had reverted to 0; restored to 120/150/200/240. Reran propagation in /home/liushe10/miniconda3/envs/co-nav/bin/python so the cache is written by numpy 1.24 itself. Verified the new timeline reports first_flame at the expected timestamps for all 7 ignitions.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T015",
+      "title": "arguments.py cleanup: remove dead flags, refresh help text",
+      "status": "done",
+      "priority": "P2",
+      "depends_on": ["T014"],
+      "acceptance": "arguments.py contains only flags actually consumed by main.py / main_vec.py / agents; help text reflects the post-refactor architecture (FireWorld + FireSensorSuite).",
+      "notes": "Removed --exp_name (only present in arguments.py, never read), --log_interval (same), --agent (the legacy 'sem_exp' string; nobody reads args.agent anywhere). Refreshed help for nav_mode/gpt_type (dropped text-davinci-003 from list), --fire_world_compound_rgb (no longer worded as a fire_sensors-only switch), --rgb_dehaze (notes the depth_use_clean dependency), --fire_apply_to_obs / --depth_use_clean cross-references. Verified: grep across the repo for args.exp_name / args.log_interval / args.agent returns zero hits. Argparse --help renders cleanly; running with the user's command produces the same effective parameter set with no missing keys.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T016",
+      "title": "Author docs/fire_world_pipeline.md as the authoritative pipeline summary + paper-ready methodology",
+      "status": "done",
+      "priority": "P2",
+      "depends_on": ["T015"],
+      "acceptance": "docs/fire_world_pipeline.md walks through the 6 pipeline stages with implementation details and a self-contained methodology section that can be copied into a paper.",
+      "notes": "Stage-by-stage write-up: (1) scene_scan with the sRGB OETF decode and per-face instance grouping, (2) planner templates + intensity presets + plan_id hashing, (3) reaction-diffusion-buoyancy-ceiling-jet voxel propagation, (4) FireScene runtime facade and the steps-per-unit / seconds-per-unit clock semantics, (5) FireSensorSuite voxel ray-march with dual-T flame channel + Beer-Lambert depth/radar/lidar/thermal, (6) integration into main.py / main_vec.py / keyboard_teleop_fire.py. Bottom half is a paper-ready methodology section with citations to Starr & Lattimer 2014 and a recommended ablation table. Appendix A is a file map; Appendix B is the minimal reproduction recipe.",
+      "last_updated": "2026-06-21T00:00:00Z"
     }
   ]
 }

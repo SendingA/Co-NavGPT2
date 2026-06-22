@@ -1,3 +1,9 @@
+"""CLI for main.py / main_vec.py.
+
+The flags below are grouped by what they actually affect at runtime;
+unused legacy flags (``--exp_name``, ``--log_interval``, ``--agent``)
+were removed in the 2026-06 cleanup since no caller read them.
+"""
 import argparse
 import torch
 
@@ -6,146 +12,176 @@ def get_args():
     parser = argparse.ArgumentParser(
         description='Multi-Agent-Semantic-Exploration')
 
-    # General Arguments
+    # ------------------------------------------------------------------
+    # General
+    # ------------------------------------------------------------------
     parser.add_argument('--seed', type=int, default=1,
                         help='random seed (default: 1)')
-    # Logging, loading models, visualization
-    parser.add_argument('--log_interval', type=int, default=10,
-                        help="""log interval, one log per n updates
-                                (default: 10) """)
     parser.add_argument('-d', '--dump_location', type=str, default="./tmp",
-                        help='path to dump models and log (default: ./tmp/)')
-    parser.add_argument('--exp_name', type=str, default="exp1",
-                        help='experiment name (default: exp1)')
+                        help='where main.py writes logs / dumps. '
+                             'output goes to <dump_location>/logs/<nav_mode>/'
+                             ' and <dump_location>/dump/<nav_mode>/')
     parser.add_argument('-v', '--visualize', type=int, default=0,
-                        help="""1: Render the observation and
-                                   the predicted semantic map
-                                (default: 0)""")
+                        help='1: render observations + predicted semantic '
+                             'map; opens an Open3D GUI in main.py')
     parser.add_argument('--print_images', type=int, default=0,
-                        help='1: save visualization as images')
+                        help='1: persist visualization frames to disk')
 
-    # Environment, dataset and episode specifications
-    parser.add_argument('-fw', '--frame_width', type=int, default=640,
-                        help='Frame width (default:160)')
-    parser.add_argument('-fh', '--frame_height', type=int, default=480,
-                        help='Frame height (default:120)')
+    # ------------------------------------------------------------------
+    # Camera + scene config
+    # ------------------------------------------------------------------
+    parser.add_argument('-fw', '--frame_width', type=int, default=640)
+    parser.add_argument('-fh', '--frame_height', type=int, default=480)
     parser.add_argument("--task_config", type=str,
                         default="multi_objectnav_hm3d.yaml",
-                        help="path to config yaml containing task information")
+                        help="path to config yaml under configs/")
     parser.add_argument('--hfov', type=float, default=79.0,
                         help="horizontal field of view in degrees")
 
-    # Model Hyperparameters
-    parser.add_argument('--agent', type=str, default="sem_exp")
+    # ------------------------------------------------------------------
+    # Multi-agent / parallel run
+    # ------------------------------------------------------------------
     parser.add_argument('--num_local_steps', type=int, default=25,
-                        help="""Number of steps the local policy
-                                between each global step""")
-    parser.add_argument('-n', '--num_processes', type=int, default=1)
-    parser.add_argument('--rank', type=int, default=0)
-    parser.add_argument('--gpu_id', type=int, default=0)
+                        help='steps between two global re-plans')
+    parser.add_argument('-n', '--num_processes', type=int, default=1,
+                        help='only honored by main_vec.py')
+    parser.add_argument('--rank', type=int, default=0,
+                        help='set automatically by main_vec.py per worker; '
+                             'main.py keeps the default 0')
+    parser.add_argument('--gpu_id', type=int, default=0,
+                        help='Habitat-sim GPU device id')
+    parser.add_argument('--num_agents', type=int, default=2,
+                        help='number of agents in the simulator')
 
-    parser.add_argument('--map_resolution', type=int, default=5)
-    parser.add_argument('--map_size_cm', type=int, default=2400)
-    parser.add_argument('--map_height_cm', type=int, default=130)
-    parser.add_argument('--sem_threshold', type=float, default=0.85)
-    parser.add_argument('--num_agents', type=int, default=2)
-    
-    
-    # train_se_frontier
+    # ------------------------------------------------------------------
+    # Mapping / perception
+    # ------------------------------------------------------------------
+    parser.add_argument('--map_resolution', type=int, default=5,
+                        help='cm per occupancy grid cell')
+    parser.add_argument('--map_size_cm', type=int, default=2400,
+                        help='occupancy map side length (cm)')
+    parser.add_argument('--map_height_cm', type=int, default=130,
+                        help='top-down map slice height (cm)')
+    parser.add_argument('--sem_threshold', type=float, default=0.85,
+                        help='semantic detection confidence above which '
+                             'the goal is considered found')
+
+    # ------------------------------------------------------------------
+    # Global planner
+    # ------------------------------------------------------------------
     parser.add_argument('--nav_mode', type=str, default="gpt",
-                        choices=['nearest', 'co_ut', 'fill', "gpt"])
-    parser.add_argument('--fill_mode', type=int, default=0)
+                        choices=['nearest', 'co_ut', 'fill', 'gpt'],
+                        help='global frontier policy. nearest=closest, '
+                             'co_ut=cooperative assignment, fill=highest '
+                             'frontier score, gpt=GPT-4o decision (calls '
+                             'OpenAI; see --gpt_type)')
+    parser.add_argument('--fill_mode', type=int, default=0,
+                        help='1: when an agent revisits the same frontier, '
+                             'mark its area as obstacle and re-detect')
     parser.add_argument('--gpt_type', type=int, default=2,
-                        help="""0: text-davinci-003
-                                1: gpt-3.5-turbo
-                                2: gpt-4o
-                                3: gpt-4o-mini
-                                (default: 2)""")
+                        help='1: gpt-3.5-turbo  2: gpt-4o (default)  '
+                             '3: gpt-4o-mini  (only used when nav_mode=gpt)')
 
-    # ----------------------------------------------------------------------
-    # Fire-scene multi-modal sensor simulator
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Fire-scene observation suite (Beer-Lambert RGB + noisy depth +
+    # radar / lidar / thermal). The suite is auto-constructed whenever
+    # --fire_world=1, even if --fire_sensors=0.
+    # ------------------------------------------------------------------
     parser.add_argument('--fire_sensors', type=int, default=0,
-                        help='1: enable smoke/depth-noise/radar/thermal sensor sim; '
-                             'override RGB+Depth observations and dump per-step files')
+                        help='1: enable the fire-scene observation suite '
+                             '(Beer-Lambert RGB, smoke-degraded depth, '
+                             'radar/lidar/thermal, dashboard). Implicitly '
+                             'on when --fire_world=1.')
     parser.add_argument('--fire_apply_to_obs', type=int, default=1,
-                        help='1: feed degraded RGB+Depth back to mapping pipeline; '
-                             '0: only save degraded sensors but keep clean obs for nav')
+                        help='1: replace observations[\'rgb\'] with the '
+                             'smoke-affected RGB before the agent sees it; '
+                             '0: keep clean RGB for nav, only dump degraded '
+                             'sensors to disk')
     parser.add_argument('--smoke_density', type=float, default=0.6,
-                        help='[0,1] smoke optical thickness control. '
-                             '0=clear, 1=visibility ~1m')
+                        help='[0,1] Beer-Lambert smoke density. Drives both '
+                             'the noisy-depth visibility cutoff and the '
+                             'optional --fire_world_compound_rgb pass.')
     parser.add_argument('--fire_dump_dir', type=str,
                         default='./outputs/fire_sensors',
-                        help='output directory for per-step sensor images')
+                        help='per-step sensor image output directory')
     parser.add_argument('--fire_save_every', type=int, default=1,
-                        help='save every N steps (1 = save every step)')
+                        help='save dumps every N steps (1 = every step)')
     parser.add_argument('--fire_save_npz', type=int, default=0,
-                        help='1: also dump raw numpy arrays as .npz alongside images')
+                        help='1: also dump raw numpy arrays as .npz')
     parser.add_argument('--fire_show_window', type=int, default=0,
-                        help='1: open a live OpenCV 2x4 dashboard window')
+                        help='1: open a live OpenCV 2x4 dashboard window '
+                             'per agent')
     parser.add_argument('--lidar_360', type=int, default=0,
                         help='1: install 4 yaw-rotated depth sensors '
-                             '(front/left/back/right) on each agent so the '
-                             'LIDAR module can stitch a true 360° point cloud')
+                             '(front/left/back/right) so the LIDAR module '
+                             'stitches a true 360 deg point cloud. Only '
+                             'effective with --fire_sensors=1.')
     parser.add_argument('--lidar_resolution', type=int, default=320,
-                        help='per-slice depth resolution for the 360° LIDAR '
-                             '(square HxW). Lower = faster.')
+                        help='per-slice depth resolution for the 360 deg '
+                             'LIDAR (square HxW). Lower = faster.')
 
-    # ----------------------------------------------------------------------
-    # Smoke-scene perception switches: keep depth/thermal trustworthy and
-    # let RGB degrade. Defaults preserve previous behaviour when off.
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # Smoke-scene perception switches
+    # ------------------------------------------------------------------
     parser.add_argument('--depth_use_clean', type=int, default=0,
-                        help='1: keep the original (clean) Habitat depth for '
-                             'mapping/navigation under smoke instead of the '
-                             'sensor-simulated noisy depth. RGB is still the '
-                             'smoke-attenuated version.')
+                        help='1: write Habitat\'s clean (un-degraded) depth '
+                             'back into observations, even if the fire suite '
+                             'computed a noisy version. Strongly recommended '
+                             'when debugging / comparing nav under smoke.')
     parser.add_argument('--use_thermal_perception', type=int, default=1,
-                        help='1: when fire_sensors is enabled, inject the '
-                             'thermal flame mask into observations and let the '
-                             'detector source fire detections from thermal '
-                             'instead of HSV on the smoky RGB.')
+                        help='1: when the fire suite is on, inject the '
+                             'thermal flame mask into observations and let '
+                             'the detector source fire detections from '
+                             'thermal instead of HSV-on-smoky-RGB.')
     parser.add_argument('--rgb_dehaze', type=int, default=0,
-                        help='1: apply depth-aware inverse Beer-Lambert + CLAHE '
-                             'on the smoky RGB before object detection. '
-                             'Requires depth_use_clean=1 for best results.')
+                        help='1: depth-aware inverse Beer-Lambert + CLAHE on '
+                             'the smoky RGB before object detection. '
+                             'Only meaningful when --depth_use_clean=1, '
+                             'otherwise the inversion uses noisy depth and '
+                             'amplifies artifacts.')
 
-    # ----------------------------------------------------------------------
-    # FireWorld runtime: replace the global-density SmokeRGBSensor with a
-    # 3D voxel ray-march against a precomputed timeline.npz. Time is
-    # advanced from robot-step counts, so simulator wall-clock is
-    # irrelevant; one "fire-time unit" is consumed every N robot steps.
-    # ----------------------------------------------------------------------
+    # ------------------------------------------------------------------
+    # FireWorld runtime: 3D voxel-driven RGB / Thermal, indexed by step
+    # ------------------------------------------------------------------
     parser.add_argument('--fire_world', type=int, default=0,
-                        help='1: enable FireWorld runtime (overrides the '
-                             'SmokeRGBSensor RGB/Thermal output with the 3D '
-                             'voxel composite).')
+                        help='1: load the precomputed FireWorld voxel '
+                             'timeline and render RGB/Thermal from the '
+                             'agent pose (overrides the Beer-Lambert RGB '
+                             'inside the sensor suite).')
     parser.add_argument('--fire_world_plan_id', type=str, default=None,
                         help='Plan id (12-hex) under scenes/<scene>/plans/. '
                              'Required when --fire_world=1.')
     parser.add_argument('--fire_world_scenes_root', type=str, default='scenes',
-                        help='Where to find inventory.json + plan.json.')
+                        help='where to find inventory.json + plan.json')
     parser.add_argument('--fire_world_out_root', type=str,
                         default='outputs/fire_world',
-                        help='Where to find timeline.npz '
-                             '(out_root/<scene>/<plan_id>/timeline.npz).')
+                        help='where to find timeline.npz '
+                             '(out_root/<scene>/<plan_id>/timeline.npz)')
     parser.add_argument('--fire_steps_per_unit', type=int, default=5,
-                        help='Robot steps that elapse for every 1 unit of '
-                             'fire-time. Larger = slower fire vs the agent.')
+                        help='robot steps that elapse for every 1 unit of '
+                             'fire-time (larger = slower fire vs the agent)')
     parser.add_argument('--fire_seconds_per_unit', type=float, default=2.0,
-                        help='How many seconds of the fire timeline are '
-                             'consumed per fire-time unit. With the '
-                             'defaults 5/2.0, every 5 robot steps advance '
+                        help='timeline seconds consumed per fire-time unit. '
+                             'With defaults 5/2.0, 5 robot steps advance '
                              'the simulated fire by 2 s.')
     parser.add_argument('--fire_world_smoke_k_ext', type=float, default=4.0,
-                        help='Extinction coefficient multiplier on the smoke '
-                             'voxel field (per metre). Higher = more opaque.')
+                        help='extinction coefficient multiplier on the '
+                             'smoke voxel field (per metre)')
     parser.add_argument('--fire_world_n_steps', type=int, default=24,
-                        help='Ray-march samples per pixel inside the renderer.')
+                        help='ray-march samples per pixel inside the '
+                             'voxel renderer')
+    parser.add_argument('--fire_world_render_scale', type=float, default=0.5,
+                        help='render the volume integrator at this fraction '
+                             'of camera resolution (0.5 -> ~4x speedup; '
+                             '1.0 -> full resolution)')
+    parser.add_argument('--fire_world_compound_rgb', type=int, default=0,
+                        help='1: stack a global Beer-Lambert pass on top of '
+                             'the FireWorld voxel RGB so areas outside the '
+                             'active fire room still feel smoky. Density '
+                             'comes from --smoke_density. Flame pixels are '
+                             'guarded so the second pass cannot erase them.')
 
-    # parse arguments
     args = parser.parse_args()
-
     args.cuda = torch.cuda.is_available()
 
     return args

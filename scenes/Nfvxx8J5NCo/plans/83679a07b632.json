@@ -53,11 +53,67 @@
         1.3472912311553955,
         5.218085765838623
       ],
-      "ignite_time_s": 82.84913673531065,
+      "ignite_time_s": 100,
       "source_radius_m": 0.356,
       "source_temp_c": 967.8,
       "fuel_kg": 12.8,
       "smoke_yield": 0.75
+    },
+    {
+      "object_id": 50,
+      "category": "kitchen_grease",
+      "position": [
+        -9.556696891784668,
+        0.9045398235321045,
+        1.3791985511779785
+      ],
+      "ignite_time_s": 120.0,
+      "source_radius_m": 0.4,
+      "source_temp_c": 870.0,
+      "fuel_kg": 8.0,
+      "smoke_yield": 0.85
+    },
+    {
+      "object_id": 340,
+      "category": "chair",
+      "position": [
+        -9.69871,
+        -0.01366,
+        0.71256
+      ],
+      "ignite_time_s": 150.0,
+      "source_radius_m": 0.365,
+      "source_temp_c": 780.0,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5
+    },
+    {
+      "object_id": 339,
+      "category": "chair",
+      "position": [
+        -10.30877,
+        -0.01879,
+        0.70182
+      ],
+      "ignite_time_s": 200.0,
+      "source_radius_m": 0.37,
+      "source_temp_c": 760.0,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5
+    },
+    {
+      "object_id": 93,
+      "category": "chair",
+      "position": [
+        -14.23632,
+        0.5007,
+        0.98554
+      ],
+      "ignite_time_s": 240.0,
+      "source_radius_m": 0.4,
+      "source_temp_c": 800.0,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5
     }
   ],
   "propagation_rules": {

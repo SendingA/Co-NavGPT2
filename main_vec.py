@@ -54,17 +54,37 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
     map_process = Global_Map_Proc(args)
 
     # ------------------------------------------------------------------
-    # Fire-scene multi-modal sensor simulator (optional). Per-rank dump
-    # directory keeps multi-process runs from clobbering each other.
+    # Fire scene + sensor suite. Per-rank dump directory keeps
+    # multi-process runs from clobbering each other.
     # ------------------------------------------------------------------
+    fire_scene = None
+    if int(getattr(args, "fire_world", 0)):
+        from utils.fire_world.scene import FireScene
+        fire_scene = FireScene.from_args(args, config)
+        print(f"[fire_world] {fire_scene.describe()}")
+
     fire_suites = None
-    if getattr(args, "fire_sensors", 0):
+    if getattr(args, "fire_sensors", 0) or fire_scene is not None:
+        from utils.general_utils import get_camera_K
+        from utils.fire_sensors.config import VoxelSmokeConfig
+
+        rgb_source = "voxel" if fire_scene is not None else "beer_lambert"
+        thermal_source = "voxel" if fire_scene is not None else "hsv"
         fire_cfg = FireSensorConfig(
             max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
             hfov_deg=float(config.SIMULATOR.DEPTH_SENSOR.HFOV),
             smoke_density=float(args.smoke_density),
             save_npz=bool(args.fire_save_npz),
+            rgb_source=rgb_source,
+            thermal_source=thermal_source,
+            compound_rgb=bool(int(getattr(args, "fire_world_compound_rgb", 0))),
+            voxel=VoxelSmokeConfig(
+                n_steps=int(args.fire_world_n_steps),
+                smoke_k_ext=float(args.fire_world_smoke_k_ext),
+                render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),
+            ),
         )
+        K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
         fire_suites = [
             FireSensorSuite(
                 cfg=fire_cfg,
@@ -72,15 +92,13 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                     args.fire_dump_dir, f"rank_{rank}", f"agent_{i}"),
                 save_every=int(args.fire_save_every),
                 seed=args.seed + rank * 100 + i,
+                scene=fire_scene,
+                camera_K=K,
             )
             for i in range(num_agents)
         ]
 
-    fire_world_ctrl = None
-    if int(getattr(args, "fire_world", 0)):
-        from utils.fire_world.controller import FireWorldController
-        fire_world_ctrl = FireWorldController.from_args(args, config)
-        print(f"[fire_world] {fire_world_ctrl.describe()}")
+    from utils.fire_pipeline import step_fire_observation
 
     start_signal = send_queue.get()
 
@@ -108,76 +126,27 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             found_goal = False
             clean_diff = True
             # --------------------------------------------------------
-            # Fire-scene sensor simulator (optional)
+            # Fire-scene perception (FireSensorSuite handles voxel /
+            # Beer-Lambert / both internally).
             # --------------------------------------------------------
-            if fire_world_ctrl is not None:
-                from utils.smoke_perception import apply_clean_depth_and_thermal
-
-                max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
-                normalize = bool(getattr(
-                    config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
-                use_clean = bool(int(getattr(args, "depth_use_clean", 0)))
-                use_thermal = bool(int(getattr(args, "use_thermal_perception", 1)))
-                apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
+            if fire_suites is not None:
                 for i in range(num_agents):
                     a_state = env.sim.get_agent_state(i)
-                    sensors = fire_world_ctrl.render_for_agent(
-                        observations[i], a_state,
+                    sensors = step_fire_observation(
+                        observations=observations[i],
+                        suite=fire_suites[i],
+                        agent_state=a_state,
                         robot_step=int(getattr(agent[i], "l_step", 0)),
-                        max_depth_m=max_d,
-                        normalize_depth=normalize,
+                        config=config,
+                        args=args,
                     )
-                    if fire_suites is not None:
+                    if sensors is not None:
                         fire_suites[i].save_step(
                             sensors,
                             episode=count_episodes,
                             step=int(getattr(agent[i], "l_step", 0)),
                             agent_id=i,
                         )
-                    depth_raw = np.asarray(observations[i]['depth'])
-                    apply_clean_depth_and_thermal(
-                        observations[i],
-                        sensors,
-                        clean_depth_raw=depth_raw,
-                        use_clean_depth=use_clean,
-                        use_thermal=use_thermal,
-                        apply_smoky_rgb=apply_smoky_rgb,
-                        normalize_depth=normalize,
-                        max_depth_m=max_d,
-                    )
-
-            elif fire_suites is not None:
-                from utils.smoke_perception import apply_clean_depth_and_thermal
-
-                max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
-                normalize = bool(getattr(
-                    config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
-                use_clean = bool(int(getattr(args, "depth_use_clean", 0)))
-                use_thermal = bool(int(getattr(args, "use_thermal_perception", 0)))
-                apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
-                for i in range(num_agents):
-                    rgb_i = np.asarray(observations[i]['rgb'])
-                    depth_raw = np.asarray(observations[i]['depth'])
-                    depth_m = depth_raw * max_d if normalize else depth_raw
-
-                    sensors = fire_suites[i].process(rgb_i, depth_m, obs=observations[i])
-                    fire_suites[i].save_step(
-                        sensors,
-                        episode=count_episodes,
-                        step=agent[i].l_step if hasattr(agent[i], 'l_step') else 0,
-                        agent_id=i,
-                    )
-
-                    apply_clean_depth_and_thermal(
-                        observations[i],
-                        sensors,
-                        clean_depth_raw=depth_raw,
-                        use_clean_depth=use_clean,
-                        use_thermal=use_thermal,
-                        apply_smoky_rgb=apply_smoky_rgb,
-                        normalize_depth=normalize,
-                        max_depth_m=max_d,
-                    )
 
             for i in range(num_agents):
                 agent_state = env.sim.get_agent_state(i)

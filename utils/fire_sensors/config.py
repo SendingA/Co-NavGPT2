@@ -144,6 +144,41 @@ class ThermalConfig:
     color_blend: float = 0.0
 
 
+@dataclass
+class VoxelSmokeConfig:
+    """Voxel-driven smoky-RGB / Thermal camera (FireWorld observer).
+
+    These knobs control the ray-march that turns the
+    :class:`utils.fire_world.scene.FireScene` voxels into a per-step
+    RGB / Thermal image. They were previously attributes of
+    ``FireWorldRenderer`` but conceptually belong on the sensor
+    config: the renderer is just *how the camera looks at the world*.
+    """
+
+    n_steps: int = 16                  # ray-march samples per pixel
+    smoke_k_ext: float = 4.0           # extinction coefficient on smoke voxels (1/m)
+    smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
+    # Trilinear-friendly cutoff: propagation pins flame source voxels at
+    # ~0.6, but trilinear interpolation bleeds the boundary down to
+    # 0.05-0.30. The previous default 0.20 zeroed everything except the
+    # source core (rendered as one or two pixels). 0.04 keeps the flame
+    # envelope visible.
+    flame_threshold: float = 0.04
+    # Bumped from 4.0 so the flame still survives 1-2 m of dense smoke.
+    flame_emission_gain: float = 8.0
+    flame_k_ext: float = 0.8
+    flame_glow_ksize: int = 41
+    flame_glow_gain: float = 0.55
+    # Fraction of the smoke extinction the flame radiation ignores.
+    # 0 -> flame attenuates exactly like the scene RGB (will be eaten
+    # by smoke); 1 -> smoke is invisible to flame radiation. Realistic
+    # ~0.95: visible-band flame leaks through medium-thick smoke
+    # (Starr & Lattimer 2014, Fig. 7).
+    flame_smoke_passthrough: float = 0.95
+    thermal_color_blend: float = 0.0   # 0=grayscale, 1=full INFERNO
+    render_scale: float = 0.5          # fraction of camera resolution
+
+
 # ---------------------------------------------------------------------------
 # Top-level config (kept compatible with the original flat dataclass)
 # ---------------------------------------------------------------------------
@@ -169,6 +204,21 @@ class FireSensorConfig:
     radar: RadarConfig = field(default_factory=RadarConfig)
     thermal: ThermalConfig = field(default_factory=ThermalConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
+    voxel: VoxelSmokeConfig = field(default_factory=VoxelSmokeConfig)
+
+    # --- Sensor source selection ---------------------------------------
+    # Where the smoky RGB / thermal images come from. ``"beer_lambert"``
+    # uses the legacy density-driven SmokeRGBSensor / HSV thermal; ``"voxel"``
+    # asks the suite to plug in :class:`VoxelSmokeSensor`, which expects a
+    # :class:`utils.fire_world.scene.FireScene` to be bound. ``"auto"``
+    # picks ``voxel`` whenever a scene is bound and ``beer_lambert``
+    # otherwise.
+    rgb_source: str = "auto"           # "auto" | "beer_lambert" | "voxel"
+    thermal_source: str = "auto"       # same options
+    # When ``rgb_source="voxel"`` and the FireSensorSuite is active,
+    # stack a global Beer-Lambert pass on top of the voxel RGB to
+    # simulate "environment smoke outside the active fire room".
+    compound_rgb: bool = False
 
     # --- IO -------------------------------------------------------------
     save_npz: bool = False
