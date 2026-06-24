@@ -59,6 +59,22 @@ def parse_args():
                         "must already exist.")
     p.add_argument("--scenes-root", default="scenes")
     p.add_argument("--out-root", default="outputs/fire_world")
+
+    # ------------------------------------------------------------------
+    # Fire-time clock. By default the fire and smoke evolve in real
+    # wall-clock time, so they keep growing while the user thinks
+    # about the next keypress. Use --clock-mode=step for the legacy
+    # discrete-step mapping.
+    # ------------------------------------------------------------------
+    p.add_argument("--clock-mode", type=str, default="wallclock",
+                   choices=["wallclock", "step"], dest="clock_mode",
+                   help="wallclock: fire-time advances with real time. "
+                        "step: legacy mode where every --steps-per-unit "
+                        "keypresses advance the timeline by --seconds-per-unit.")
+    p.add_argument("--speedup", type=float, default=1.0, dest="speedup",
+                   help="wallclock-mode multiplier: fire-seconds per "
+                        "real-second. 1.0 = real-time; 5.0 = fire evolves "
+                        "5x faster than wall clock.")
     p.add_argument("--steps-per-unit", type=int, default=5)
     p.add_argument("--seconds-per-unit", type=float, default=2.0)
     p.add_argument("--smoke-k-ext", type=float, default=4.0)
@@ -156,6 +172,8 @@ def main():
         fire_world_plan_id=args.plan_id,
         fire_world_scenes_root=args.scenes_root,
         fire_world_out_root=args.out_root,
+        fire_clock_mode=args.clock_mode,
+        fire_speedup=args.speedup,
         fire_steps_per_unit=args.steps_per_unit,
         fire_seconds_per_unit=args.seconds_per_unit,
         fire_world_smoke_k_ext=args.smoke_k_ext,
@@ -243,6 +261,13 @@ def main():
     }
 
     print("Controls:  W/A/D move/turn  S stop  Q/E look down/up  R reset  ESC quit")
+    print("(fire/smoke evolve in real time even while you're idle - "
+          "press 'p' to pause, 'p' again to resume)")
+
+    # Render at ~20 FPS so the wall-clock fire-time visibly advances
+    # between keypresses. We poll cv2.waitKey instead of blocking so
+    # the renderer is decoupled from the agent's action cadence.
+    POLL_MS = 50
 
     try:
         while True:
@@ -282,11 +307,21 @@ def main():
             flame_frac = float(np.mean(sensors.get("thermal_flame_mask", np.zeros((1, 1)))))
 
             rgb_bgr = cv2.cvtColor(rgb_used, cv2.COLOR_RGB2BGR)
+            if scene.clock.mode == "wallclock":
+                paused_str = " PAUSED" if scene.clock._paused_at is not None else ""
+                clock_line = (
+                    f"clock: wallclock x{scene.clock.speedup:.2f} "
+                    f"(fire-s per real-s){paused_str}"
+                )
+            else:
+                clock_line = (
+                    f"clock: {scene.clock.steps_per_unit} steps/unit, "
+                    f"{scene.clock.seconds_per_unit:.2f} s/unit"
+                )
             label_lines = [
                 f"step={robot_step:>4d}  t_sim={t_sim:>6.1f}s  "
                 f"T_mean={T_mean:.2f}  flame={flame_frac:.1%}",
-                f"clock: {scene.clock.steps_per_unit} steps/unit, "
-                f"{scene.clock.seconds_per_unit:.2f} s/unit  "
+                f"{clock_line}  "
                 f"compound={'on' if int(args.compound_rgb) else 'off'}  "
                 f"clean_depth={'on' if int(args.depth_use_clean) else 'off'}  "
                 f"flame_passthrough={float(args.flame_smoke_passthrough):.2f}",
@@ -317,21 +352,43 @@ def main():
             if dashboard_window is not None and "dashboard" in sensors:
                 cv2.imshow(dashboard_window, sensors["dashboard"])
 
-            if out_dir is not None:
-                cv2.imwrite(str(out_dir / f"step_{robot_step:05d}.png"), grid)
-                if "dashboard" in sensors:
-                    cv2.imwrite(
-                        str(out_dir / f"step_{robot_step:05d}_dashboard.png"),
-                        sensors["dashboard"],
-                    )
+            # Frame dumps are tied to *agent steps*, not poll cycles, so
+            # writing happens once per env.step() at the bottom of the
+            # loop. This avoids 20 FPS of disk I/O when the operator
+            # is idle.
 
-            key = cv2.waitKey(0) & 0xFF
+            # Poll instead of blocking so the renderer keeps re-querying
+            # the FireScene at every ``POLL_MS`` regardless of whether
+            # the operator pressed a key. This is what makes wall-clock
+            # mode visible: even when the agent is idle, fire and smoke
+            # evolve continuously.
+            key = cv2.waitKey(POLL_MS) & 0xFF
+            if key == 0xFF:
+                # No key was pressed during the poll window. Re-render
+                # the next frame at the new fire-time without stepping
+                # env, so the agent stays put while the world ages.
+                continue
             if key == 27:  # ESC
                 break
             if key == ord("r"):
                 obs = env.reset()
                 robot_step = 0
+                # Restart the fire-time origin so the operator gets a
+                # fresh "t=0" plume to walk through.
+                scene.clock.start()
                 print("[teleop] reset; t_sim back to 0")
+                continue
+            if key == ord("p"):
+                # Toggle wall-clock pause so the operator can freeze
+                # the fire to study a frame at length without it
+                # consuming the whole timeline.
+                if scene.clock.mode == "wallclock":
+                    if scene.clock._paused_at is None:
+                        scene.clock.pause()
+                        print(f"[teleop] paused at t_sim={scene.t_sim():.1f}s")
+                    else:
+                        scene.clock.resume()
+                        print(f"[teleop] resumed at t_sim={scene.t_sim():.1f}s")
                 continue
             action_name = key_map.get(key)
             if action_name is None:
@@ -348,8 +405,20 @@ def main():
                 traceback.print_exc()
                 break
             robot_step += 1
+
+            # Frame dump on every actual agent step. Saved BEFORE the
+            # next render so the file's tag matches the agent's step
+            # counter at the time of the action.
+            if out_dir is not None:
+                cv2.imwrite(str(out_dir / f"step_{robot_step:05d}.png"), grid)
+                if "dashboard" in sensors:
+                    cv2.imwrite(
+                        str(out_dir / f"step_{robot_step:05d}_dashboard.png"),
+                        sensors["dashboard"],
+                    )
+
             print(f"  step={robot_step:>4d}  action={action_name:<12s}  "
-                  f"t_sim={scene.t_sim_for_step(robot_step):>6.1f}s")
+                  f"t_sim={scene.t_sim(robot_step):>6.1f}s")
 
     except KeyboardInterrupt:
         pass

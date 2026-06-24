@@ -157,13 +157,31 @@ def get_args():
                         default='outputs/fire_world',
                         help='where to find timeline.npz '
                              '(out_root/<scene>/<plan_id>/timeline.npz)')
+    parser.add_argument('--fire_clock_mode', type=str, default='wallclock',
+                        choices=['wallclock', 'step'],
+                        help='How fire-time advances. wallclock (default): '
+                             'fire and smoke evolve continuously with real '
+                             'time, scaled by --fire_speedup, independent '
+                             'of how many env.step() the agent has taken. '
+                             'step: legacy mode where every '
+                             '--fire_steps_per_unit env.step() advances the '
+                             'timeline by --fire_seconds_per_unit, useful '
+                             'for reproducible benchmarks.')
+    parser.add_argument('--fire_speedup', type=float, default=1.0,
+                        help='Wallclock-mode multiplier: fire-seconds per '
+                             'real-second. 1.0 = real-time; 5.0 = the fire '
+                             'evolves 5x faster than wall clock so a 60 s '
+                             'episode covers 5 minutes of fire-time. '
+                             'Ignored when --fire_clock_mode=step.')
     parser.add_argument('--fire_steps_per_unit', type=int, default=5,
-                        help='robot steps that elapse for every 1 unit of '
-                             'fire-time (larger = slower fire vs the agent)')
+                        help='step-mode: robot steps that elapse for every '
+                             '1 unit of fire-time (larger = slower fire vs '
+                             'the agent). Ignored in wallclock mode.')
     parser.add_argument('--fire_seconds_per_unit', type=float, default=2.0,
-                        help='timeline seconds consumed per fire-time unit. '
-                             'With defaults 5/2.0, 5 robot steps advance '
-                             'the simulated fire by 2 s.')
+                        help='step-mode: timeline seconds consumed per '
+                             'fire-time unit. With defaults 5/2.0, 5 robot '
+                             'steps advance the simulated fire by 2 s. '
+                             'Ignored in wallclock mode.')
     parser.add_argument('--fire_world_smoke_k_ext', type=float, default=4.0,
                         help='extinction coefficient multiplier on the '
                              'smoke voxel field (per metre)')

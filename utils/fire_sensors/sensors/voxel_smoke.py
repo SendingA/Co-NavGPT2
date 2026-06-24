@@ -101,7 +101,10 @@ class VoxelSmokeSensor(BaseSensor):
 
         scene = self.scene
         cam_pos, R = scene.camera_pose(agent_state)
-        t_sim = scene.t_sim_for_step(int(robot_step))
+        # Use the unified ``t_sim()`` API so the renderer reads the
+        # wallclock when the scene was built with mode="wallclock"
+        # (default). Step mode falls back to the legacy mapping.
+        t_sim = scene.t_sim(int(robot_step))
         flame_field, smoke_field, temp_field = scene.query(t_sim)
 
         out = volumetric_composite(

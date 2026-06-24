@@ -154,6 +154,10 @@ def main(args, send_queue, receive_queue):
                 n_steps=int(args.fire_world_n_steps),
                 smoke_k_ext=float(args.fire_world_smoke_k_ext),
                 render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),
+                # Match the keyboard teleop window so flame regions in
+                # the dashboard always render as warm INFERNO instead
+                # of a near-grey blob, regardless of exposure.
+                thermal_color_blend=1.0,
             ),
         )
         K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
@@ -194,6 +198,12 @@ def main(args, send_queue, receive_queue):
         observations = env.reset()
         actions = []
         map_process.reset()
+
+        # Reset the fire-time origin so each episode starts at t_sim=base_t0.
+        # In wallclock mode this captures "now" so the timeline advances
+        # continuously while the agent navigates; in step mode it's a no-op.
+        if fire_scene is not None:
+            fire_scene.clock.start()
         
         agent_state = env.sim.get_agent_state(0)
         for i in range(num_agents):

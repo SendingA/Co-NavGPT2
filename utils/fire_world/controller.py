@@ -145,7 +145,10 @@ class FireWorldController:
             depth_m = depth_m * float(max_depth_m)
 
         cam_pos, R = self.scene.camera_pose(agent_state)
-        t_sim = self.scene.t_sim_for_step(robot_step)
+        # Use the unified ``t_sim()`` API so wall-clock mode kicks in
+        # automatically when the scene is configured for it. Step mode
+        # falls back to the legacy step->seconds mapping.
+        t_sim = self.scene.t_sim(robot_step)
         flame_field, smoke_field, temp_field = self.scene.query(t_sim)
 
         out = volumetric_composite(

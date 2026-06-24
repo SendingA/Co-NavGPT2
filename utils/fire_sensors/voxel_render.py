@@ -161,6 +161,21 @@ def compose_thermal(
     ambient_c: float,
     color_blend: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
+    """Compose a thermal IR image from voxel temperature + flame masks.
+
+    The visualisation has three contributors stacked in temperature
+    space:
+
+    * a baseline "scene structure" field driven by RGB luma so walls,
+      floors, doors are still visible (FLIR auto-gain mimics this);
+    * the per-ray maximum voxel temperature from the ray-march;
+    * the per-ray flame intensity, which is added as a hot bias so
+      flame pixels saturate near the top of the colormap even when
+      ``temp_max`` is partially attenuated by sampling.
+
+    The final image is auto-stretched into 8-bit and optionally blended
+    with INFERNO so flame regions look unmistakably hot.
+    """
     try:
         import cv2
     except Exception:  # pragma: no cover
@@ -169,11 +184,23 @@ def compose_thermal(
         luma = cv2.cvtColor(rgb_clean, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
     else:
         luma = rgb_clean.mean(axis=-1).astype(np.float32) / 255.0
-    scene_field = (luma - 0.5) * 35.0
-    temperature = float(ambient_c) + scene_field + np.maximum(temp_max - float(ambient_c), 0.0)
+    scene_field = (luma - 0.5) * 35.0  # ~ +/-17 C around ambient
 
+    # Voxel-driven contributions.
+    voxel_excess = np.maximum(temp_max - float(ambient_c), 0.0)
+    flame_excess = np.clip(flame_along, 0.0, 1.0) * 600.0
+    # Use the max so a flame pixel never gets dimmed by a cold sample
+    # in front of it. ``flame_along`` is the per-ray flame intensity
+    # accumulator, which is non-zero whenever any voxel along the ray
+    # was burning - exactly the locus we want to highlight in IR.
+    excess = np.maximum(voxel_excess, flame_excess)
+    temperature = float(ambient_c) + scene_field + excess
+
+    # Auto-stretch with a hard floor at flame_c=600 so the flame band
+    # always reaches near-saturation, regardless of how much of the
+    # frame is on fire.
     t_lo = float(np.percentile(temperature, 2))
-    t_hi = float(max(np.percentile(temperature, 99.5), 600.0 * 0.6))
+    t_hi = float(max(np.percentile(temperature, 99.5), 600.0))
     norm = np.clip((temperature - t_lo) / max(t_hi - t_lo, 1e-3), 0.0, 1.0)
     norm = np.power(norm, 0.7)
     gray_u8 = (norm * 255).astype(np.uint8)

@@ -235,7 +235,10 @@ class FireSensorSuite:
         else:
             thermal_out = self.thermal_sensor.process(rgb, depth_m)
 
-        depth_out = self.depth_sensor.process(rgb, depth_m)
+        depth_out = self.depth_sensor.process(
+            rgb, depth_m,
+            transmittance=(voxel_out["transmittance"] if voxel_out is not None else None),
+        )
         # Both radar and lidar consume the **clean** depth/rgb because:
         #  - mmWave is largely unaffected by smoke (paper Table 3),
         #  - LIDAR's smoke degradation is modeled inside its own module.

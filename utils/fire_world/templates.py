@@ -187,20 +187,38 @@ def _default_propagation_rules(intensity: str) -> Dict:
     # These values feed the stage-3 propagation engine.
     base = {
         "flammable_threshold": 0.4,    # min fuel level a voxel needs to ignite
-        "ignition_temp_c": 350.0,      # T at which a fuel voxel ignites
-        "spread_speed_m_per_s": 0.04,  # surface flame spread along fuel
+        # Lowered from the literature autoignition value (350 C) so the
+        # discrete voxel grid actually reaches it. Real fires preheat
+        # neighbours to far below autoignition before piloted ignition;
+        # at 200 C the radiative_gain heat path can sustainably push
+        # adjacent furniture into the reaction loop within 30-60 s.
+        "ignition_temp_c": 200.0,
+        # Surface flame spread along fuel. Bumped from 0.04 to 0.18 so
+        # the fire visibly grows on a 0.15 m grid: at 0.04 m/s it took
+        # >5 minutes to cross a single voxel, which is why the original
+        # benchmark looked like static fixed sources.
+        "spread_speed_m_per_s": 0.18,
         "ceiling_jet_speed_m_per_s": 0.30,
         "buoyancy_v_m_per_s": 0.5,     # vertical plume velocity
         "thermal_diffusivity": 0.05,   # alpha used in heat diffusion
         "ambient_temp_c": 25.0,
+        # Radiative pre-heating that lets heat jump ~0.6 m to the next
+        # piece of furniture in the same room. Scales linearly with
+        # local flame intensity. 200 C/s on a fully-developed flame
+        # voxel inside the 4-cell radiative kernel means a fuel voxel
+        # 0.6 m away crosses ignition_temp in ~30 s.
+        "radiative_gain_c": 250.0,
+        "radiative_radius_cells": 4,
     }
     if intensity == "light":
         base["spread_speed_m_per_s"] *= 0.7
         base["buoyancy_v_m_per_s"] *= 0.8
+        base["radiative_gain_c"] *= 0.6
     elif intensity == "severe":
         base["spread_speed_m_per_s"] *= 1.5
         base["ceiling_jet_speed_m_per_s"] *= 1.4
         base["buoyancy_v_m_per_s"] *= 1.3
+        base["radiative_gain_c"] *= 1.5
     return base
 
 

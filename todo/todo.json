@@ -161,6 +161,46 @@
       "acceptance": "docs/fire_world_pipeline.md walks through the 6 pipeline stages with implementation details and a self-contained methodology section that can be copied into a paper.",
       "notes": "Stage-by-stage write-up: (1) scene_scan with the sRGB OETF decode and per-face instance grouping, (2) planner templates + intensity presets + plan_id hashing, (3) reaction-diffusion-buoyancy-ceiling-jet voxel propagation, (4) FireScene runtime facade and the steps-per-unit / seconds-per-unit clock semantics, (5) FireSensorSuite voxel ray-march with dual-T flame channel + Beer-Lambert depth/radar/lidar/thermal, (6) integration into main.py / main_vec.py / keyboard_teleop_fire.py. Bottom half is a paper-ready methodology section with citations to Starr & Lattimer 2014 and a recommended ablation table. Appendix A is a file map; Appendix B is the minimal reproduction recipe.",
       "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T017",
+      "title": "Make voxel smoke actually fill the scene (was effectively invisible)",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T016"],
+      "acceptance": "After propagation, air-voxel smoke at eye height (1-1.7 m) reaches >5% coverage, persists through the full episode duration, and has plan smoke_yield as a controlling knob.",
+      "notes": "Diagnosed: smoke max=0.998 in the OLD timeline but mean=0.0003 (only ~100 voxels above 0.1 in 310k), all confined to ceiling 1.9-2.6m. Three root causes: (1) no smoke self-diffusion, so the plume was locked to the hot mask and pinned under the ceiling; (2) reaction-step smoke gain hard-coded at 0.5*burn_rate, divorced from the plan's smoke_yield; (3) sustained-source injection rate hard-coded at 0.10/s regardless of smoke_yield; plus a hidden mass leak: every transport substep cleared smoke in solid voxels, draining the room over ~30 s once the source stopped.\n\nFixes in utils/fire_world/propagation.py:\n  * Added smoke self-diffusion (smoke_alpha=0.02 m^2/s) with CFL substep (smoke_cfl=0.08); solid-zero pulled OUT of the substep loop entirely so transport never leaks mass into walls.\n  * smoke_buoy_frac=0.5 so smoke does not pin to the ceiling on the first step.\n  * smoke_reaction_gain=4.0 (was 0.5) for reaction-driven production.\n  * smoke_source_gain=4.0 multiplies the per-source rate by smoke_yield -> kitchen 0.85*4=3.4/s, bed 0.80*4=3.2/s. plan smoke_yield now actually drives room density.\n  * smoke_decay_per_s=0.0008 (was 0.005) -> ~860 s half-life so a 900 s episode keeps a visible plume.\n  * add_source(...) signature now carries smoke_yield through the source registry.\n  * Removed solid-zero from the buoyancy and ceiling-jet steps - the renderer never samples through solids, so trapping smoke in walls is mass-conserved and harmless visually, but zeroing it caused the silent ~30 s leak.\n\nNew rule keys (all fall back to defaults so older plans still work):\n  smoke_diffusivity, smoke_cfl, smoke_buoy_fraction, smoke_reaction_gain, smoke_source_gain, smoke_decay_per_s.\n\nVerified: re-baked timeline.npz; air-voxel smoke at t=240s mean=0.078 (>200x the old 0.0003), 27% of air voxels above 0.05; plume persists to t=900s (68% air voxels >0.05). Eye-height layers (y=1.0-1.7 m) now have smoke max ~1.0 throughout 200-500 s.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T018",
+      "title": "Per-pixel depth/thermal in clean rooms; main.py and teleop dashboards consistent; flame spreads farther",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T017"],
+      "acceptance": "Depth in clean rooms is clean (mean err <0.05 m, 0% dropout); thermal pops on flame pixels (BGR diff >50); main.py uses thermal_color_blend=1.0 to match teleop; flame spread covers 2-3x more voxels per ignition.",
+      "notes": "Four problems fixed:\n\n1. SmokeDepthSensor was driven by a single global smoke_density, so a clean room degraded identically to a smoky one. Refactored process() to accept a per-pixel transmittance from the voxel renderer; FireSensorSuite now passes voxel_out['transmittance'] in. local_density = clip(1 - T, 0, 1) drives noise sigma, dropout probability, and Jin's visibility cutoff per pixel. Verified: T=1.0 region has mean|err|=0.02 m & 0% dropout; T=0.1 region has 2.4 m err and 46% dropout.\n\n2. Thermal panel hardly showed flame because compose_thermal didn't read flame_along (only temp_max), and the percentile auto-stretch let flame_c=600 dilute against scene luma. Added a 600 C floor on t_hi and an explicit flame_excess = clip(flame_along, 0, 1) * 600 contribution that drives flame pixels to the top of the colormap. Verified: flame patch BGR=(117,239,241) vs bg=(4,0,0) under INFERNO blend.\n\n3. main.py and main_vec.py now construct VoxelSmokeConfig with thermal_color_blend=1.0, matching keyboard_teleop_fire's default, so the agent's thermal observation is the same colorized image users see in the teleop dashboard. (compound_rgb=0 is still the default, which together with T017's voxel-smoke fixes means main.py no longer needs the global Beer-Lambert pass to produce visible smoke.)\n\n4. Flame spread was crawling: spread_speed=0.04 m/s + ignition_temp=350 C + spread mask requiring fuel>0 meant flame couldn't cross the air gap between disjoint pieces of furniture. Three changes in propagation.py / templates.py: spread_speed -> 0.18 m/s default; ignition_temp -> 200 C; new radiative_gain_c (250 C/s default, scaled by intensity) with a 4-cell box-blur kernel that pre-heats fuel within ~0.6 m of any flame voxel (NFPA 921 radiative pre-heating); spread_mask now is `(fuel>0) | (temp>t_ignite)` so flame can sustain itself while crossing pre-heated air. New rule keys (radiative_gain_c, radiative_radius_cells) added to plan.json for 83679a07b632 and the default rule generator. Verified on the existing plan: flame voxel count grows from 619 (t=0, source-only) to 1662 (t=240s); intense flame (>0.3) grows from 251 to 1015 voxels (4x).",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T019",
+      "title": "Fire-time independent of robot steps: add wallclock mode + speedup",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T018"],
+      "acceptance": "main.py, main_vec.py and keyboard_teleop_fire.py all advance fire-time with real wall clock by default; --fire_speedup scales fire-seconds per real-second; legacy step mode still reachable via --fire_clock_mode=step.",
+      "notes": "Refactored FireClock to support two modes:\n  * mode='wallclock' (default): uses time.monotonic() captured at clock.start(), returns base_t0_s + (now - origin) * speedup. Robot_step argument is ignored.\n  * mode='step': legacy mapping t_sim = floor(N / steps_per_unit) * seconds_per_unit, used when reproducible benchmarks need bit-exact alignment to env.step() count.\n\nFireScene.from_args reads new args (fire_clock_mode, fire_speedup) and calls clock.start() on construction. main.py and main_vec.py call fire_scene.clock.start() on every env.reset() so each episode starts at the same fire-time origin. keyboard_teleop_fire.py adds --clock-mode and --speedup flags, restarts the clock on R, and shows the active clock policy in the HUD overlay.\n\nVoxelSmokeSensor.process and FireWorldController.render_for_agent now call scene.t_sim(robot_step) (the unified API) instead of the old scene.t_sim_for_step(robot_step), so wallclock mode is honored automatically; step mode still works because t_sim(robot_step) routes to t_sim_for_step internally when mode='step'.\n\nAdditional FireClock features used by future eval harnesses: pause()/resume() pair so an LLM-bound run can freeze fire-time while waiting for the API.\n\nVerified: wallclock test (speedup=2 over 0.2s wall -> 0.4s fire-time, monotonic, ignores robot_step), pause/resume freezes t_sim within 0.02s, step-mode legacy test (50 steps -> 20.0s) passes. The existing scripts/test_fire_world_step_clock.py also still works against the real timeline.",
+      "last_updated": "2026-06-21T00:00:00Z"
+    },
+    {
+      "id": "T020",
+      "title": "Teleop: poll instead of block on cv2.waitKey so wallclock fire keeps evolving while the operator is idle",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T019"],
+      "acceptance": "When the user does not press any key, t_sim continues to increase in the HUD and flame/smoke continue evolving. Pressing 'p' toggles a freeze.",
+      "notes": "Root cause: keyboard_teleop_fire.py used cv2.waitKey(0), which blocks the loop until a key is pressed. While blocked, the scene was never re-queried, so even though FireClock advanced internally the renderer never asked it for a fresh field. Fix: poll cv2.waitKey(POLL_MS=50) so the renderer re-queries the FireScene at ~20 FPS regardless of input. Frame dumps are now anchored to actual agent steps (not poll cycles) so we don't flood disk with idle frames. Added 'p' as a toggle that calls clock.pause()/resume(), useful when the operator wants to study a single frame without burning timeline. The HUD now shows 'PAUSED' when the wall clock is frozen.",
+      "last_updated": "2026-06-21T00:00:00Z"
     }
   ]
 }

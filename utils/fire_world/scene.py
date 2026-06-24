@@ -8,30 +8,34 @@ After this refactor, the responsibility split is::
 This module owns the world side. ``FireScene`` aggregates:
 
 * a :class:`FireWorld` voxel timeline (flame/smoke/temperature),
-* a :class:`FireClock` mapping robot steps to fire-time seconds, and
+* a :class:`FireClock` mapping wall-clock time (or robot steps) to
+  FireWorld timeline seconds, and
 * the Habitat agent-state -> ``(cam_pos, R_cam2world)`` conversion.
 
 Sensors take a ``FireScene`` and ask it for ``query(t_sim)`` plus
 ``camera_pose(agent_state)``; they don't need any other knowledge of
-how the timeline is laid out or how robot steps translate to seconds.
+how the timeline is laid out or how time flows.
 
 Time semantics
 --------------
-Wall-clock time is meaningless in a Habitat simulation. Two integers
-fix the mapping::
+Two clock modes are supported:
 
-    steps_per_unit       e.g. 5 - robot steps that elapse for 1 fire-time unit
-    seconds_per_unit     e.g. 2 s - timeline seconds consumed per unit
-
-So if the agent has taken ``N`` env.step() calls::
-
-    t_sim = (N // steps_per_unit) * seconds_per_unit  +  base_t0_s
+* ``mode="wallclock"`` (default) - time advances with real wall-clock,
+  scaled by ``speedup`` (fire-seconds per real-second). Fire and
+  smoke evolve continuously regardless of how slowly or quickly the
+  agent decides to move. Call ``clock.start()`` once per episode to
+  reset the origin; ``clock.pause()`` / ``clock.resume()`` are
+  available for evaluation pauses (e.g. while waiting for an LLM).
+* ``mode="step"`` - the legacy mapping ``t_sim = floor(N / s) * tau``
+  used when reproducibility tied to discrete step counts is required
+  (e.g. for benchmarking).
 
 Beyond the last frame the timeline clamps to its burnt-out state.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Tuple
 
@@ -51,12 +55,82 @@ except Exception:  # pragma: no cover - the project ships habitat-sim
 # ---------------------------------------------------------------------------
 @dataclass
 class FireClock:
-    """Translates per-robot-step counters into FireWorld timeline seconds."""
+    """Translates real time (or robot steps) into FireWorld timeline seconds.
 
+    Wall-clock mode is the default: every call to :meth:`t_sim` returns
+    ``base_t0_s + (now - origin) * speedup``, where ``origin`` is
+    captured by :meth:`start` (called automatically on the first
+    :meth:`t_sim` call if not done explicitly). ``speedup`` is
+    fire-seconds per real-second; 1.0 means real-time, 5.0 means the
+    fire evolves five times faster than wall clock.
+
+    Step mode is kept for back-compat / reproducible benchmarking: the
+    timeline advances ``seconds_per_unit`` whenever ``robot_step``
+    crosses another ``steps_per_unit`` boundary, and is independent of
+    wall clock entirely.
+    """
+
+    # ----------- mode -----------
+    mode: str = "wallclock"        # "wallclock" | "step"
+
+    # ----------- wall-clock parameters -----------
+    speedup: float = 1.0           # fire-seconds per real-second
+
+    # ----------- step parameters -----------
     steps_per_unit: int = 5
     seconds_per_unit: float = 2.0
+
+    # ----------- timeline origin -----------
     base_t0_s: float = 0.0
 
+    # ----------- internal wall-clock state (do not set directly) -----------
+    _wall_origin: Optional[float] = field(default=None, repr=False)
+    _paused_at: Optional[float] = field(default=None, repr=False)
+    _pause_offset: float = field(default=0.0, repr=False)
+
+    # ------------------------------------------------------------------
+    def start(self) -> None:
+        """Reset the wall-clock origin to 'now'.
+
+        Idempotent and safe to call from anywhere; e.g. ``main.py``
+        invokes it once per Habitat episode reset so each episode
+        starts at the same fire-time. No-op in step mode.
+        """
+        if self.mode == "wallclock":
+            self._wall_origin = time.monotonic()
+            self._paused_at = None
+            self._pause_offset = 0.0
+
+    def pause(self) -> None:
+        """Pause the wall clock so subsequent ``t_sim()`` calls keep
+        returning the same value until :meth:`resume` is called."""
+        if self.mode == "wallclock" and self._paused_at is None:
+            self._paused_at = time.monotonic()
+
+    def resume(self) -> None:
+        if self.mode == "wallclock" and self._paused_at is not None:
+            self._pause_offset += time.monotonic() - self._paused_at
+            self._paused_at = None
+
+    # ------------------------------------------------------------------
+    def t_sim(self, robot_step: int = 0) -> float:
+        """Return the current fire-time in seconds.
+
+        ``robot_step`` is ignored in wallclock mode and only consulted
+        in step mode. The argument is kept so existing call sites that
+        do ``clock.t_sim(robot_step=k)`` keep working in both modes.
+        """
+        if self.mode == "step":
+            return self.t_sim_for_step(robot_step)
+        # wallclock
+        if self._wall_origin is None:
+            self.start()
+        now = self._paused_at if self._paused_at is not None else time.monotonic()
+        elapsed = max(0.0, now - float(self._wall_origin) - self._pause_offset)
+        return float(self.base_t0_s + elapsed * float(self.speedup))
+
+    # Legacy alias kept so back-compat callers (e.g. demo scripts and
+    # the FireWorldController shim) keep working.
     def t_sim_for_step(self, robot_step: int) -> float:
         units = max(0, int(robot_step)) // max(1, int(self.steps_per_unit))
         return float(self.base_t0_s + units * self.seconds_per_unit)
@@ -139,11 +213,17 @@ class FireScene:
             )
 
         fw = FireWorld.load(scene_short, args.fire_world_plan_id, out_root=out_root)
+        mode = str(getattr(args, "fire_clock_mode", "wallclock")).lower()
         clock = FireClock(
-            steps_per_unit=int(args.fire_steps_per_unit),
-            seconds_per_unit=float(args.fire_seconds_per_unit),
+            mode=mode,
+            speedup=float(getattr(args, "fire_speedup", 1.0)),
+            steps_per_unit=int(getattr(args, "fire_steps_per_unit", 5)),
+            seconds_per_unit=float(getattr(args, "fire_seconds_per_unit", 2.0)),
             base_t0_s=float(fw.times[0]),
         )
+        # Wallclock mode: lock t=0 to the moment the FireScene is built
+        # (one per episode reset). Step mode: this is a no-op.
+        clock.start()
         return cls(fw=fw, clock=clock)
 
     # ------------------------------------------------------------------
@@ -179,6 +259,12 @@ class FireScene:
     # ------------------------------------------------------------------
     # Time + pose helpers used by sensors
     # ------------------------------------------------------------------
+    def t_sim(self, robot_step: int = 0) -> float:
+        """Current fire-time in seconds. In wallclock mode (default) the
+        argument is ignored. Kept for back-compat with the step API."""
+        return self.clock.t_sim(robot_step)
+
+    # Back-compat alias used by older code paths.
     def t_sim_for_step(self, robot_step: int) -> float:
         return self.clock.t_sim_for_step(robot_step)
 
@@ -187,11 +273,16 @@ class FireScene:
 
     # ------------------------------------------------------------------
     def describe(self) -> str:
+        if self.clock.mode == "wallclock":
+            tail = (f"clock: wallclock x{self.clock.speedup:.2f} "
+                    f"(fire-s per real-s)")
+        else:
+            tail = (f"clock: {self.clock.steps_per_unit} steps/unit, "
+                    f"{self.clock.seconds_per_unit:.2f} s/unit")
         return (
             f"FireScene(scene={self.fw.scene_id} "
             f"plan={self.fw.plan_id} "
             f"timeline=[{float(self.fw.times[0]):.0f}, "
             f"{float(self.fw.times[-1]):.0f}]s @ {len(self.fw.times)} frames; "
-            f"clock: {self.clock.steps_per_unit} steps/unit, "
-            f"{self.clock.seconds_per_unit:.2f} s/unit)"
+            f"{tail})"
         )
