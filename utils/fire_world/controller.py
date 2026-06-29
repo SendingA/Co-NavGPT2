@@ -165,6 +165,7 @@ class FireWorldController:
             ambient_c=self.scene.ambient_c,
             camera_K=self.camera_K,
             params=self._params,
+            t_sim=float(t_sim),
         )
         return {
             "rgb": rgb,

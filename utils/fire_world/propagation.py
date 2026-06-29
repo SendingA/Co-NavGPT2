@@ -68,6 +68,80 @@ def _laplacian_3d(field: np.ndarray) -> np.ndarray:
     return out
 
 
+def _box_sum_axis(a: np.ndarray, k: int, axis: int) -> np.ndarray:
+    """Cumulative-sum box SUM of width ``2*k+1`` along ``axis``.
+
+    Unlike :func:`_box_blur_axis` this does NOT divide by the window
+    size, so each input voxel contributes its full value to every
+    output voxel within ``k`` cells. Used for radiative heating where
+    each flame voxel acts as an independent radiation source and the
+    receiver accumulates contributions from all flames within range.
+    """
+    if k <= 0:
+        return a.copy()
+    pad_widths = [(0, 0)] * a.ndim
+    pad_widths[axis] = (k, k)
+    pad = np.pad(a, pad_widths, mode="constant")
+    csum = np.cumsum(pad, axis=axis)
+    sl_hi = [slice(None)] * a.ndim
+    sl_lo = [slice(None)] * a.ndim
+    sl_hi[axis] = slice(2 * k, None)
+    sl_lo[axis] = slice(0, -2 * k)
+    return csum[tuple(sl_hi)] - csum[tuple(sl_lo)]
+
+
+def _box_sum_3d(a: np.ndarray, k: int) -> np.ndarray:
+    """Separable 3D box sum (no normalisation)."""
+    if k <= 0:
+        return a.copy()
+    out = _box_sum_axis(a, k, 0)
+    out = _box_sum_axis(out, k, 1)
+    out = _box_sum_axis(out, k, 2)
+    return out
+
+
+def _box_blur_axis(a: np.ndarray, k: int, axis: int) -> np.ndarray:
+    """Cumulative-sum box blur of width ``2*k+1`` along ``axis``."""
+    if k <= 0:
+        return a
+    pad_widths = [(0, 0)] * a.ndim
+    pad_widths[axis] = (k, k)
+    pad = np.pad(a, pad_widths, mode="edge")
+    csum = np.cumsum(pad, axis=axis)
+    sl_hi = [slice(None)] * a.ndim
+    sl_lo = [slice(None)] * a.ndim
+    sl_hi[axis] = slice(2 * k, None)
+    sl_lo[axis] = slice(0, -2 * k)
+    blurred = csum[tuple(sl_hi)] - csum[tuple(sl_lo)]
+    return blurred / float(2 * k + 1)
+
+
+def _box_blur_3d(a: np.ndarray, k: int) -> np.ndarray:
+    """Separable 3D box blur. Used for fuel-abundance and radiative gain."""
+    if k <= 0:
+        return a
+    out = _box_blur_axis(a, k, 0)
+    out = _box_blur_axis(out, k, 1)
+    out = _box_blur_axis(out, k, 2)
+    return out
+
+
+def _gaussian_blur_3d(a: np.ndarray, sigma_cells: float) -> np.ndarray:
+    """Approximate isotropic 3D Gaussian via 3 stacked box blurs.
+
+    Three box blurs of width ``2k+1`` approximate a Gaussian with
+    sigma ~= k / sqrt(3). We pick k from the requested sigma. This is
+    O(N) per axis and avoids the SciPy dependency.
+    """
+    if sigma_cells <= 0.0:
+        return a
+    k = max(1, int(round(float(sigma_cells) * np.sqrt(3.0))))
+    out = a
+    for _ in range(3):
+        out = _box_blur_3d(out, k)
+    return out
+
+
 def _shift_up_y(field: np.ndarray, frac: float) -> np.ndarray:
     """Linear shift of a (Nx, Ny, Nz) field upward by ``frac`` cell.
 
@@ -149,6 +223,88 @@ class FirePropagation:
         self.radiative_gain_c = float(rules.get("radiative_gain_c", 200.0))
         self.radiative_radius_cells = int(rules.get("radiative_radius_cells", 4))
 
+        # ---- Structural transport ----------------------------------------
+        # Walls and ceilings remain zero-flux thermal barriers. Floors are
+        # "semi-transparent" - heat does conduct vertically across them
+        # but multiplied by ``floor_thermal_attenuation``. This lets a
+        # fire on one storey slowly raise the ceiling/floor assembly's
+        # temperature on the storey below, matching the behaviour
+        # documented in NFPA 921 §5.10 (fire-rated assemblies still
+        # transmit heat over minutes).
+        self.floor_thermal_attenuation = float(
+            rules.get("floor_thermal_attenuation", 0.20)
+        )
+        # Should the flame field also leak across floors? Default off
+        # because real flames don't physically tunnel through structural
+        # decking; the heat-only path is enough to ignite fuel below.
+        self.flame_through_floors = bool(
+            int(rules.get("flame_through_floors", 0))
+        )
+
+        # ---- Fuel-abundance-driven flame growth -------------------------
+        # Local fuel abundance modulates burn rate and the upper cap on
+        # flame intensity, so a corner of the room with lots of cushions
+        # / blankets / curtains burns brighter than an isolated chair.
+        self.fuel_neighborhood_cells = int(
+            rules.get("fuel_neighborhood_cells", 2)
+        )
+        self.fuel_abundance_min = float(rules.get("fuel_abundance_min", 0.5))
+        self.fuel_abundance_max = float(rules.get("fuel_abundance_max", 2.5))
+
+        # ---- Spread kernel: 'laplacian' | 'gaussian' --------------------
+        # The legacy laplacian gives 1-voxel-radius transport per step;
+        # gaussian uses a 3-iteration separable box-blur approximation
+        # whose sigma is set by ``spread_speed_m_per_s * dt`` (in voxel
+        # units). Gaussian spreads more isotropically and is closer to
+        # the smoothed plume profiles seen in NIST FDS validation tests.
+        self.spread_kernel = str(rules.get("spread_kernel", "laplacian")).lower()
+
+        # ---- Sustained / inextinguishable sources ----------------------
+        # When 1, the per-source sustain_s timer is ignored and each
+        # source keeps replenishing its own solid fuel every step, so
+        # a single point ignition can drive a room-filling fire over
+        # the full episode. Set 0 to model a finite fuel package that
+        # eventually burns itself out.
+        self.inextinguishable_sources = bool(
+            int(rules.get("inextinguishable_sources", 1))
+        )
+
+        # ---- Floor-as-fuel + flame column height -----------------------
+        # When the temperature on a floor voxel exceeds
+        # ``floor_ignite_temp_c`` we deposit a synthetic fuel layer
+        # there of magnitude ``floor_fuel_value``. This is how the
+        # carpet / hardwood ignites and lets fire crawl across the
+        # floor between two pieces of furniture, instead of always
+        # needing the agent to be in line of sight of a source.
+        self.floor_ignite_temp_c = float(rules.get("floor_ignite_temp_c", 250.0))
+        self.floor_fuel_value = float(rules.get("floor_fuel_value", 0.7))
+        # Direct contact ignition: any floor voxel within
+        # ``floor_ignite_radius_cells`` of an existing flame voxel
+        # whose intensity exceeds ``floor_flame_contact_thresh`` gets
+        # the same synthetic fuel deposit. This bypasses heat
+        # diffusion's smoothing (which kills the local thermal spike
+        # in a single step) and matches the physical observation that
+        # flames touching the floor ignite the carpet directly.
+        self.floor_ignite_radius_cells = int(
+            rules.get("floor_ignite_radius_cells", 2)
+        )
+        self.floor_flame_contact_thresh = float(
+            rules.get("floor_flame_contact_thresh", 0.2)
+        )
+        # Range of per-voxel seed flame magnitudes used to break the
+        # flat-sheet look on the ignited floor. Each new floor voxel
+        # gets a uniform draw in this range, scaled by floor_fuel_value.
+        self.floor_seed_flame_min = float(rules.get("floor_seed_flame_min", 0.1))
+        self.floor_seed_flame_max = float(rules.get("floor_seed_flame_max", 0.65))
+        # Flame column height: every active flame voxel projects an
+        # upward flame plume of up to ``flame_column_cells`` voxels
+        # (default 6 cells ~= 0.9 m on a 0.15 m grid). The plume
+        # intensity decays linearly with height so the top of the
+        # flame is wispier than the base. This is purely a renderer
+        # cue - the upper voxels of the column don't consume fuel.
+        self.flame_column_cells = int(rules.get("flame_column_cells", 6))
+        self.flame_column_decay = float(rules.get("flame_column_decay", 0.75))
+
         # ---- Smoke transport tuning -------------------------------------
         # smoke_alpha is a *self-diffusion* coefficient (m^2/s), independent
         # of thermal_diffusivity. Without a smoke Laplacian the plume
@@ -227,19 +383,37 @@ class FirePropagation:
         v = w.voxel
 
         # Solid (impermeable to heat/smoke). Wall + ceiling block the
-        # plume from leaking through; floor blocks downward leakage.
+        # plume from leaking through; floors are handled separately
+        # below as semi-transparent thermal barriers.
         solid: Optional[np.ndarray] = None
-        for m in (w.walls, w.ceilings, w.floors):
+        for m in (w.walls, w.ceilings):
             if m is not None:
                 solid = m if solid is None else (solid | m)
+        # Original solid mask used by the smoke / spread transport
+        # operators - smoke can still pile under a floor (we just don't
+        # render it through one), so floors stay in the smoke-side mask
+        # to avoid silently leaking soot into the layer below.
+        solid_strict: Optional[np.ndarray] = solid
+        if w.floors is not None:
+            solid_strict = (
+                w.floors if solid_strict is None else (solid_strict | w.floors)
+            )
 
         # 1) Heat diffusion (sub-stepped to respect CFL: alpha*dt/v^2 <= 0.16).
+        # Floors are NOT zero-flux; we run the Laplacian as if the floor
+        # were air, then attenuate the *change* across floor voxels by
+        # ``floor_thermal_attenuation``. This gives a slow vertical heat
+        # transfer between storeys while still keeping the steady-state
+        # temperature on the cool side bounded.
         max_diff_dt = 0.16 * v * v / max(self.alpha, 1e-6)
         n_sub = max(1, int(np.ceil(dt / max_diff_dt)))
         sub_dt = dt / n_sub
         coeff = self.alpha * sub_dt / max(v * v, 1e-6)
+        floor_attn = float(np.clip(self.floor_thermal_attenuation, 0.0, 1.0))
         for _ in range(n_sub):
             lap = _laplacian_3d(w.temp)
+            if w.floors is not None and floor_attn < 1.0:
+                lap = np.where(w.floors, lap * floor_attn, lap)
             w.temp = w.temp + coeff * lap
             if solid is not None:
                 w.temp[solid] = self.ambient
@@ -315,24 +489,91 @@ class FirePropagation:
         # leaking it.
 
         # 4) Reaction.
+        # Local fuel abundance gives a corner of the room with lots of
+        # cushions / blankets a faster burn rate and a higher flame cap
+        # than an isolated chair, so flame magnitude actually scales
+        # with how much there is to burn. abundance is in [min, max]
+        # (default [0.5, 2.5]) - 0.5 means very sparse fuel, 2.5 means
+        # the burn voxel is surrounded by fuel on every side.
         ignitable = (w.fuel > self.flammable_threshold) & (w.temp > self.t_ignite)
         if ignitable.any():
-            burn_rate = self.k_burn * dt * w.fuel * ignitable
-            burn_rate = np.minimum(burn_rate, 0.25)
-            w.flame = np.clip(w.flame + burn_rate, 0.0, 1.0)
+            k_neigh = max(1, int(self.fuel_neighborhood_cells))
+            fuel_avg = _box_blur_3d(w.fuel, k_neigh)
+            abundance = np.clip(
+                fuel_avg / max(self.flammable_threshold, 1e-3),
+                self.fuel_abundance_min, self.fuel_abundance_max,
+            )
+            burn_rate = self.k_burn * dt * w.fuel * ignitable * abundance
+            burn_rate = np.minimum(burn_rate, 0.6)
+            flame_cap = np.minimum(1.0, 0.85 + 0.15 * abundance)
+            grown = w.flame + burn_rate
+            new_flame = np.minimum(grown, flame_cap)
+            # Preserve voxels that were already above cap (e.g. sources
+            # pinned by step 7).
+            w.flame = np.maximum(w.flame, new_flame).astype(np.float32)
             w.fuel = np.clip(w.fuel - burn_rate, 0.0, 1.0)
             heat = np.minimum(self.q_release_c * burn_rate, 200.0)
             w.temp = np.clip(w.temp + heat, -50.0, 1500.0)
-            # Reaction-driven smoke production is the dominant smoke
-            # source once a fire is running. Old code multiplied
-            # burn_rate by 0.5, which was tuned against an "all source
-            # voxels burning at peak rate" assumption that does not hold
-            # when the fire spreads via Laplacian over a large fuel
-            # field; bumping to 2.0 (configurable via
-            # smoke_reaction_gain) puts visible smoke into the room at
-            # roughly the rate users expect from the ignition's
-            # smoke_yield label.
             w.smoke = np.clip(w.smoke + self.smoke_reaction_gain * burn_rate, 0.0, 1.0)
+
+        # 4b) Floor ignition.
+        # The floor mask is normally a zero-flux thermal barrier for
+        # walls / ceilings, but realistic room fires spread across the
+        # carpet / hardwood once it gets hot enough. There are two
+        # ways for a floor voxel to ignite:
+        #
+        #   (a) Direct contact: any flame voxel within
+        #       ``floor_ignite_radius_cells`` of the floor cell. This
+        #       is how the fire crawls outward from a furniture base.
+        #       Without this term, heat diffusion's 1-step thermal
+        #       smoothing kills the sharp temperature spike at the
+        #       newly-pre-heated voxel before the reaction loop can
+        #       use it (the spike gets spread to neighbours, cooling
+        #       the centre below ignition_temp_c).
+        #   (b) Sustained heating: the integrated temperature on a
+        #       floor voxel exceeds ``floor_ignite_temp_c``, the
+        #       traditional autoignition path that handles a fire
+        #       above the ceiling igniting a floor on the next
+        #       storey.
+        if w.floors is not None and self.floor_fuel_value > 0.0:
+            ignite_radius = max(1, int(self.floor_ignite_radius_cells))
+            # (a) direct contact via local flame sum
+            f_local = _box_sum_3d(
+                (w.flame > self.floor_flame_contact_thresh).astype(np.float32),
+                ignite_radius,
+            )
+            contact_ignite = w.floors & (f_local > 0.5)
+            # (b) sustained autoignition
+            hot_ignite = w.floors & (w.temp > self.floor_ignite_temp_c)
+            ignite = contact_ignite | hot_ignite
+            if ignite.any():
+                w.fuel[ignite] = np.maximum(
+                    w.fuel[ignite], float(self.floor_fuel_value)
+                )
+                # Seed flame with PER-VOXEL random magnitude so the
+                # ignited floor doesn't look like a flat sheet of light.
+                # Each newly-ignited voxel gets a value uniformly in
+                # [seed_flame_min, seed_flame_max], creating
+                # tongue-like heterogeneity that propagation then
+                # preserves through subsequent steps.
+                ignite_count = int(ignite.sum())
+                seed_base = float(self.floor_fuel_value)
+                noise01 = self.rng.random(ignite_count, dtype=np.float32)
+                seed_flame_per = (
+                    seed_base * (self.floor_seed_flame_min
+                                 + (self.floor_seed_flame_max
+                                    - self.floor_seed_flame_min) * noise01)
+                )
+                w.flame[ignite] = np.maximum(w.flame[ignite], seed_flame_per)
+                # And push the temperature up to t_ignite so the
+                # reaction-loop predicate fires next step. Temperature
+                # is also randomised so subsequent burn_rate is
+                # spatially heterogeneous (faster patches stay hotter).
+                temp_jitter = self.rng.random(ignite_count, dtype=np.float32) * 100.0
+                w.temp[ignite] = np.maximum(
+                    w.temp[ignite],
+                    float(self.t_ignite) + 50.0 + temp_jitter,
+                )
 
         # Surface flame spread along the fuel field.
         # spread_mask = (fuel > 0) OR (temp > t_ignite). The latter
@@ -343,16 +584,34 @@ class FirePropagation:
         if self.spread > 0.0:
             kernel_frac = float(np.clip(self.spread * dt / v, 0.0, 0.30))
             if kernel_frac > 0.0:
-                lap = _laplacian_3d(w.flame)
                 spread_mask = (
                     (w.fuel > 0) | (w.temp > self.t_ignite)
                 ).astype(np.float32)
-                w.flame = np.clip(
-                    w.flame + kernel_frac * lap * spread_mask,
-                    0.0, 1.0,
-                )
+                if self.spread_kernel == "gaussian":
+                    # Gaussian transport: sigma = spread * dt / v
+                    # voxels per step. We blend the original flame with
+                    # its blurred copy weighted by ``kernel_frac`` so the
+                    # operator stays mass-conserving (kernel sums to 1)
+                    # and reduces to ``flame`` when kernel_frac = 0.
+                    sigma_cells = float(self.spread * dt / max(v, 1e-6))
+                    blurred = _gaussian_blur_3d(w.flame, sigma_cells)
+                    delta = (blurred - w.flame) * spread_mask * kernel_frac
+                    w.flame = np.clip(w.flame + delta, 0.0, 1.0)
+                else:
+                    lap = _laplacian_3d(w.flame)
+                    w.flame = np.clip(
+                        w.flame + kernel_frac * lap * spread_mask,
+                        0.0, 1.0,
+                    )
+                # Walls / ceilings still block flame; floors only block
+                # if the user opts out of cross-floor flame travel.
                 if solid is not None:
                     w.flame[solid] = 0.0
+                if (
+                    not self.flame_through_floors
+                    and w.floors is not None
+                ):
+                    w.flame[w.floors] = 0.0
 
         # Conduction: dump heat from flame voxels into the 6 face
         # neighbours so adjacent fuel can cross the ignition_temp
@@ -371,41 +630,50 @@ class FirePropagation:
             cond[:, :, 1:]  += heat_pad[:, :, :-1]
             cond[:, :, :-1] += heat_pad[:, :, 1:]
             cond /= 6.0
-            # Only deposit conduction heat into voxels that *can* burn
-            # (have fuel) - we don't want walls or floors to heat up
-            # endlessly and act as a giant hot reservoir.
-            burnable = (w.fuel > 0.05).astype(np.float32)
-            w.temp = np.clip(w.temp + cond * burnable, -50.0, 1500.0)
+            # Deposit conduction heat into fuel-bearing voxels AND
+            # floor voxels. Floors don't carry the inventory's
+            # flammability stamp but we still want them to heat up so
+            # the floor_ignite_temp_c threshold gets crossed and the
+            # synthetic floor fuel kicks in.
+            burnable = (w.fuel > 0.05)
+            if w.floors is not None:
+                burnable = burnable | w.floors
+            w.temp = np.clip(w.temp + cond * burnable.astype(np.float32),
+                             -50.0, 1500.0)
 
-        # Radiative pre-heating: every flame voxel radiates heat in a
-        # spherical neighbourhood (~radiative_radius_cells, default
-        # ~0.5 m on a 0.15 m grid). Without this, conduction's 1-cell
-        # reach cannot bridge the gap between two pieces of furniture
-        # that are physically apart, so a kitchen fire never ignites
-        # the adjacent dining chair. We model it as a 3D box-blur of
-        # the flame field (cheap, mass-conserving, smooth-enough),
-        # and only deposit the resulting radiation onto voxels that
-        # carry fuel.
+        # Radiative pre-heating: each flame voxel is treated as a point
+        # source that radiates into a cubic neighbourhood. We use a
+        # *sum* (not mean) box filter so a chunk of fire surrounded by
+        # many lit voxels heats up much faster than an isolated source
+        # - exactly what physically happens when fire enters a room
+        # full of burning furniture. The summed contribution is then
+        # normalised by a target effective radius so the gain scales
+        # with absolute flame coverage rather than relative density.
         if self.radiative_gain_c > 0.0:
             r = max(1, int(self.radiative_radius_cells))
             f = np.clip(w.flame, 0.0, 1.0)
-            # Cumulative-sum trick for an O(N) box blur in each axis.
-            def _box(a, k):
-                if k <= 1:
-                    return a
-                pad = np.pad(a, ((k, k), (0, 0), (0, 0)), mode="edge")
-                csum = np.cumsum(pad, axis=0)
-                blurred = csum[2 * k:, :, :] - csum[:-2 * k, :, :]
-                return blurred / (2 * k)
-            ff = _box(_box(_box(f, r), r), r)  # blur all 3 axes (separable)
-            burnable = (w.fuel > 0.05).astype(np.float32)
+            # Box-sum: each lit voxel deposits its full flame value in
+            # every output voxel within +/- r cells. Output magnitude
+            # scales with the *number* of flame voxels in range, so a
+            # well-developed fire saturates nearby air much faster.
+            ff = _box_sum_3d(f, r)
+            # Normalise by sqrt(window) instead of full window so the
+            # heat stays bounded but a fully-lit window still produces
+            # a strong gradient at the room edge.
+            ff /= np.sqrt(float((2 * r + 1) ** 3))
+            burnable = (w.fuel > 0.05)
+            if w.floors is not None:
+                burnable = burnable | w.floors
             w.temp = np.clip(
-                w.temp + self.radiative_gain_c * dt * ff * burnable,
+                w.temp + self.radiative_gain_c * dt * ff * burnable.astype(np.float32),
                 -50.0, 1500.0,
             )
 
         # 5) Decay.
         decay = 0.05 * dt
+        # Voxels carrying fuel (or recently deposited floor fuel) keep
+        # their flame; flame stranded in cool air without fuel decays
+        # quickly.
         w.flame *= np.where(w.fuel > 0.05, 1.0 - 0.2 * decay, 1.0 - 5.0 * decay)
         w.flame = np.clip(w.flame, 0.0, 1.0)
         # Smoke decays much more slowly than the previous 0.005/s rate
@@ -421,16 +689,37 @@ class FirePropagation:
         # 7) Sustained sources: pin source voxels to a hot floor, and
         # inject a steady stream of smoke + small fuel + flame so the
         # plume keeps growing throughout the lifetime of the ignition.
+        # When ``inextinguishable_sources`` is enabled, the per-source
+        # ``sustain_s`` timer is ignored - the source burns until the
+        # simulation ends, mimicking a real fire that found a
+        # continuous fuel supply (e.g. natural gas line, large
+        # furniture load, structural lumber).
         if self._sources:
             keep: List[Tuple[Tuple[slice, slice, slice], np.ndarray, float, float, float]] = []
             for entry in self._sources:
                 sl, falloff, src_t, t_end, smoke_yield = entry
-                if t_now >= t_end:
+                if t_now >= t_end and not self.inextinguishable_sources:
                     continue
                 target = self.ambient + (src_t - self.ambient) * falloff
                 w.temp[sl] = np.maximum(w.temp[sl], target)
-                w.fuel[sl] = np.maximum(w.fuel[sl], 0.7 * falloff)
-                w.flame[sl] = np.maximum(w.flame[sl], 0.6 * falloff)
+                # Inextinguishable mode: keep replenishing solid fuel at
+                # the source so the point ignition never burns itself
+                # out. The reaction step still consumes fuel each
+                # frame; this just makes sure the source has more to
+                # burn next frame. Set to 0 in the plan to model a
+                # finite fuel package (the source then dies once it
+                # runs out, even before sustain_s is up).
+                if self.inextinguishable_sources:
+                    w.fuel[sl] = np.maximum(w.fuel[sl], 0.85 * falloff)
+                else:
+                    w.fuel[sl] = np.maximum(w.fuel[sl], 0.7 * falloff)
+                # Source flame is pinned to the abundance-aware ceiling
+                # (0.85 + 0.15 * 2.5 = 1.225 in dense fuel zones,
+                # clamped at 1.0). Without this, the previous 0.6
+                # ceiling capped the rendered flame intensity even in
+                # rooms full of cushions where reaction step would
+                # otherwise drive it close to 1.
+                w.flame[sl] = np.maximum(w.flame[sl], 0.95 * falloff)
                 # Plan-aware smoke injection. The source's
                 # ``smoke_yield`` is multiplied by ``smoke_source_gain``
                 # to get a per-second injection rate at the source core
@@ -444,6 +733,37 @@ class FirePropagation:
                 )
                 keep.append(entry)
             self._sources = keep
+
+        # 8) Flame column: project flame upward from each burning voxel
+        # so the rendered fire has a visible vertical plume instead of
+        # rendering as a flat sheet at the fuel's height. For each y
+        # layer above an active flame (within ``flame_column_cells``)
+        # we copy the source flame intensity decayed by a geometric
+        # factor (``flame_column_decay``) per layer and OR it with
+        # whatever is already there. Walls / ceilings block the
+        # column (zero out at solid voxels). Top of the column also
+        # contributes to the smoke field so the plume bridges into
+        # the buoyancy step on the next iteration.
+        if self.flame_column_cells > 0 and self.flame_column_decay > 0.0:
+            base = np.clip(w.flame, 0.0, 1.0)
+            current = base.copy()
+            col_acc = base.copy()
+            for h in range(1, int(self.flame_column_cells) + 1):
+                # Shift the flame up by one voxel in y; reflect at top.
+                lifted = np.zeros_like(current)
+                lifted[:, h:, :] = base[:, :-h, :]
+                lifted *= float(self.flame_column_decay) ** h
+                if solid is not None:
+                    lifted[solid] = 0.0
+                col_acc = np.maximum(col_acc, lifted)
+            # Apply only where the new column intensity exceeds the
+            # existing flame value so the reaction step's fuel-anchored
+            # peaks aren't smeared.
+            w.flame = np.maximum(w.flame, col_acc).astype(np.float32)
+            # Top of the column also produces a little smoke. Linear
+            # in column height so a tall plume = darker smoke head.
+            extra_smoke = col_acc * 0.05 * dt
+            w.smoke = np.clip(w.smoke + extra_smoke, 0.0, 1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +838,7 @@ def run_propagation(
             temp_c=float(ig["source_temp_c"]),
             smoke_yield=float(ig.get("smoke_yield", 0.5)),
         )
-        sustain = float(ig.get("sustain_s", 0.5 * duration))
+        sustain = float(ig.get("sustain_s", duration - 0.0))
         sim.add_source(sl, fall, float(ig["source_temp_c"]), sustain,
                        t_now=0.0,
                        smoke_yield=float(ig.get("smoke_yield", 0.5)))
@@ -538,7 +858,7 @@ def run_propagation(
                 temp_c=float(ig["source_temp_c"]),
                 smoke_yield=float(ig.get("smoke_yield", 0.5)),
             )
-            sustain = float(ig.get("sustain_s", 0.5 * (duration - t_now)))
+            sustain = float(ig.get("sustain_s", duration - t_now))
             sim.add_source(sl, fall, float(ig["source_temp_c"]), sustain,
                            t_now=t_now,
                            smoke_yield=float(ig.get("smoke_yield", 0.5)))

@@ -152,6 +152,93 @@ def flame_lut(intensity: np.ndarray) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Procedural flame noise: sub-voxel texture + time-domain flicker
+# ---------------------------------------------------------------------------
+# We keep a small 3D random field per renderer instance and tri-linearly
+# sample it at the ray-march points. Multiple octaves give a fractal
+# look without paying for a full perlin/simplex implementation in
+# Python. The world-space coordinates are scaled by ``frequency`` and
+# offset by ``time_phase`` so the texture appears to scroll upward
+# (looks like a rising plume).
+_NOISE_CACHE: Dict[Tuple[int, int, int, int], np.ndarray] = {}
+
+
+def _hash_noise_field(shape: Tuple[int, int, int], seed: int) -> np.ndarray:
+    """A small 3D random scalar field in [0,1] used as a value-noise
+    texture. Cached so we don't reallocate every frame.
+    """
+    key = (shape[0], shape[1], shape[2], int(seed))
+    if key not in _NOISE_CACHE:
+        rng = np.random.default_rng(int(seed))
+        _NOISE_CACHE[key] = rng.random(shape, dtype=np.float32)
+    return _NOISE_CACHE[key]
+
+
+def _sample_noise(points_world: np.ndarray,
+                  shape: Tuple[int, int, int],
+                  frequency: float,
+                  time_phase: float,
+                  seed: int) -> np.ndarray:
+    """Trilinear sample of a tileable 3D random texture.
+
+    ``points_world`` are positions in metres; we just multiply by
+    ``frequency`` and wrap into the noise grid via modulo. Time is
+    folded into a y-axis offset so the texture "rises" with t.
+    """
+    field = _hash_noise_field(shape, seed=seed)
+    Nx, Ny, Nz = shape
+    f = np.asarray(frequency, dtype=np.float32)
+    coord = points_world * f
+    coord[..., 1] = coord[..., 1] + np.float32(time_phase)
+    # Wrap.
+    coord_mod = np.mod(coord, np.array([Nx, Ny, Nz], dtype=np.float32))
+    i0 = np.floor(coord_mod).astype(np.int32)
+    fr = coord_mod - i0.astype(np.float32)
+    i1 = (i0 + 1) % np.array([Nx, Ny, Nz])
+    # Trilinear blend.
+    c000 = field[i0[..., 0], i0[..., 1], i0[..., 2]]
+    c100 = field[i1[..., 0], i0[..., 1], i0[..., 2]]
+    c010 = field[i0[..., 0], i1[..., 1], i0[..., 2]]
+    c110 = field[i1[..., 0], i1[..., 1], i0[..., 2]]
+    c001 = field[i0[..., 0], i0[..., 1], i1[..., 2]]
+    c101 = field[i1[..., 0], i0[..., 1], i1[..., 2]]
+    c011 = field[i0[..., 0], i1[..., 1], i1[..., 2]]
+    c111 = field[i1[..., 0], i1[..., 1], i1[..., 2]]
+    fx, fy, fz = fr[..., 0], fr[..., 1], fr[..., 2]
+    c00 = c000 * (1 - fx) + c100 * fx
+    c01 = c001 * (1 - fx) + c101 * fx
+    c10 = c010 * (1 - fx) + c110 * fx
+    c11 = c011 * (1 - fx) + c111 * fx
+    c0 = c00 * (1 - fy) + c10 * fy
+    c1 = c01 * (1 - fy) + c11 * fy
+    return c0 * (1 - fz) + c1 * fz
+
+
+def fractal_flame_noise(points_world: np.ndarray,
+                        time_phase: float,
+                        seed: int = 1) -> np.ndarray:
+    """Three-octave value noise, centred on 0 with amplitude ~0.5.
+
+    Returns shape ``(..., )`` matching the leading dims of
+    ``points_world``. The output is intended to *modulate* a flame
+    intensity field, so we centre it on zero: positive values brighten
+    the local sample, negative ones dim it. Octaves have geometric
+    frequencies (8, 16, 32 per metre roughly) so structure exists at
+    multiple scales - this is what gives the flame its fractal "wisp"
+    look at any viewing distance.
+    """
+    n1 = _sample_noise(points_world, (16, 32, 16), frequency=4.0,
+                       time_phase=time_phase * 1.6, seed=seed)
+    n2 = _sample_noise(points_world, (16, 32, 16), frequency=8.0,
+                       time_phase=time_phase * 2.4, seed=seed + 1)
+    n3 = _sample_noise(points_world, (16, 32, 16), frequency=16.0,
+                       time_phase=time_phase * 3.6, seed=seed + 2)
+    # Weighted sum, centred and clipped to [-1, 1].
+    raw = 0.55 * n1 + 0.30 * n2 + 0.15 * n3
+    return np.clip((raw - 0.5) * 2.0, -1.0, 1.0)
+
+
+# ---------------------------------------------------------------------------
 # Thermal compositing (luma + flame contribution + ambient)
 # ---------------------------------------------------------------------------
 def compose_thermal(
@@ -246,6 +333,36 @@ class VoxelRenderParams:
     #   * hot soot in the flame envelope itself glows.
     flame_smoke_passthrough: float = 0.95
 
+    # ---- Procedural flame texturing --------------------------------------
+    # All values below are dimensionless multipliers applied to the
+    # fractal value-noise field sampled at ray-march points.
+    #
+    # ``flame_noise_strength`` is the amplitude of the multiplicative
+    # modulation applied to the flame intensity itself: a value of 0.5
+    # means the flame can be brightened by up to 50% or dimmed by 50%
+    # at sub-voxel scale. 0 disables the effect and the flame renders
+    # as a smooth blob (the legacy look).
+    flame_noise_strength: float = 0.55
+    # ``flame_edge_break`` controls how much noise is applied at the
+    # flame edge (where fl_used is between threshold and ~0.4). High
+    # values produce ragged "tongues" of flame breaking off the main
+    # body; low values keep the silhouette smooth.
+    flame_edge_break: float = 0.8
+    # ``flame_color_jitter`` shifts the LUT lookup by +/- this fraction
+    # of [0,1] using a second noise field, so the same flame intensity
+    # produces a range of colors from deep red to near-white core.
+    flame_color_jitter: float = 0.25
+    # ``flame_time_speed`` is how fast (in flicker units per fire-second)
+    # the noise pattern advances. Real flames flicker at 5-15 Hz which
+    # at speedup=1 maps to ~1.5 phase units per second; we let it
+    # scroll faster to look "lively" even at slow simulation rates.
+    flame_time_speed: float = 12.0
+    # Smoke texture modulation: very mild noise applied to the smoke
+    # field so the plume isn't a uniform grey blob. 0.25 means each
+    # ray-march point's smoke density can vary up to 25% from its
+    # smooth voxel value.
+    smoke_noise_strength: float = 0.30
+
 
 def volumetric_composite(
     *,
@@ -262,6 +379,7 @@ def volumetric_composite(
     ambient_c: float,
     camera_K,
     params: VoxelRenderParams,
+    t_sim: float = 0.0,
 ) -> Dict[str, np.ndarray]:
     """Front-to-back emission/absorption composite.
 
@@ -351,6 +469,17 @@ def volumetric_composite(
     thr_inv = np.float32(1.0 / max(t_hi - t_lo, 1e-3))
     thr_lo = np.float32(t_lo)
 
+    # Procedural-noise phase: scrolls with t_sim so the flame
+    # "flickers" without us needing to bake animation into the voxel
+    # timeline. We use t_sim modulo a large period so the float stays
+    # bounded over very long episodes.
+    noise_phase = float(np.fmod(float(t_sim) * float(params.flame_time_speed),
+                                10_000.0))
+    noise_strength = float(np.clip(params.flame_noise_strength, 0.0, 1.5))
+    edge_break = float(np.clip(params.flame_edge_break, 0.0, 1.5))
+    color_jitter_amp = float(np.clip(params.flame_color_jitter, 0.0, 1.0))
+    smoke_noise_amp = float(np.clip(params.smoke_noise_strength, 0.0, 1.0))
+
     color_acc = np.zeros((H, W, 3), dtype=np.float32)
     T_acc = np.ones((H, W), dtype=np.float32)
     flame_seen = np.zeros((H, W), dtype=np.float32)
@@ -373,7 +502,47 @@ def volumetric_composite(
                 [smoke_field, flame_field, temp_field],
                 pts, origin, voxel_m,
             )
+            # Smoke texture: mild noise so the plume has wisps and
+            # bands instead of being a uniform grey wall. Modulation
+            # is multiplicative so dense smoke stays dense.
+            if smoke_noise_amp > 0.0:
+                n_smoke = fractal_flame_noise(pts, time_phase=noise_phase * 0.4,
+                                              seed=11)
+                sm = np.clip(sm * (1.0 + smoke_noise_amp * n_smoke), 0.0, 1.5)
+            # Procedural flame texture: sub-voxel value-noise modulates
+            # the flame intensity to break the smooth trilinear blob
+            # into 'tongues'. The modulation is strongest near the
+            # flame edge (fl small) so the silhouette becomes ragged,
+            # while the bright core stays mostly stable to keep the
+            # fire recognisable.
+            if noise_strength > 0.0:
+                n_intensity = fractal_flame_noise(pts, time_phase=noise_phase,
+                                                  seed=1)
+                # Edge weight: peaks where fl ~ 0.2 and falls off both
+                # toward 0 (nothing to break) and toward 1 (stable core).
+                fl_norm = np.clip(fl, 0.0, 1.0)
+                edge_w = 4.0 * fl_norm * (1.0 - fl_norm)  # in [0,1], peaks at 0.5
+                # Two-term modulation: a small global flicker on every
+                # voxel + a stronger contribution at the silhouette.
+                fl_mod = fl * (
+                    1.0 + noise_strength * n_intensity
+                          + edge_break * edge_w * n_intensity
+                )
+                fl = np.clip(fl_mod, 0.0, fl_norm.max() * 1.2)
+
             fl_used = np.clip((fl - thr_lo) * thr_inv, 0.0, 1.0) * fl
+
+            # Color jitter via a second independent noise field. Same
+            # phase, different seed: this drifts the LUT lookup point
+            # so adjacent voxels with identical intensity show as red
+            # vs orange vs yellow, the way real flame colour bands
+            # shift unpredictably.
+            if color_jitter_amp > 0.0:
+                n_color = fractal_flame_noise(pts, time_phase=noise_phase * 0.7,
+                                              seed=5)
+                lut_input = np.clip(fl_used + color_jitter_amp * n_color, 0.0, 1.0)
+            else:
+                lut_input = fl_used
 
             # Two separate optical depths: the scene path sees full
             # smoke + flame extinction; the flame path sees only a
@@ -384,7 +553,7 @@ def volumetric_composite(
             T_step_scene = np.exp(-(sigma_scene * step_m_h))
             T_step_flame = np.exp(-(sigma_flame * step_m_h))
 
-            flame_rgb = flame_lut(fl_used)
+            flame_rgb = flame_lut(lut_input)
             emission = (
                 flame_rgb * (fl_used * emission_gain)[:, None]
                 * step_m_h[:, None]

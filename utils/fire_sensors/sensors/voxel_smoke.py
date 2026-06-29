@@ -121,6 +121,7 @@ class VoxelSmokeSensor(BaseSensor):
             ambient_c=scene.ambient_c,
             camera_K=self.camera_K,
             params=self._params(),
+            t_sim=float(t_sim),
         )
         out["t_sim_s"] = float(t_sim)
         out["robot_step"] = int(robot_step)

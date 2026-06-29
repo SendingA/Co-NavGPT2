@@ -261,6 +261,7 @@ class FireWorldRenderer:
             ambient_c=self.fw.ambient_c,
             camera_K=self.camera_K,
             params=self.params,
+            t_sim=float(t_sim),
         )
 
 

@@ -198,17 +198,59 @@ def _default_propagation_rules(intensity: str) -> Dict:
         # >5 minutes to cross a single voxel, which is why the original
         # benchmark looked like static fixed sources.
         "spread_speed_m_per_s": 0.18,
+        # 'laplacian' (legacy) or 'gaussian' (smoother, NIST-FDS-like).
+        "spread_kernel": "laplacian",
         "ceiling_jet_speed_m_per_s": 0.30,
         "buoyancy_v_m_per_s": 0.5,     # vertical plume velocity
         "thermal_diffusivity": 0.05,   # alpha used in heat diffusion
         "ambient_temp_c": 25.0,
         # Radiative pre-heating that lets heat jump ~0.6 m to the next
         # piece of furniture in the same room. Scales linearly with
-        # local flame intensity. 200 C/s on a fully-developed flame
+        # local flame intensity. 250 C/s on a fully-developed flame
         # voxel inside the 4-cell radiative kernel means a fuel voxel
         # 0.6 m away crosses ignition_temp in ~30 s.
         "radiative_gain_c": 250.0,
         "radiative_radius_cells": 4,
+        # Floors are *semi-transparent* thermal barriers (default 20 %
+        # of normal heat conduction) so a fire on one storey can still
+        # raise the assembly's temperature on the storey below over
+        # several minutes (NFPA 921 §5.10). Set to 0 for a fully
+        # fire-rated assembly; 1.0 makes the floor an air gap.
+        "floor_thermal_attenuation": 0.20,
+        # Should the flame field actually live inside floor voxels?
+        # Default on now that floors get a synthetic fuel deposit when
+        # heated (see `floor_fuel_value`): the floor is supposed to
+        # carry fire from one piece of furniture to the next.
+        "flame_through_floors": 1,
+        # Local fuel-abundance modulation. Larger neighbourhood / wider
+        # max means a fuel-dense corner burns faster than an isolated
+        # chair.
+        "fuel_neighborhood_cells": 2,
+        "fuel_abundance_min": 0.5,
+        "fuel_abundance_max": 2.5,
+        # Floor ignition. Above ``floor_ignite_temp_c`` each floor
+        # voxel gets a synthetic fuel deposit of ``floor_fuel_value``,
+        # which feeds the regular reaction loop. Set the value to 0 to
+        # disable floor combustion (e.g. for tile / concrete).
+        "floor_ignite_temp_c": 250.0,
+        "floor_fuel_value": 0.7,
+        # Direct contact ignition: floor voxels within this many cells
+        # of a flame voxel ignite immediately, bypassing heat
+        # diffusion's smoothing. Without this the per-voxel thermal
+        # spike gets averaged out before reaction sees it.
+        "floor_ignite_radius_cells": 2,
+        "floor_flame_contact_thresh": 0.2,
+        # Sustained point sources never expire when 1, ensuring the
+        # initial ignitions don't burn themselves out before they have
+        # a chance to set the rest of the room alight.
+        "inextinguishable_sources": 1,
+        # Flame column height: each active flame voxel projects an
+        # upward plume up to ``flame_column_cells`` voxels with linear
+        # intensity decay (controlled by ``flame_column_decay``). This
+        # is what gives flames a visible vertical extent rather than
+        # rendering as a flat blob at the source.
+        "flame_column_cells": 6,
+        "flame_column_decay": 0.75,
     }
     if intensity == "light":
         base["spread_speed_m_per_s"] *= 0.7

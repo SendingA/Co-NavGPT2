@@ -235,14 +235,22 @@ python main.py --num_agents 2 --nav_mode co_ut \
     --fire_show_window 1
 
 
-# 自动评测，FireWorld + 烟雾 RGB-D 同开（最完整的火灾感知）
-python main.py --num_agents 1 --nav_mode gpt \
+python main.py \
+    --num_agents 2 --nav_mode co_ut \
     --fire_world 1 --fire_world_plan_id 83679a07b632 \
-    --fire)steps_per_unit 1 --fire_seconds_per_unit 5.0
-    --fire_sensors 1 --smoke_density 0.6 \
-    --fire_world_compound_rgb 1 \
-    --depth_use_clean 1 --use_thermal_perception 1 \
+    --fire_speedup 2.0 \
     --fire_show_window 1
+
+
+
+# # 自动评测，FireWorld + 烟雾 RGB-D 同开（最完整的火灾感知）
+# python main.py --num_agents 1 --nav_mode gpt \
+#     --fire_world 1 --fire_world_plan_id 83679a07b632 \
+#     --fire)steps_per_unit 1 --fire_seconds_per_unit 5.0
+#     --fire_sensors 1 --smoke_density 0.6 \
+#     --fire_world_compound_rgb 1 \
+#     --depth_use_clean 1 --use_thermal_perception 1 \
+#     --fire_show_window 1
 
 # 手动开 FireWorld + 套件，看着自己走、看火长、同时看 dashboard
 python scripts/keyboard_teleop_fire.py \
@@ -252,4 +260,15 @@ python scripts/keyboard_teleop_fire.py \
     --depth_use_clean 1 --render-scale 0.5 --n-steps 16 \
     --smoke-density 0.6 --compound-rgb 1 \
     --show-dashboard 1
+
+python scripts/keyboard_teleop_fire.py \
+    --task-config configs/multi_objectnav_hm3d.yaml \
+    --scene-id Nfvxx8J5NCo --plan-id 83679a07b632 \
+    --speedup 2.0 \
+    --show-dashboard 1
+
 ```
+
+
+
+

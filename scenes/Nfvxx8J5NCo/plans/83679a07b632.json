@@ -120,11 +120,24 @@
     "flammable_threshold": 0.4,
     "ignition_temp_c": 200.0,
     "spread_speed_m_per_s": 0.27,
+    "spread_kernel": "gaussian",
     "ceiling_jet_speed_m_per_s": 0.42,
     "buoyancy_v_m_per_s": 0.65,
     "thermal_diffusivity": 0.05,
     "ambient_temp_c": 25.0,
-    "radiative_gain_c": 375.0,
-    "radiative_radius_cells": 4
+    "radiative_gain_c": 600.0,
+    "radiative_radius_cells": 6,
+    "floor_thermal_attenuation": 0.20,
+    "flame_through_floors": 1,
+    "fuel_neighborhood_cells": 2,
+    "fuel_abundance_min": 0.5,
+    "fuel_abundance_max": 2.5,
+    "floor_ignite_temp_c": 250.0,
+    "floor_fuel_value": 0.7,
+    "floor_ignite_radius_cells": 2,
+    "floor_flame_contact_thresh": 0.2,
+    "inextinguishable_sources": 1,
+    "flame_column_cells": 6,
+    "flame_column_decay": 0.75
   }
 }

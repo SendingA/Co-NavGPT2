@@ -254,8 +254,25 @@ def rasterise_structural_voxels(
     instances: List[InstanceGeom],
     world_aabb: List[float],
     voxel_m: float,
+    floor_slab_cells: int = 2,
+    ceiling_slab_cells: int = 2,
 ) -> Dict[str, np.ndarray]:
-    """Stamp wall / floor / ceiling instance AABBs into 3D voxel masks."""
+    """Stamp wall / floor / ceiling instance AABBs into 3D voxel masks.
+
+    HM3D's ``floor`` and ``ceiling`` semantic instances are single big
+    meshes whose AABB spans the full storey height: a floor instance's
+    AABB y-extent typically covers ``[y_floor, y_floor + 2.0 m]``, not
+    just the ~5 cm slab a real floor occupies. Stamping that AABB
+    verbatim would mark the entire room volume as ``floor`` and then
+    propagation's structural-mask logic would zero-flux every voxel
+    inside the room, which is exactly the failure mode users saw:
+    fire trapped in a single voxel, no spread along the floor.
+
+    To recover sensible slabs we only stamp the **bottom** ``floor_slab_cells``
+    voxels of a floor instance's AABB (and the top ``ceiling_slab_cells``
+    voxels of a ceiling instance) - that's where the actual surface
+    is. Walls and other vertical structure keep their full AABB.
+    """
     amin = np.array(world_aabb[:3], dtype=np.float64)
     amax = np.array(world_aabb[3:], dtype=np.float64)
     extent = np.maximum(amax - amin, voxel_m)
@@ -270,13 +287,26 @@ def rasterise_structural_voxels(
                         np.array([Nx, Ny, Nz]))
         if np.any(i1 <= i0):
             continue
-        sl = (slice(i0[0], i1[0]), slice(i0[1], i1[1]), slice(i0[2], i1[2]))
         if cat in {"wall", "door", "door frame", "window", "window frame",
                    "balustrade", "handrail", "moulding", "column", "beam"}:
+            sl = (slice(i0[0], i1[0]), slice(i0[1], i1[1]), slice(i0[2], i1[2]))
             walls[sl] = True
         elif cat in {"floor", "stairs", "staircase"}:
+            # Stamp only the bottom slab of the AABB. Stairs use the
+            # same logic; for a staircase the inferred slab will follow
+            # the bottom of the bounding box, which is close enough to
+            # the lowest tread for our coarse 0.10-0.15 m grid.
+            y_top = min(i0[1] + int(floor_slab_cells), int(i1[1]))
+            sl = (slice(i0[0], i1[0]),
+                  slice(i0[1], y_top),
+                  slice(i0[2], i1[2]))
             floors[sl] = True
         elif cat == "ceiling":
+            # Top slab only.
+            y_bot = max(i1[1] - int(ceiling_slab_cells), int(i0[1]))
+            sl = (slice(i0[0], i1[0]),
+                  slice(y_bot, i1[1]),
+                  slice(i0[2], i1[2]))
             ceilings[sl] = True
     return {
         "walls": walls,
