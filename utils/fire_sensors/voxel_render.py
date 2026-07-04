@@ -190,11 +190,17 @@ def _sample_noise(points_world: np.ndarray,
     f = np.asarray(frequency, dtype=np.float32)
     coord = points_world * f
     coord[..., 1] = coord[..., 1] + np.float32(time_phase)
-    # Wrap.
+    # Wrap. ``np.mod`` on float32 can return exactly N at boundaries
+    # (e.g. mod(-1e-7, 16) -> 16.0 due to rounding), which then makes
+    # floor() yield N and indexes one past the last cell. Wrap the
+    # integer indices defensively with another modulo to guarantee
+    # i0, i1 stay in [0, N).
     coord_mod = np.mod(coord, np.array([Nx, Ny, Nz], dtype=np.float32))
     i0 = np.floor(coord_mod).astype(np.int32)
     fr = coord_mod - i0.astype(np.float32)
-    i1 = (i0 + 1) % np.array([Nx, Ny, Nz])
+    N_arr = np.array([Nx, Ny, Nz], dtype=np.int32)
+    i0 = i0 % N_arr
+    i1 = (i0 + 1) % N_arr
     # Trilinear blend.
     c000 = field[i0[..., 0], i0[..., 1], i0[..., 2]]
     c100 = field[i1[..., 0], i0[..., 1], i0[..., 2]]
