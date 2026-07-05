@@ -1,5 +1,7 @@
 # `main.py` 运行参数与键盘操控速查
 
+> **Habitat-Lab 0.3.3 升级说明（2026-07）**：项目已从 Habitat 0.2.1 (YACS) 迁移到 Habitat-Lab 0.3.3 (Hydra + `omegaconf.DictConfig`)。所有 `--task_config` 现在指向 Hydra yaml；`arguments.load_config` 会把该文件 compose 成完整 DictConfig。多智能体不再依赖 `multi-robot-setting/` 补丁，改用官方 `agents_order` + `agents.<name>` schema。新增 `--num_humans`、`--robot_models_enabled`、`--robot_profiles` 等控制机器人+人体的开关。完整变更列表：`docs/habitat3_migration.md`。已废弃：`--exp_name`、`--log_interval`、`--agent`（早在 2026-06 就无人读；文档里保留仅为兼容记录）。
+>
 > 适用范围：Co-NavGPT2 仓库根目录的 `main.py`（多智能体 nav 主入口），以及 `scripts/keyboard_teleop.py` / `scripts/keyboard_teleop_fire.py`（手动遥操作）。
 >
 > 注意：`main.py` 本身**没有**键盘操控接口，跑的是全自动 nav 循环。键盘控制位于 `scripts/keyboard_teleop*.py`，本文一并整理。
@@ -31,9 +33,7 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 | 参数 | 类型/默认 | 说明 |
 | --- | --- | --- |
 | `--seed` | int, `1` | 随机种子 |
-| `--log_interval` | int, `10` | 每 N 次 update 写一次日志 |
 | `-d`, `--dump_location` | str, `./tmp` | 日志/模型 dump 目录 |
-| `--exp_name` | str, `exp1` | 实验名 |
 | `-v`, `--visualize` | int, `0` | `1` 渲染观测和预测语义图（会启动 Open3D GUI 线程） |
 | `--print_images` | int, `0` | `1` 把可视化结果保存为图片 |
 
@@ -50,7 +50,6 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 
 | 参数 | 类型/默认 | 说明 |
 | --- | --- | --- |
-| `--agent` | str, `sem_exp` | 智能体类别名 |
 | `--num_local_steps` | int, `25` | 两次 global step 之间的 local 步数 |
 | `-n`, `--num_processes` | int, `1` | 进程数 |
 | `--rank` | int, `0` | 进程 rank |
@@ -59,7 +58,20 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 | `--map_size_cm` | int, `2400` | 地图边长（cm） |
 | `--map_height_cm` | int, `130` | 地图剖面高度（cm） |
 | `--sem_threshold` | float, `0.85` | 语义检测置信阈值，超过即认为 found_goal |
-| `--num_agents` | int, `2` | 同场景中的 agent 数量 |
+| `--num_agents` | int, `2` | 同场景中的机器人 agent 数量 |
+
+### 2.3.1 Habitat 3 新增：人形行人 + 可见机器人 URDF
+
+| 参数 | 类型/默认 | 说明 |
+| --- | --- | --- |
+| `--num_humans` | int, `0` | 每次 reset 随机撒到场景里的 KinematicHumanoid 数量；`0` 关闭 |
+| `--robot_models_enabled` | int, `0` | `1` 在 nav agent 上叠一层可见的 Habitat 3 机器人 URDF |
+| `--robot_profiles` | str | 逗号分隔的机器人 profile：`fetch,fetch_no_wheels,fetch_suction,spot,stretch`；多机器人按顺序循环 |
+| `--robot_urdfs` | str | 可选：直接指定 URDF 路径覆盖 profile 默认路径 |
+| `--dataset_path` | str | 覆盖 `habitat.dataset.data_path`（比如切到 `objectnav_hm3d_v2`） |
+| `--scenes_dir` | str | 覆盖 `habitat.dataset.scenes_dir` |
+| `--scene_dataset` | str | 覆盖 `habitat.simulator.scene_dataset` 指向的 `scene_dataset_config.json` |
+| `--config` | str | 直接给 Hydra yaml 的完整路径，绕过 `--task_config` 的相对拼接 |
 
 ### 2.4 全局调度策略 / GPT
 

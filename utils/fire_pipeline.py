@@ -37,6 +37,30 @@ def _depth_to_metric(depth_raw: np.ndarray, normalize: bool, max_d: float) -> np
     return arr
 
 
+def _resolve_depth_config(config):
+    """Return (max_depth_m, normalize_depth) for either H2 YACS or H3 DictConfig."""
+    # Habitat-Lab 0.3.3: DictConfig with lowercase keys.
+    if hasattr(config, "habitat"):
+        try:
+            main_agent_name = config.habitat.simulator.agents_order[0]
+            depth_cfg = config.habitat.simulator.agents[
+                main_agent_name
+            ].sim_sensors.depth_sensor
+            return float(depth_cfg.max_depth), bool(
+                getattr(depth_cfg, "normalize_depth", True)
+            )
+        except (AttributeError, KeyError):
+            pass
+    # Legacy YACS fallback (kept for unit tests / offline scripts that
+    # still hand a YACS config to the helper).
+    if hasattr(config, "SIMULATOR") and hasattr(config.SIMULATOR, "DEPTH_SENSOR"):
+        return (
+            float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
+            bool(getattr(config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True)),
+        )
+    return 5.0, True
+
+
 def step_fire_observation(
     *,
     observations: Dict[str, np.ndarray],
@@ -54,8 +78,7 @@ def step_fire_observation(
     if suite is None:
         return None
 
-    max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
-    normalize = bool(getattr(config.SIMULATOR.DEPTH_SENSOR, "NORMALIZE_DEPTH", True))
+    max_d, normalize = _resolve_depth_config(config)
     use_clean_depth = bool(int(getattr(args, "depth_use_clean", 0)))
     apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
     # When the voxel sensor is producing the thermal channel we want it

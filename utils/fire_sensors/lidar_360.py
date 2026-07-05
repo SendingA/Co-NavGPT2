@@ -43,65 +43,52 @@ LIDAR_DEPTH_UUIDS: List[str] = list(LIDAR_DEPTH_YAW.keys())
 
 def install_lidar_depth_sensors(
     config,
-    base_depth_cfg,
+    base_depth_cfg=None,
     resolution: int = 320,
     num_agents: int = 1,
 ) -> None:
-    """Add 4 yaw-rotated DEPTH sensors to ``config.SIMULATOR`` and to
-    every agent's ``SENSORS`` list.
+    """Add 4 yaw-rotated DEPTH sensors under every agent in the config.
 
-    Must be called between ``config.defrost()`` and ``config.freeze()``.
-    The same sensor specs end up on every agent because the local
-    Habitat fork reuses ``AGENT_0``'s sensor specs for all agents (see
-    ``HabitatSim.create_sim_config``).
+    Habitat-Lab 0.3.3 (DictConfig)::
+
+        config.habitat.simulator.agents.<name>.sim_sensors.<uuid>
+
+    Requires the caller to be inside a ``habitat.config.read_write``
+    block so the DictConfig is mutable.
+
+    ``base_depth_cfg`` is ignored for H3.3 (we always copy the main
+    agent's ``depth_sensor`` block); it's kept in the signature for
+    backwards compatibility with older callers.
     """
+    from copy import deepcopy
+
+    from omegaconf import OmegaConf
+
+    if not hasattr(config, "habitat"):
+        raise RuntimeError(
+            "install_lidar_depth_sensors requires a Habitat 3.3 DictConfig; "
+            "the legacy YACS support was dropped in the H3.3 migration."
+        )
+
     res = int(resolution)
-
-    for uuid, yaw in LIDAR_DEPTH_YAW.items():
-        # Clone the existing depth sensor config so we inherit
-        # MIN/MAX/NORMALIZE.
-        cfg_name = uuid.upper()  # e.g. LIDAR_DEPTH_FRONT
-        sensor_cfg = base_depth_cfg.clone()
-        sensor_cfg.UUID = uuid
-        # Each slice is a square 90° HFOV camera so 4 slices = 360°.
-        sensor_cfg.HFOV = 90
-        sensor_cfg.WIDTH = res
-        sensor_cfg.HEIGHT = res
-        # Position: same height as the primary depth sensor.
-        sensor_cfg.POSITION = list(base_depth_cfg.POSITION)
-        # ORIENTATION uses Euler XYZ in radians: rotate around the Y
-        # (up) axis to point each slice in a different yaw direction.
-        sensor_cfg.ORIENTATION = [0.0, float(yaw), 0.0]
-        sensor_cfg.TYPE = base_depth_cfg.TYPE
-        setattr(config.SIMULATOR, cfg_name, sensor_cfg)
-
-    # Append to AGENT_0's SENSORS list (other agents reuse this list).
-    sensor_names = list(config.SIMULATOR.AGENT_0.SENSORS)
-    for uuid in LIDAR_DEPTH_UUIDS:
-        cfg_name = uuid.upper()
-        if cfg_name not in sensor_names:
-            sensor_names.append(cfg_name)
-    config.SIMULATOR.AGENT_0.SENSORS = sensor_names
-
-    # AGENT_i may have its own SENSORS list in some yaml variants - if
-    # so, append there too. Multi-agent objectnav config in this repo
-    # only defines AGENT_0.SENSORS, but be defensive.
-    for i in range(num_agents):
-        attr = f"AGENT_{i}"
-        if hasattr(config.SIMULATOR, attr):
-            agent_cfg = getattr(config.SIMULATOR, attr)
-            if hasattr(agent_cfg, "SENSORS"):
-                names = list(agent_cfg.SENSORS)
-                changed = False
-                for uuid in LIDAR_DEPTH_UUIDS:
-                    cfg_name = uuid.upper()
-                    if cfg_name not in names and cfg_name in [
-                        s for s in dir(config.SIMULATOR) if s.startswith("LIDAR_DEPTH_")
-                    ]:
-                        names.append(cfg_name)
-                        changed = True
-                if changed:
-                    agent_cfg.SENSORS = names
+    sim_cfg = config.habitat.simulator
+    for agent_name in sim_cfg.agents_order:
+        agent_cfg = sim_cfg.agents[agent_name]
+        if "depth_sensor" not in agent_cfg.sim_sensors:
+            continue
+        base = OmegaConf.to_container(
+            agent_cfg.sim_sensors.depth_sensor, resolve=True
+        )
+        base_position = list(base.get("position", [0.0, 0.88, 0.0]))
+        for uuid, yaw in LIDAR_DEPTH_YAW.items():
+            sensor_cfg = deepcopy(base)
+            sensor_cfg["uuid"] = uuid
+            sensor_cfg["hfov"] = 90
+            sensor_cfg["width"] = res
+            sensor_cfg["height"] = res
+            sensor_cfg["position"] = list(base_position)
+            sensor_cfg["orientation"] = [0.0, float(yaw), 0.0]
+            agent_cfg.sim_sensors[uuid] = OmegaConf.create(sensor_cfg)
 
 
 # ---------------------------------------------------------------------------

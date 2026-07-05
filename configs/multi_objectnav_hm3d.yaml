@@ -1,49 +1,110 @@
-ENVIRONMENT:
-  MAX_EPISODE_STEPS: 500
-SIMULATOR:
-  TURN_ANGLE: 30
-  TILT_ANGLE: 30
-  ACTION_SPACE_CONFIG: "v1"
-  NUM_AGENTS: 2
-  AGENT_0:
-    SENSORS: ['RGB_SENSOR', 'DEPTH_SENSOR']
-    HEIGHT: 0.88
-    RADIUS: 0.18
-  HABITAT_SIM_V0:
-    GPU_DEVICE_ID: 0
-    ALLOW_SLIDING: True 
-  SEMANTIC_SENSOR:
-    WIDTH: 640
-    HEIGHT: 480
-    HFOV: 79
-    POSITION: [0, 0.88, 0]
-  RGB_SENSOR:
-    WIDTH: 640
-    HEIGHT: 480
-    HFOV: 79
-    POSITION: [0, 0.88, 0]
-  DEPTH_SENSOR:
-    WIDTH: 640
-    HEIGHT: 480
-    HFOV: 79
-    MIN_DEPTH: 0.0
-    MAX_DEPTH: 5.0
-    POSITION: [0, 0.88, 0]
-  SCENE_DATASET: "data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json"
-TASK:
-  TYPE: ObjectNav-v1
-  POSSIBLE_ACTIONS: ["STOP", "MOVE_FORWARD", "TURN_LEFT", "TURN_RIGHT", "LOOK_UP", "LOOK_DOWN"]
-  SENSORS: ['OBJECTGOAL_SENSOR', 'GPS_SENSOR', 'COMPASS_SENSOR']
-  GOAL_SENSOR_UUID: objectgoal
-  MEASUREMENTS: ['DISTANCE_TO_GOAL', 'SUCCESS', 'SPL']
-  DISTANCE_TO_GOAL:
-    DISTANCE_TO: VIEW_POINTS
-  SUCCESS:
-    SUCCESS_DISTANCE: 0.2
+# @package _global_
+#
+# Multi-agent HM3D ObjectNav config for Co-NavGPT2 on Habitat-Lab 0.3.3.
+#
+# The task inherits from Habitat-Lab's stock objectnav_hm3d benchmark,
+# then overrides:
+#   * two robot agents (main_agent + agent_1) with identical RGB / Depth
+#     sensor stacks sitting at 0.88 m for the standard HM3D robot body
+#     (matches the old YACS SIMULATOR.AGENT_0.HEIGHT=0.88 setup)
+#   * the HM3D v2 ObjectNav split shipped with this repo
+#   * a small ``conav`` section that holds the humanoid + robot-model
+#     knobs consumed by envs/random_humanoid.py and envs/robot_models.py.
+#
+# arguments.py replicates ``main_agent`` into as many agents as
+# ``--num_agents`` requests at load time, so this file only ever
+# declares two agents (enough for Hydra defaults to resolve).
 
-DATASET:
-  TYPE: ObjectNav-v1
-  SPLIT: val
-  DATA_PATH: "data/datasets/objectnav_hm3d_v2/{split}/{split}.json.gz"
-  SCENES_DIR: "data/scene_datasets"
+defaults:
+  - /benchmark/nav/objectnav/objectnav_hm3d
+  - _self_
 
+habitat:
+  environment:
+    max_episode_steps: 500
+  simulator:
+    type: Sim-v0
+    forward_step_size: 0.25
+    turn_angle: 30
+    default_agent_id: 0
+    scene_dataset: data/scene_datasets/hm3d_v0.2/hm3d_annotated_basis.scene_dataset_config.json
+    agents_order:
+      - main_agent
+      - agent_1
+    agents:
+      main_agent: &robot_agent
+        height: 0.88
+        radius: 0.18
+        max_climb: 0.2
+        max_slope: 45.0
+        sim_sensors:
+          rgb_sensor:
+            type: HabitatSimRGBSensor
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0.0, 0.88, 0.0]
+          depth_sensor:
+            type: HabitatSimDepthSensor
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.0
+            max_depth: 5.0
+            normalize_depth: True
+            position: [0.0, 0.88, 0.0]
+      agent_1: *robot_agent
+    habitat_sim_v0:
+      gpu_device_id: 0
+      allow_sliding: True
+      enable_physics: True
+  task:
+    measurements:
+      success:
+        success_distance: 0.2
+  dataset:
+    type: ObjectNav-v1
+    split: val
+    data_path: data/datasets/objectnav_hm3d_v2/{split}/{split}.json.gz
+    scenes_dir: data/scene_datasets
+
+# ---------------------------------------------------------------------------
+# Co-NavGPT specific knobs (humanoids + visible robot URDF models). These
+# live outside the ``habitat`` namespace so they do not collide with the
+# habitat-lab structured config schema.
+# ---------------------------------------------------------------------------
+conav:
+  # Filled in by arguments.load_config from --num_agents / --num_humans.
+  num_robots: 2
+  num_humans: 0
+
+  # Visible robot URDF models
+  robot_models_enabled: False
+  robot_model_profiles:
+    - fetch
+  robot_model_urdfs: []
+  available_robot_profiles:
+    - fetch
+    - fetch_no_wheels
+    - fetch_suction
+    - spot
+    - stretch
+
+  # Humanoid pedestrians. Paths resolve to Habitat3's humanoid asset
+  # download (python -m habitat_sim.utils.datasets_download
+  # --uids habitat_humanoids --data-path data/).
+  human_urdfs:
+    - data/humanoids/humanoid_data/female_2/female_2.urdf
+    - data/humanoids/humanoid_data/male_1/male_1.urdf
+    - data/humanoids/humanoid_data/neutral_2/neutral_2.urdf
+  human_motion_data_paths:
+    - data/humanoids/humanoid_data/female_2/female_2_motion_data_smplx.pkl
+    - data/humanoids/humanoid_data/male_1/male_1_motion_data_smplx.pkl
+    - data/humanoids/humanoid_data/neutral_2/neutral_2_motion_data_smplx.pkl
+  human_walk_speed: 0.7
+  human_turn_speed: 1.5
+  human_goal_radius: 0.6
+  human_target_radius: 4.0
+  human_motion_dt: 0.0333333333
+  human_use_controller_root_motion: True
+  min_spawn_distance: 1.2

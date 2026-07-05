@@ -187,16 +187,21 @@ class FireScene:
     def from_args(cls, args, config) -> "FireScene":
         """Build a scene matching the CLI flags from ``arguments.py``.
 
-        Resolves the scene id from ``config.SIMULATOR.SCENE`` (Habitat
-        rewrites this on every reset) and locates the precomputed
-        timeline npz on disk.
+        Resolves the scene id from the config (Habitat rewrites the
+        active scene on every reset) and locates the precomputed
+        timeline npz on disk. Supports both Habitat-Lab 0.3.3
+        (``config.habitat.simulator.scene``) and legacy 0.2.1 YACS
+        (``config.SIMULATOR.SCENE``).
         """
         if not getattr(args, "fire_world_plan_id", None):
             raise ValueError(
                 "FireScene.from_args requires --fire_world_plan_id to point "
                 "at a plan.json under scenes/<scene>/plans/."
             )
-        scene_glb = config.SIMULATOR.SCENE
+        if hasattr(config, "habitat"):
+            scene_glb = config.habitat.simulator.scene
+        else:
+            scene_glb = config.SIMULATOR.SCENE
         scene_short = (
             scene_glb.split("/")[-1]
                      .replace(".basis.glb", "")

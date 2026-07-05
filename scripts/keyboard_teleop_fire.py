@@ -35,8 +35,11 @@ import numpy as np
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
+import habitat  # noqa: E402
 from habitat import Env  # noqa: E402
-from habitat.config.default import get_config  # noqa: E402
+from omegaconf import OmegaConf  # noqa: E402
+
+from arguments import get_args, load_config  # noqa: E402
 
 from utils.fire_world.scene import FireScene  # noqa: E402
 from utils.fire_pipeline import step_fire_observation  # noqa: E402
@@ -147,15 +150,28 @@ def overlay_label(img: np.ndarray, lines: list) -> None:
 def main():
     args = parse_args()
 
-    # ---------- config ----------
-    config = get_config(config_paths=[args.task_config])
-    config.defrost()
-    config.SIMULATOR.NUM_AGENTS = args.num_agents
-    config.SIMULATOR.AGENTS = [f"AGENT_{i}" for i in range(args.num_agents)]
-    config.freeze()
-    action_list = list(config.TASK.POSSIBLE_ACTIONS)
-    action_dict = {name: idx for idx, name in enumerate(action_list)}
-    default_stop = action_dict.get("STOP", 0)
+    # ---------- config (Habitat 0.3.3 DictConfig) ----------
+    fake = get_args()
+    fake.task_config = args.task_config.replace("configs/", "")
+    fake.config = args.task_config if "/" in args.task_config else None
+    fake.num_agents = args.num_agents
+    fake.num_humans = 0
+    fake.robot_models_enabled = 0
+    fake.robot_profiles = None
+    fake.robot_urdfs = None
+    fake.dataset_path = None
+    fake.scenes_dir = None
+    fake.scene_dataset = None
+    config = load_config(fake)
+
+    # H3.3: 4 discrete cylinder actions
+    action_dict = {"stop": 0, "move_forward": 1, "turn_left": 2,
+                   "turn_right": 3, "look_up": 4, "look_down": 5}
+    default_stop = 0
+
+    main_agent_name = config.habitat.simulator.agents_order[0]
+    rgb_cfg = config.habitat.simulator.agents[main_agent_name].sim_sensors.rgb_sensor
+    depth_cfg = config.habitat.simulator.agents[main_agent_name].sim_sensors.depth_sensor
 
     # ---------- env + episode pick ----------
     env = Env(config=config)
@@ -178,17 +194,17 @@ def main():
         fire_seconds_per_unit=args.seconds_per_unit,
         fire_world_smoke_k_ext=args.smoke_k_ext,
         fire_world_n_steps=args.n_steps,
-        frame_width=config.SIMULATOR.RGB_SENSOR.WIDTH,
-        frame_height=config.SIMULATOR.RGB_SENSOR.HEIGHT,
-        hfov=config.SIMULATOR.RGB_SENSOR.HFOV,
+        frame_width=int(rgb_cfg.width),
+        frame_height=int(rgb_cfg.height),
+        hfov=float(rgb_cfg.hfov),
     )
     scene = FireScene.from_args(fw_args, config)
     print(f"[teleop] {scene.describe()}")
 
     # ---------- FireSensorSuite (the observation layer) ----------
     suite_cfg = FireSensorConfig(
-        max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
-        hfov_deg=float(config.SIMULATOR.DEPTH_SENSOR.HFOV),
+        max_depth_m=float(depth_cfg.max_depth),
+        hfov_deg=float(depth_cfg.hfov),
         smoke_density=float(args.smoke_density),
         save_npz=bool(int(args.save_npz)),
         rgb_source="voxel",
@@ -205,9 +221,9 @@ def main():
         ),
     )
     K = get_camera_K(
-        config.SIMULATOR.RGB_SENSOR.WIDTH,
-        config.SIMULATOR.RGB_SENSOR.HEIGHT,
-        config.SIMULATOR.RGB_SENSOR.HFOV,
+        int(rgb_cfg.width),
+        int(rgb_cfg.height),
+        float(rgb_cfg.hfov),
     )
     dump_dir = (
         args.save_frames_to if args.save_frames_to else "./outputs/teleop_fire"
@@ -233,6 +249,8 @@ def main():
 
     # ---------- driving loop ----------
     obs = env.reset()
+    if not isinstance(obs, list):
+        obs = [obs]
     window = "FireWorld Teleop"
     cv2.namedWindow(window, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(window, 1280, 480)
@@ -249,15 +267,15 @@ def main():
 
     # Local step counter; the real env doesn't expose one.
     robot_step = 0
-    max_d = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
+    max_d = float(depth_cfg.max_depth)
 
     key_map = {
-        ord("w"): "MOVE_FORWARD",
-        ord("a"): "TURN_LEFT",
-        ord("d"): "TURN_RIGHT",
-        ord("s"): "STOP",
-        ord("q"): "LOOK_DOWN",
-        ord("e"): "LOOK_UP",
+        ord("w"): "move_forward",
+        ord("a"): "turn_left",
+        ord("d"): "turn_right",
+        ord("s"): "stop",
+        ord("q"): "look_down",
+        ord("e"): "look_up",
     }
 
     print("Controls:  W/A/D move/turn  S stop  Q/E look down/up  R reset  ESC quit")
@@ -372,6 +390,8 @@ def main():
                 break
             if key == ord("r"):
                 obs = env.reset()
+                if not isinstance(obs, list):
+                    obs = [obs]
                 robot_step = 0
                 # Restart the fire-time origin so the operator gets a
                 # fresh "t=0" plume to walk through.
@@ -401,6 +421,8 @@ def main():
             actions[args.agent_id] = action_idx
             try:
                 obs = env.step(actions)
+                if not isinstance(obs, list):
+                    obs = [obs]
             except Exception:
                 traceback.print_exc()
                 break

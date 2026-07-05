@@ -17,40 +17,49 @@ Visual target navigation is a critical capability for autonomous robots operatin
 
 ## Installation
 
-### Installing Dependencies
-- Setup the conda environment as Python3.8 + CUDA11.8 + PyTorch2.0.1.
+The project now targets **Habitat-Lab 0.3.3 + Habitat-Sim 0.3.3**.
+Multi-agent support and humanoid pedestrians are provided by upstream
+habitat-lab, so we no longer ship a patched fork of `habitat-lab`.
+
+- Set up the conda environment (Python 3.9 + CUDA 11.8 + PyTorch 2.0.1):
     ```
-    conda create -n co-nav anaconda python=3.8 cmake=3.14.0
+    conda create -n co-nav python=3.9 cmake=3.14.0
     conda activate co-nav
     conda install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=11.8 -c pytorch -c nvidia
     ```
 
-- We use adjusted versions of [habitat-sim](https://github.com/facebookresearch/habitat-sim) and [habitat-lab](https://github.com/facebookresearch/habitat-lab) as specified below:
+- Install habitat-sim 0.3.3 with Bullet physics:
+    ```
+    conda install habitat-sim=0.3.3 withbullet -c conda-forge -c aihabitat
+    ```
 
-- Installing habitat-sim:
-```
-git clone https://github.com/facebookresearch/habitat-sim.git
-cd habitat-sim; git checkout tags/v0.2.1; 
-pip install -r requirements.txt; 
-python setup.py install --headless
-python setup.py install # (for Mac OS)
-```
+- Install habitat-lab 0.3.3:
+    ```
+    git clone https://github.com/facebookresearch/habitat-lab.git
+    cd habitat-lab; git checkout tags/v0.3.3
+    pip install -e habitat-lab
+    ```
 
-- Installing habitat-lab:
-```
-git clone https://github.com/facebookresearch/habitat-lab.git
-cd habitat-lab; git checkout tags/v0.2.1; 
-pip install -e .
-```
+- Clone this repository and install the remaining Python requirements:
+    ```
+    git clone https://github.com/ybgdgh/Co-NavGPT2
+    cd Co-NavGPT2/
+    pip install -r requirements.txt
+    ```
 
-- Clone the repository and install other requirements:
-```
-git clone https://github.com/ybgdgh/Co-NavGPT2
-cd Co-NavGPT/
-pip install -r requirements.txt
-# replace the habitat folder in habitat-lab rope for the multi-robot setting: 
-mv -r multi-robot-setting/habitat enter-your-path/habitat-lab
-```
+- (Optional) Download Habitat 3 humanoid assets so `--num_humans > 0`
+  works. These sit under `data/humanoids/humanoid_data/...`:
+    ```
+    python -m habitat_sim.utils.datasets_download --uids habitat_humanoids --data-path data/
+    ```
+
+- (Optional) Download visible robot URDF assets so
+  `--robot_models_enabled 1` works. Fetch is bundled with habitat-sim;
+  Spot and Stretch are separate uids:
+    ```
+    python -m habitat_sim.utils.datasets_download --uids hab_spot_arm --data-path data/
+    python -m habitat_sim.utils.datasets_download --uids hab_stretch --data-path data/
+    ```
 
 ### Download HM3D_v0.2 datasets:
 
@@ -79,17 +88,39 @@ Co-NavGPT/
 export OPENAI_API_KEY="your_api_key_here"
 ```
 
-### For evaluation: 
-For evaluating the multi-robot object-goal navigation task, run:
+### For evaluation:
+
+Run the multi-robot ObjectNav task with the default config
+(`configs/multi_objectnav_hm3d.yaml`, two robots, no humanoids):
+
 ```
 python main.py
 ```
-For multiprocessing, run:
+
+Add pedestrians:
+
 ```
-python main_vec.py
+python main.py --num_humans 3
 ```
 
-You can also add `-v 1` to enable the Open3D visualization UI to check the maps, and `-n 1` to set the number of multiprocessing for `main_vec.py`.
+Show visible articulated robot models on top of the nav agents:
+
+```
+python main.py --robot_models_enabled 1 --robot_profiles spot,fetch
+```
+
+For multiprocessing evaluation:
+
+```
+python main_vec.py -n 2
+```
+
+You can also add `-v 1` to enable the Open3D visualization UI to check
+the maps.
+
+See [`docs/habitat3_migration.md`](docs/habitat3_migration.md) for a
+detailed summary of what changed relative to the previous
+Habitat-Lab 0.2.1 version.
 
 ## Real-world Implementation
 

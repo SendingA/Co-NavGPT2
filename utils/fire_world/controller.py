@@ -110,8 +110,16 @@ class FireWorldController:
 
         scene = FireScene.from_args(args, config)
         K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
+        if hasattr(config, "habitat"):
+            main_name = config.habitat.simulator.agents_order[0]
+            max_depth = float(
+                config.habitat.simulator.agents[main_name]
+                .sim_sensors.depth_sensor.max_depth
+            )
+        else:
+            max_depth = float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH)
         params = VoxelRenderParams(
-            max_depth_m=float(config.SIMULATOR.DEPTH_SENSOR.MAX_DEPTH),
+            max_depth_m=max_depth,
             n_steps=int(args.fire_world_n_steps),
             smoke_k_ext=float(args.fire_world_smoke_k_ext),
             render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),

@@ -1,205 +1,383 @@
-"""CLI for main.py / main_vec.py.
+"""CLI for main.py / main_vec.py under Habitat-Lab 0.3.3.
 
-The flags below are grouped by what they actually affect at runtime;
-unused legacy flags (``--exp_name``, ``--log_interval``, ``--agent``)
-were removed in the 2026-06 cleanup since no caller read them.
+The flag surface stayed almost identical to the Habitat 0.2.1 version so
+users' existing shell scripts keep working; the migration is contained in
+:func:`load_config` which now returns an ``omegaconf.DictConfig`` composed
+by Hydra rather than the old YACS ``CfgNode``.
+
+Three new groups were added in the 2026-07 migration:
+
+* ``--num_humans`` and the humanoid data paths for the pedestrians spawned
+  by :class:`envs.random_humanoid.RandomHumanoidWalker`.
+* ``--robot_models_enabled`` / ``--robot_profiles`` for the visible robot
+  URDF models loaded by :class:`envs.robot_models.RobotModelManager`.
+* Explicit dataset / scene-dataset overrides so the same task_config can
+  target Co-NavGPTv2's HM3D v2 install or Co-NavGPTv3's demo assets.
 """
+from __future__ import annotations
+
 import argparse
+from pathlib import Path
+from typing import List, Optional
+
 import torch
+from omegaconf import OmegaConf
+
+from habitat.config.default import get_config as habitat_get_config
+from habitat.config.read_write import read_write
 
 
-def get_args():
-    parser = argparse.ArgumentParser(
-        description='Multi-Agent-Semantic-Exploration')
+PROJECT_ROOT = Path(__file__).resolve().parent
+
+
+def get_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Multi-Agent-Semantic-Exploration")
 
     # ------------------------------------------------------------------
     # General
     # ------------------------------------------------------------------
-    parser.add_argument('--seed', type=int, default=1,
-                        help='random seed (default: 1)')
-    parser.add_argument('-d', '--dump_location', type=str, default="./tmp",
-                        help='where main.py writes logs / dumps. '
-                             'output goes to <dump_location>/logs/<nav_mode>/'
-                             ' and <dump_location>/dump/<nav_mode>/')
-    parser.add_argument('-v', '--visualize', type=int, default=0,
-                        help='1: render observations + predicted semantic '
-                             'map; opens an Open3D GUI in main.py')
-    parser.add_argument('--print_images', type=int, default=0,
-                        help='1: persist visualization frames to disk')
+    parser.add_argument("--seed", type=int, default=1,
+                        help="random seed (default: 1)")
+    parser.add_argument("-d", "--dump_location", type=str, default="./tmp",
+                        help="where main.py writes logs / dumps. "
+                             "output goes to <dump_location>/logs/<nav_mode>/"
+                             " and <dump_location>/dump/<nav_mode>/")
+    parser.add_argument("-v", "--visualize", type=int, default=0,
+                        help="1: render observations + predicted semantic "
+                             "map; opens an Open3D GUI in main.py")
+    parser.add_argument("--print_images", type=int, default=0,
+                        help="1: persist visualization frames to disk")
 
     # ------------------------------------------------------------------
     # Camera + scene config
     # ------------------------------------------------------------------
-    parser.add_argument('-fw', '--frame_width', type=int, default=640)
-    parser.add_argument('-fh', '--frame_height', type=int, default=480)
+    parser.add_argument("-fw", "--frame_width", type=int, default=640)
+    parser.add_argument("-fh", "--frame_height", type=int, default=480)
     parser.add_argument("--task_config", type=str,
                         default="multi_objectnav_hm3d.yaml",
-                        help="path to config yaml under configs/")
-    parser.add_argument('--hfov', type=float, default=79.0,
+                        help="path to config yaml under configs/. Passed to "
+                             "habitat.config.default.get_config as a Hydra "
+                             "config file.")
+    parser.add_argument("--config", type=str, default=None,
+                        help="Optional absolute/relative path to a Hydra "
+                             "config file, overrides --task_config.")
+    parser.add_argument("--hfov", type=float, default=79.0,
                         help="horizontal field of view in degrees")
+    parser.add_argument("--dataset_path", type=str, default=None,
+                        help="override habitat.dataset.data_path (e.g. "
+                             "data/datasets/objectnav_hm3d_v2/{split}/{split}.json.gz)")
+    parser.add_argument("--scenes_dir", type=str, default=None,
+                        help="override habitat.dataset.scenes_dir")
+    parser.add_argument("--scene_dataset", type=str, default=None,
+                        help="override habitat.simulator.scene_dataset "
+                             "(scene_dataset_config.json)")
 
     # ------------------------------------------------------------------
     # Multi-agent / parallel run
     # ------------------------------------------------------------------
-    parser.add_argument('--num_local_steps', type=int, default=25,
-                        help='steps between two global re-plans')
-    parser.add_argument('-n', '--num_processes', type=int, default=1,
-                        help='only honored by main_vec.py')
-    parser.add_argument('--rank', type=int, default=0,
-                        help='set automatically by main_vec.py per worker; '
-                             'main.py keeps the default 0')
-    parser.add_argument('--gpu_id', type=int, default=0,
-                        help='Habitat-sim GPU device id')
-    parser.add_argument('--num_agents', type=int, default=2,
-                        help='number of agents in the simulator')
+    parser.add_argument("--num_local_steps", type=int, default=25,
+                        help="steps between two global re-plans")
+    parser.add_argument("-n", "--num_processes", type=int, default=1,
+                        help="only honored by main_vec.py")
+    parser.add_argument("--rank", type=int, default=0,
+                        help="set automatically by main_vec.py per worker; "
+                             "main.py keeps the default 0")
+    parser.add_argument("--gpu_id", type=int, default=0,
+                        help="Habitat-sim GPU device id")
+    parser.add_argument("--num_agents", type=int, default=2,
+                        help="number of robot agents in the simulator")
+
+    # Habitat 3 humanoid pedestrians
+    parser.add_argument("--num_humans", type=int, default=0,
+                        help="number of kinematic humanoid pedestrians to "
+                             "spawn alongside the robots. 0 disables the "
+                             "humanoid walker entirely.")
+    # Habitat 3 visible robot URDF models (Fetch / Spot / ...) rendered on
+    # top of the classic ObjectNav navigation agents.
+    parser.add_argument("--robot_models_enabled", type=int, default=0,
+                        help="1: load Habitat3 articulated robot URDFs as "
+                             "kinematic visual models synchronized to the "
+                             "nav agents.")
+    parser.add_argument("--robot_profiles", type=str, default=None,
+                        help="Comma-separated robot profile names for the "
+                             "visible URDFs: fetch, fetch_no_wheels, "
+                             "fetch_suction, spot, stretch. Cycles through "
+                             "the list if num_agents > len(profiles).")
+    parser.add_argument("--robot_urdfs", type=str, default=None,
+                        help="Optional comma-separated URDF path overrides; "
+                             "kept parallel to --robot_profiles for asset "
+                             "swapping without changing the robot class.")
 
     # ------------------------------------------------------------------
     # Mapping / perception
     # ------------------------------------------------------------------
-    parser.add_argument('--map_resolution', type=int, default=5,
-                        help='cm per occupancy grid cell')
-    parser.add_argument('--map_size_cm', type=int, default=2400,
-                        help='occupancy map side length (cm)')
-    parser.add_argument('--map_height_cm', type=int, default=130,
-                        help='top-down map slice height (cm)')
-    parser.add_argument('--sem_threshold', type=float, default=0.85,
-                        help='semantic detection confidence above which '
-                             'the goal is considered found')
+    parser.add_argument("--map_resolution", type=int, default=5,
+                        help="cm per occupancy grid cell")
+    parser.add_argument("--map_size_cm", type=int, default=2400,
+                        help="occupancy map side length (cm)")
+    parser.add_argument("--map_height_cm", type=int, default=130,
+                        help="top-down map slice height (cm)")
+    parser.add_argument("--sem_threshold", type=float, default=0.85,
+                        help="semantic detection confidence above which "
+                             "the goal is considered found")
 
     # ------------------------------------------------------------------
     # Global planner
     # ------------------------------------------------------------------
-    parser.add_argument('--nav_mode', type=str, default="gpt",
-                        choices=['nearest', 'co_ut', 'fill', 'gpt'],
-                        help='global frontier policy. nearest=closest, '
-                             'co_ut=cooperative assignment, fill=highest '
-                             'frontier score, gpt=GPT-4o decision (calls '
-                             'OpenAI; see --gpt_type)')
-    parser.add_argument('--fill_mode', type=int, default=0,
-                        help='1: when an agent revisits the same frontier, '
-                             'mark its area as obstacle and re-detect')
-    parser.add_argument('--gpt_type', type=int, default=2,
-                        help='1: gpt-3.5-turbo  2: gpt-4o (default)  '
-                             '3: gpt-4o-mini  (only used when nav_mode=gpt)')
+    parser.add_argument("--nav_mode", type=str, default="gpt",
+                        choices=["nearest", "co_ut", "fill", "gpt"],
+                        help="global frontier policy. nearest=closest, "
+                             "co_ut=cooperative assignment, fill=highest "
+                             "frontier score, gpt=GPT-4o decision.")
+    parser.add_argument("--fill_mode", type=int, default=0,
+                        help="1: when an agent revisits the same frontier, "
+                             "mark its area as obstacle and re-detect")
+    parser.add_argument("--gpt_type", type=int, default=2,
+                        help="1: gpt-3.5-turbo  2: gpt-4o (default)  "
+                             "3: gpt-4o-mini  (only used when nav_mode=gpt)")
 
     # ------------------------------------------------------------------
     # Fire-scene observation suite (Beer-Lambert RGB + noisy depth +
-    # radar / lidar / thermal). The suite is auto-constructed whenever
+    # radar / lidar / thermal). Suite is auto-constructed when
     # --fire_world=1, even if --fire_sensors=0.
     # ------------------------------------------------------------------
-    parser.add_argument('--fire_sensors', type=int, default=0,
-                        help='1: enable the fire-scene observation suite '
-                             '(Beer-Lambert RGB, smoke-degraded depth, '
-                             'radar/lidar/thermal, dashboard). Implicitly '
-                             'on when --fire_world=1.')
-    parser.add_argument('--fire_apply_to_obs', type=int, default=1,
-                        help='1: replace observations[\'rgb\'] with the '
-                             'smoke-affected RGB before the agent sees it; '
-                             '0: keep clean RGB for nav, only dump degraded '
-                             'sensors to disk')
-    parser.add_argument('--smoke_density', type=float, default=0.6,
-                        help='[0,1] Beer-Lambert smoke density. Drives both '
-                             'the noisy-depth visibility cutoff and the '
-                             'optional --fire_world_compound_rgb pass.')
-    parser.add_argument('--fire_dump_dir', type=str,
-                        default='./outputs/fire_sensors',
-                        help='per-step sensor image output directory')
-    parser.add_argument('--fire_save_every', type=int, default=1,
-                        help='save dumps every N steps (1 = every step)')
-    parser.add_argument('--fire_save_npz', type=int, default=0,
-                        help='1: also dump raw numpy arrays as .npz')
-    parser.add_argument('--fire_show_window', type=int, default=0,
-                        help='1: open a live OpenCV 2x4 dashboard window '
-                             'per agent')
-    parser.add_argument('--lidar_360', type=int, default=0,
-                        help='1: install 4 yaw-rotated depth sensors '
-                             '(front/left/back/right) so the LIDAR module '
-                             'stitches a true 360 deg point cloud. Only '
-                             'effective with --fire_sensors=1.')
-    parser.add_argument('--lidar_resolution', type=int, default=320,
-                        help='per-slice depth resolution for the 360 deg '
-                             'LIDAR (square HxW). Lower = faster.')
+    parser.add_argument("--fire_sensors", type=int, default=0)
+    parser.add_argument("--fire_apply_to_obs", type=int, default=1)
+    parser.add_argument("--smoke_density", type=float, default=0.6)
+    parser.add_argument("--fire_dump_dir", type=str,
+                        default="./outputs/fire_sensors")
+    parser.add_argument("--fire_save_every", type=int, default=1)
+    parser.add_argument("--fire_save_npz", type=int, default=0)
+    parser.add_argument("--fire_show_window", type=int, default=0)
+    parser.add_argument("--lidar_360", type=int, default=0)
+    parser.add_argument("--lidar_resolution", type=int, default=320)
 
-    # ------------------------------------------------------------------
     # Smoke-scene perception switches
-    # ------------------------------------------------------------------
-    parser.add_argument('--depth_use_clean', type=int, default=0,
-                        help='1: write Habitat\'s clean (un-degraded) depth '
-                             'back into observations, even if the fire suite '
-                             'computed a noisy version. Strongly recommended '
-                             'when debugging / comparing nav under smoke.')
-    parser.add_argument('--use_thermal_perception', type=int, default=1,
-                        help='1: when the fire suite is on, inject the '
-                             'thermal flame mask into observations and let '
-                             'the detector source fire detections from '
-                             'thermal instead of HSV-on-smoky-RGB.')
-    parser.add_argument('--rgb_dehaze', type=int, default=0,
-                        help='1: depth-aware inverse Beer-Lambert + CLAHE on '
-                             'the smoky RGB before object detection. '
-                             'Only meaningful when --depth_use_clean=1, '
-                             'otherwise the inversion uses noisy depth and '
-                             'amplifies artifacts.')
+    parser.add_argument("--depth_use_clean", type=int, default=0)
+    parser.add_argument("--use_thermal_perception", type=int, default=1)
+    parser.add_argument("--rgb_dehaze", type=int, default=0)
 
-    # ------------------------------------------------------------------
-    # FireWorld runtime: 3D voxel-driven RGB / Thermal, indexed by step
-    # ------------------------------------------------------------------
-    parser.add_argument('--fire_world', type=int, default=0,
-                        help='1: load the precomputed FireWorld voxel '
-                             'timeline and render RGB/Thermal from the '
-                             'agent pose (overrides the Beer-Lambert RGB '
-                             'inside the sensor suite).')
-    parser.add_argument('--fire_world_plan_id', type=str, default=None,
-                        help='Plan id (12-hex) under scenes/<scene>/plans/. '
-                             'Required when --fire_world=1.')
-    parser.add_argument('--fire_world_scenes_root', type=str, default='scenes',
-                        help='where to find inventory.json + plan.json')
-    parser.add_argument('--fire_world_out_root', type=str,
-                        default='outputs/fire_world',
-                        help='where to find timeline.npz '
-                             '(out_root/<scene>/<plan_id>/timeline.npz)')
-    parser.add_argument('--fire_clock_mode', type=str, default='wallclock',
-                        choices=['wallclock', 'step'],
-                        help='How fire-time advances. wallclock (default): '
-                             'fire and smoke evolve continuously with real '
-                             'time, scaled by --fire_speedup, independent '
-                             'of how many env.step() the agent has taken. '
-                             'step: legacy mode where every '
-                             '--fire_steps_per_unit env.step() advances the '
-                             'timeline by --fire_seconds_per_unit, useful '
-                             'for reproducible benchmarks.')
-    parser.add_argument('--fire_speedup', type=float, default=1.0,
-                        help='Wallclock-mode multiplier: fire-seconds per '
-                             'real-second. 1.0 = real-time; 5.0 = the fire '
-                             'evolves 5x faster than wall clock so a 60 s '
-                             'episode covers 5 minutes of fire-time. '
-                             'Ignored when --fire_clock_mode=step.')
-    parser.add_argument('--fire_steps_per_unit', type=int, default=5,
-                        help='step-mode: robot steps that elapse for every '
-                             '1 unit of fire-time (larger = slower fire vs '
-                             'the agent). Ignored in wallclock mode.')
-    parser.add_argument('--fire_seconds_per_unit', type=float, default=2.0,
-                        help='step-mode: timeline seconds consumed per '
-                             'fire-time unit. With defaults 5/2.0, 5 robot '
-                             'steps advance the simulated fire by 2 s. '
-                             'Ignored in wallclock mode.')
-    parser.add_argument('--fire_world_smoke_k_ext', type=float, default=4.0,
-                        help='extinction coefficient multiplier on the '
-                             'smoke voxel field (per metre)')
-    parser.add_argument('--fire_world_n_steps', type=int, default=24,
-                        help='ray-march samples per pixel inside the '
-                             'voxel renderer')
-    parser.add_argument('--fire_world_render_scale', type=float, default=0.5,
-                        help='render the volume integrator at this fraction '
-                             'of camera resolution (0.5 -> ~4x speedup; '
-                             '1.0 -> full resolution)')
-    parser.add_argument('--fire_world_compound_rgb', type=int, default=0,
-                        help='1: stack a global Beer-Lambert pass on top of '
-                             'the FireWorld voxel RGB so areas outside the '
-                             'active fire room still feel smoky. Density '
-                             'comes from --smoke_density. Flame pixels are '
-                             'guarded so the second pass cannot erase them.')
+    # FireWorld runtime
+    parser.add_argument("--fire_world", type=int, default=0)
+    parser.add_argument("--fire_world_plan_id", type=str, default=None)
+    parser.add_argument("--fire_world_scenes_root", type=str, default="scenes")
+    parser.add_argument("--fire_world_out_root", type=str,
+                        default="outputs/fire_world")
+    parser.add_argument("--fire_clock_mode", type=str, default="wallclock",
+                        choices=["wallclock", "step"])
+    parser.add_argument("--fire_speedup", type=float, default=1.0)
+    parser.add_argument("--fire_steps_per_unit", type=int, default=5)
+    parser.add_argument("--fire_seconds_per_unit", type=float, default=2.0)
+    parser.add_argument("--fire_world_smoke_k_ext", type=float, default=4.0)
+    parser.add_argument("--fire_world_n_steps", type=int, default=24)
+    parser.add_argument("--fire_world_render_scale", type=float, default=0.5)
+    parser.add_argument("--fire_world_compound_rgb", type=int, default=0)
 
     args = parser.parse_args()
     args.cuda = torch.cuda.is_available()
 
+    # ``args.turn_angle`` was populated from the YACS config in the H2
+    # code path. Migration keeps it as a Python attribute so downstream
+    # planners (VLM_Agent, ffm_act, ShortestPathFollowerCompat) don't
+    # need to reach into the DictConfig.  Populated by :func:`load_config`.
+    args.turn_angle = 30
+
     return args
+
+
+# ---------------------------------------------------------------------------
+# Hydra config loading
+# ---------------------------------------------------------------------------
+def load_config(args: argparse.Namespace):
+    """Compose the Habitat 3.3 Hydra config and apply CLI overrides.
+
+    * Reads ``configs/<task_config>`` (or ``--config`` if given).
+    * Injects ``habitat.simulator.habitat_sim_v0.gpu_device_id`` from
+      ``args.gpu_id``.
+    * Replicates the first agent template into ``args.num_agents``
+      entries under ``habitat.simulator.agents`` and rewrites
+      ``agents_order`` to match. The default agent stays ``main_agent``.
+    * Adds a ``conav`` DictConfig group holding humanoid and robot-model
+      knobs so envs/random_humanoid.py + envs/robot_models.py can pull
+      everything from a single object.
+    """
+    overrides: List[str] = [
+        f"habitat.simulator.habitat_sim_v0.gpu_device_id={args.gpu_id}",
+    ]
+    if args.dataset_path is not None:
+        overrides.append(
+            f"habitat.dataset.data_path={_project_path(args.dataset_path)}"
+        )
+    if args.scenes_dir is not None:
+        overrides.append(
+            f"habitat.dataset.scenes_dir={_project_path(args.scenes_dir)}"
+        )
+    if args.scene_dataset is not None:
+        overrides.append(
+            f"habitat.simulator.scene_dataset={_project_path(args.scene_dataset)}"
+        )
+
+    config_path = args.config
+    if config_path is None:
+        config_path = str(PROJECT_ROOT / "configs" / args.task_config)
+    config_path = str(Path(config_path).expanduser())
+
+    config = habitat_get_config(config_path, overrides=overrides)
+
+    with read_write(config):
+        config.habitat.seed = args.seed
+        _apply_camera_geometry(config, args)
+        _set_num_robot_agents(config, args.num_agents)
+
+        _apply_conav_overrides(config, args)
+        _resolve_conav_paths(config)
+        _resolve_dataset_paths(config)
+
+    # Propagate turn angle back to the CLI namespace so the planners can
+    # read it without touching DictConfig again.
+    args.turn_angle = float(config.habitat.simulator.turn_angle)
+    return config
+
+
+def humanoid_kwargs(config, seed: int) -> dict:
+    """Bundle up kwargs for :class:`envs.random_humanoid.RandomHumanoidWalker`."""
+    return {
+        "num_humans": int(config.conav.num_humans),
+        "urdf_path": (
+            config.conav.human_urdfs
+            if "human_urdfs" in config.conav
+            else config.conav.human_urdf
+        ),
+        "motion_data_path": (
+            config.conav.human_motion_data_paths
+            if "human_motion_data_paths" in config.conav
+            else config.conav.human_motion_data
+        ),
+        "seed": seed,
+        "walk_speed": float(config.conav.human_walk_speed),
+        "turn_speed": float(config.conav.human_turn_speed),
+        "goal_radius": float(config.conav.human_goal_radius),
+        "target_radius": float(config.conav.human_target_radius),
+        "min_spawn_distance": float(config.conav.min_spawn_distance),
+        "motion_dt": float(config.conav.human_motion_dt),
+        "use_controller_root_motion": bool(
+            config.conav.human_use_controller_root_motion
+        ),
+    }
+
+
+def robot_model_kwargs(config, num_agents: int) -> dict:
+    """Bundle up kwargs for :class:`envs.robot_models.RobotModelManager`."""
+    robot_model_urdfs = (
+        config.conav.robot_model_urdfs
+        if "robot_model_urdfs" in config.conav
+        and len(config.conav.robot_model_urdfs) > 0
+        else None
+    )
+    return {
+        "num_robots": num_agents,
+        "profiles": (
+            config.conav.robot_model_profiles
+            if "robot_model_profiles" in config.conav
+            else "fetch"
+        ),
+        "urdf_paths": robot_model_urdfs,
+        "enabled": bool(config.conav.get("robot_models_enabled", False)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Internals
+# ---------------------------------------------------------------------------
+def _apply_camera_geometry(config, args: argparse.Namespace) -> None:
+    sim_cfg = config.habitat.simulator
+    for agent_cfg in sim_cfg.agents.values():
+        for sensor_cfg in agent_cfg.sim_sensors.values():
+            if hasattr(sensor_cfg, "width"):
+                sensor_cfg.width = int(args.frame_width)
+            if hasattr(sensor_cfg, "height"):
+                sensor_cfg.height = int(args.frame_height)
+            if hasattr(sensor_cfg, "hfov"):
+                sensor_cfg.hfov = float(args.hfov)
+
+
+def _set_num_robot_agents(config, num_robots: int) -> None:
+    if num_robots <= 0:
+        raise ValueError("num_agents must be positive.")
+
+    sim_cfg = config.habitat.simulator
+    template_name = sim_cfg.agents_order[0]
+    template = OmegaConf.to_container(sim_cfg.agents[template_name], resolve=True)
+
+    sim_cfg.agents.clear()
+    sim_cfg.agents_order.clear()
+    for idx in range(num_robots):
+        name = "main_agent" if idx == 0 else f"agent_{idx}"
+        sim_cfg.agents[name] = OmegaConf.create(template)
+        sim_cfg.agents_order.append(name)
+    sim_cfg.default_agent_id = 0
+
+
+def _apply_conav_overrides(config, args: argparse.Namespace) -> None:
+    """CLI values win over conav.* defaults from the yaml."""
+    conav = config.conav
+    conav.num_robots = int(args.num_agents)
+    conav.num_humans = int(args.num_humans)
+
+    if args.robot_models_enabled:
+        conav.robot_models_enabled = bool(args.robot_models_enabled)
+    if args.robot_profiles is not None:
+        conav.robot_model_profiles = _csv_items(args.robot_profiles)
+    if args.robot_urdfs is not None:
+        conav.robot_model_urdfs = _csv_items(args.robot_urdfs)
+
+
+def _resolve_conav_paths(config) -> None:
+    conav = config.conav
+    if "human_urdfs" in conav:
+        conav.human_urdfs = _project_paths(conav.human_urdfs)
+    elif "human_urdf" in conav:
+        conav.human_urdf = _project_path(conav.human_urdf)
+
+    if "human_motion_data_paths" in conav:
+        conav.human_motion_data_paths = _project_paths(
+            conav.human_motion_data_paths
+        )
+    elif "human_motion_data" in conav:
+        conav.human_motion_data = _project_path(conav.human_motion_data)
+
+    if (
+        "robot_model_urdfs" in conav
+        and len(conav.robot_model_urdfs) > 0
+    ):
+        conav.robot_model_urdfs = _project_paths(conav.robot_model_urdfs)
+
+
+def _resolve_dataset_paths(config) -> None:
+    config.habitat.dataset.data_path = _project_path(
+        config.habitat.dataset.data_path
+    )
+    config.habitat.dataset.scenes_dir = _project_path(
+        config.habitat.dataset.scenes_dir
+    )
+    if "scene_dataset" in config.habitat.simulator:
+        config.habitat.simulator.scene_dataset = _project_path(
+            config.habitat.simulator.scene_dataset
+        )
+
+
+def _project_path(path_value) -> str:
+    path = Path(str(path_value))
+    if path.is_absolute():
+        return str(path)
+    return str((PROJECT_ROOT / path).resolve())
+
+
+def _project_paths(value):
+    if isinstance(value, str):
+        return _project_path(value)
+    return [_project_path(str(item)) for item in value]
+
+
+def _csv_items(value: str) -> List[str]:
+    return [item.strip() for item in value.split(",") if item.strip()]

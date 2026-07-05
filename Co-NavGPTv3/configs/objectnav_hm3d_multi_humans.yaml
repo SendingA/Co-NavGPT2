@@ -1,0 +1,87 @@
+# @package _global_
+
+defaults:
+  - /benchmark/nav/objectnav/objectnav_hm3d
+  - _self_
+
+habitat:
+  environment:
+    max_episode_steps: 500
+  simulator:
+    type: Sim-v0
+    forward_step_size: 0.25
+    turn_angle: 30
+    default_agent_id: 0
+    scene_dataset: Co-NavGPTv3/data/scene_datasets/hm3d/hm3d_annotated_basis.scene_dataset_config.json
+    agents_order:
+      - main_agent
+      - agent_1
+    agents:
+      main_agent: &robot_agent
+        height: 1.28
+        radius: 0.18
+        max_climb: 0.2
+        max_slope: 45.0
+        sim_sensors:
+          rgb_sensor:
+            type: HabitatSimRGBSensor
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0.0, 1.28, 0.0]
+          depth_sensor:
+            type: HabitatSimDepthSensor
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.0
+            max_depth: 5.0
+            normalize_depth: True
+            position: [0.0, 1.28, 0.0]
+      agent_1: *robot_agent
+    habitat_sim_v0:
+      gpu_device_id: 0
+      allow_sliding: True
+      enable_physics: True
+  task:
+    measurements:
+      success:
+        success_distance: 0.2
+  dataset:
+    type: ObjectNav-v1
+    split: val
+    data_path: Co-NavGPTv3/data/datasets/objectnav_hm3d_v2/{split}/{split}.json.gz
+    scenes_dir: Co-NavGPTv3/data/scene_datasets
+    content_scenes:
+      - h1zeeAwLh9Z
+
+conav:
+  num_robots: 2
+  num_humans: 2
+  robot_models_enabled: True
+  robot_model_profiles:
+    - spot
+  robot_model_urdfs: []
+  available_robot_profiles:
+    - fetch
+    - fetch_no_wheels
+    - fetch_suction
+    - spot
+    - stretch
+  human_urdf: habitat33/habitat-lab/data/humanoids/humanoid_data/female_2/female_2.urdf
+  human_motion_data: habitat33/habitat-lab/data/humanoids/humanoid_data/female_2/female_2_motion_data_smplx.pkl
+  human_urdfs:
+    - habitat33/habitat-lab/data/humanoids/humanoid_data/female_2/female_2.urdf
+    - habitat33/habitat-lab/data/humanoids/humanoid_data/male_1/male_1.urdf
+    - habitat33/habitat-lab/data/humanoids/humanoid_data/neutral_2/neutral_2.urdf
+  human_motion_data_paths:
+    - habitat33/habitat-lab/data/humanoids/humanoid_data/female_2/female_2_motion_data_smplx.pkl
+    - habitat33/habitat-lab/data/humanoids/humanoid_data/male_1/male_1_motion_data_smplx.pkl
+    - habitat33/habitat-lab/data/humanoids/humanoid_data/neutral_2/neutral_2_motion_data_smplx.pkl
+  human_walk_speed: 0.7
+  human_turn_speed: 1.5
+  human_goal_radius: 0.6
+  human_target_radius: 4.0
+  human_motion_dt: 0.0333333333
+  human_use_controller_root_motion: True
+  min_spawn_distance: 1.2
