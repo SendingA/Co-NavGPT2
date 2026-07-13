@@ -123,8 +123,8 @@ python main.py --dataset_path data/datasets/objectnav_hm3d_v2/{split}/{split}.js
                --scenes_dir data/scene_datasets \
                --scene_dataset data/scene_datasets/hm3d_v0.2/hm3d_annotated_basis.scene_dataset_config.json
 
-# fire-scene evaluation (unchanged)
-python main.py --fire_world 1 --fire_world_plan_id 83679a07b632 --fire_sensors 1
+# fire-scene evaluation
+python main.py --fire_world 1 --fire_world_plan_id 83679a07b632
 
 # vectorised eval (2 workers)
 python main_vec.py -n 2
@@ -155,7 +155,7 @@ recommended smoke test is:
 
 ```bash
 python main.py --num_agents 1 --num_humans 0 --nav_mode nearest \
-    --fire_sensors 0 --fire_world 0 --dump_location /tmp/conav_smoke
+    --fire_world 0 --dump_location /tmp/conav_smoke
 ```
 
 which should reset an episode, take a few `env.step()` calls, and

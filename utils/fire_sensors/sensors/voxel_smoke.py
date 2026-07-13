@@ -4,12 +4,12 @@ This sensor is the **observation** counterpart of the voxel fire world.
 The world model (``utils.fire_world``) owns the flame/smoke/temperature
 fields and how they evolve in time; this sensor takes a snapshot of
 those fields at the current step and ray-marches it from the agent's
-camera pose, returning the same dict shape as
-:class:`SmokeRGBSensor` plus thermal channels.
+camera pose, returning a dict with the smoky RGB image plus thermal
+channels.
 
-Used by :class:`FireSensorSuite` when ``rgb_source="voxel"`` (and
-optionally ``thermal_source="voxel"``); when no fire scene is bound,
-the suite falls back to the legacy Beer-Lambert sensor instead.
+This is the sole RGB / Thermal source used by
+:class:`FireSensorSuite`, which requires a :class:`FireScene` to be
+bound before observation.
 """
 from __future__ import annotations
 
@@ -67,6 +67,11 @@ class VoxelSmokeSensor(BaseSensor):
             flame_smoke_passthrough=float(v.flame_smoke_passthrough),
             thermal_color_blend=float(v.thermal_color_blend),
             render_scale=float(v.render_scale),
+            flame_noise_strength=float(getattr(v, "flame_noise_strength", 0.55)),
+            flame_edge_break=float(getattr(v, "flame_edge_break", 0.8)),
+            flame_color_jitter=float(getattr(v, "flame_color_jitter", 0.25)),
+            flame_time_speed=float(getattr(v, "flame_time_speed", 12.0)),
+            smoke_noise_strength=float(getattr(v, "smoke_noise_strength", 0.30)),
         )
 
     # ------------------------------------------------------------------

@@ -14,7 +14,6 @@ from multiprocessing import Process, Queue
 from PIL import Image
 import yaml
 import quaternion
-from yacs.config import CfgNode as CN
 import logging
 
 import numpy as np
@@ -84,8 +83,8 @@ class VLM_Agent():
         # ------------------------------------------------------------------
         ##### Initialize the perception model
         # ------------------------------------------------------------------
-        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "fire"]
-        
+        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "person", "fire"]
+
         self.obj_det_seg = Object_Detection_and_Segmentation(self.args, self.classes, self.device)
         
         self.annotated_image = None
@@ -215,15 +214,6 @@ class VLM_Agent():
         proc_time = time.time()
         image_rgb = observations['rgb']
         depth = observations['depth']
-        if int(getattr(self.args, 'rgb_dehaze', 0)):
-            from utils.smoke_perception import dehaze_with_depth
-            max_d = float(getattr(self.args, 'max_depth_m', 5.0))
-            depth_m = depth[..., 0] if depth.ndim == 3 else depth
-            if depth_m.dtype != np.float32 and depth_m.max() <= 1.0 + 1e-6:
-                depth_m = depth_m.astype(np.float32) * max_d
-            else:
-                depth_m = depth_m.astype(np.float32)
-            image_rgb = dehaze_with_depth(image_rgb, depth_m)
         image = transform_rgb_bgr(image_rgb)
         self.annotated_image = image
 
@@ -765,18 +755,29 @@ class VLM_Agent():
         points = np.asarray(point_sum.points)
         colors = np.asarray(point_sum.colors)
 
-        # mask = (points[:, 1] <= camera_position[1] + 0.5 )
-        mask = (points[:, 1] <= camera_position[1] + 0.5 )
+        # 1) Drop points above the camera (ceiling / overhead clutter).
+        mask = (points[:, 1] <= camera_position[1] + 0.5)
+
+        # 2) Self-body exclusion: discard points within a small XZ
+        #    radius of the camera so the agent never bakes its own
+        #    visible robot URDF (or the floor right under itself when
+        #    looking down) into obstacle_map and traps the planner.
+        self_radius = float(getattr(self.args, "self_exclusion_radius",0))
+        if self_radius > 0.0 and points.shape[0] > 0:
+            dx = points[:, 0] - float(camera_position[0])
+            dz = points[:, 2] - float(camera_position[2])
+            xz_dist2 = dx * dx + dz * dz
+            mask = mask & (xz_dist2 >= self_radius * self_radius)
 
         points_filtered = points[mask]
         colors_filtered = colors[mask]
-        
+
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points_filtered)
         pcd.colors = o3d.utility.Vector3dVector(colors_filtered)
 
         return pcd
-        
+
 
     def get_frontier_boundaries(self, frontier_loc, frontier_sizes, map_sizes):
         loc_r, loc_c = frontier_loc

@@ -16,41 +16,19 @@ from typing import Tuple
 
 
 @dataclass
-class SmokeRGBConfig:
-    """Beer-Lambert smoke filter on RGB.
+class SmokeConfig:
+    """Shared smoke parameters for the depth / lidar / radar sensors.
 
     Visibility V ≈ 2.3 / k (Jin's eq.; Starr & Lattimer 2014, eq. 2).
-
-    Flames are self-luminous, and their radiation (especially the red/orange
-    band) penetrates smoke far better than reflected ambient light. The
-    ``flame_*`` knobs below let the smoke filter preserve flame pixels and
-    bleed an orange glow into the surrounding smoke, mimicking how human
-    observers and visible-light cameras still perceive flames through
-    light/medium smoke (see Starr & Lattimer 2014, Fig. 7).
+    These knobs drive the smoke-layer clipping and range-dependent noise
+    in the depth / lidar / radar modalities. The smoky RGB and thermal
+    images themselves are produced exclusively by the voxel renderer
+    (:mod:`utils.fire_sensors.voxel_render`).
     """
 
     smoke_density: float = 0.6  # [0,1] dimensionless control
     smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
     smoke_k_max: float = 2.3  # density=1 -> V ≈ 1 m
-
-    # --- Flame penetration (visible-band radiation through smoke) -----
-    # Per-pixel additional transmittance applied to flame regions: 0 disables
-    # the effect, 1 makes flames fully visible regardless of smoke density.
-    flame_smoke_passthrough: float = 0.9
-    # Gaussian blur kernel used to spread the flame mask into a soft glow
-    # halo around the flame.
-    flame_glow_ksize: int = 61
-    # Strength of the glow halo (controls how much the smoke transmittance
-    # is restored *around* flame pixels).
-    flame_glow_gain: float = 0.55
-    # How strongly the surrounding smoke gets tinted by the flame color.
-    flame_color_bleed: float = 0.35
-    # HSV ranges for the flame detector (mirror ThermalConfig defaults so the
-    # RGB filter and the thermal sensor agree on what constitutes a flame).
-    flame_hsv_low1: Tuple[int, int, int] = (0, 100, 200)
-    flame_hsv_high1: Tuple[int, int, int] = (35, 255, 255)
-    flame_hsv_low2: Tuple[int, int, int] = (160, 100, 200)
-    flame_hsv_high2: Tuple[int, int, int] = (180, 255, 255)
 
 
 @dataclass
@@ -122,37 +100,13 @@ class LidarConfig:
 
 
 @dataclass
-class ThermalConfig:
-    """FLIR-style long-wave IR camera (Fig. 10 of Starr & Lattimer 2014)."""
-
-    # Flame detector (HSV ranges; two ranges to cover hue wrap-around).
-    flame_hsv_low1: Tuple[int, int, int] = (0, 100, 200)
-    flame_hsv_high1: Tuple[int, int, int] = (35, 255, 255)
-    flame_hsv_low2: Tuple[int, int, int] = (160, 100, 200)
-    flame_hsv_high2: Tuple[int, int, int] = (180, 255, 255)
-    # Halo around flames (radiative + conductive heating of nearby surfaces).
-    halo_ksize: int = 61
-    halo_gain: float = 0.55
-    # Temperature scale.
-    ambient_c: float = 25.0
-    flame_c: float = 600.0
-    # Scene structure proxy: emissivity / thermal-mass differences.
-    scene_contrast_c: float = 35.0
-    edge_gain: float = 0.45
-    gamma: float = 0.7
-    # 0 = pure FLIR-like grayscale; >0 blends INFERNO false color.
-    color_blend: float = 0.0
-
-
-@dataclass
 class VoxelSmokeConfig:
     """Voxel-driven smoky-RGB / Thermal camera (FireWorld observer).
 
     These knobs control the ray-march that turns the
     :class:`utils.fire_world.scene.FireScene` voxels into a per-step
-    RGB / Thermal image. They were previously attributes of
-    ``FireWorldRenderer`` but conceptually belong on the sensor
-    config: the renderer is just *how the camera looks at the world*.
+    RGB / Thermal image. They belong on the sensor config because the
+    renderer is just *how the camera looks at the world*.
     """
 
     n_steps: int = 16                  # ray-march samples per pixel
@@ -178,6 +132,19 @@ class VoxelSmokeConfig:
     thermal_color_blend: float = 0.0   # 0=grayscale, 1=full INFERNO
     render_scale: float = 0.5          # fraction of camera resolution
 
+    # --- Procedural flame texturing (pure eye-candy) --------------------
+    # These drive the fractal value-noise that makes the flame flicker
+    # and wisp. Each non-zero term costs ~3 trilinear noise gathers per
+    # ray-march step, so they dominate the render cost (see the
+    # micro-benchmark in docs). For navigation / benchmarking set them
+    # to 0 (or use --fire_fast) to get a 4-5x speedup; keep them on
+    # only for teleop demos where the fire needs to look alive.
+    flame_noise_strength: float = 0.55
+    flame_edge_break: float = 0.8
+    flame_color_jitter: float = 0.25
+    flame_time_speed: float = 12.0
+    smoke_noise_strength: float = 0.30
+
 
 # ---------------------------------------------------------------------------
 # Top-level config (kept compatible with the original flat dataclass)
@@ -199,26 +166,14 @@ class FireSensorConfig:
     hfov_deg: float = 79.0
 
     # --- per-sensor ----------------------------------------------------
-    smoke: SmokeRGBConfig = field(default_factory=SmokeRGBConfig)
+    # ``smoke`` holds the shared smoke params consumed by the depth /
+    # lidar / radar modalities. The smoky RGB + thermal images are always
+    # produced by the voxel renderer (``voxel``).
+    smoke: SmokeConfig = field(default_factory=SmokeConfig)
     depth: DepthDegradeConfig = field(default_factory=DepthDegradeConfig)
     radar: RadarConfig = field(default_factory=RadarConfig)
-    thermal: ThermalConfig = field(default_factory=ThermalConfig)
     lidar: LidarConfig = field(default_factory=LidarConfig)
     voxel: VoxelSmokeConfig = field(default_factory=VoxelSmokeConfig)
-
-    # --- Sensor source selection ---------------------------------------
-    # Where the smoky RGB / thermal images come from. ``"beer_lambert"``
-    # uses the legacy density-driven SmokeRGBSensor / HSV thermal; ``"voxel"``
-    # asks the suite to plug in :class:`VoxelSmokeSensor`, which expects a
-    # :class:`utils.fire_world.scene.FireScene` to be bound. ``"auto"``
-    # picks ``voxel`` whenever a scene is bound and ``beer_lambert``
-    # otherwise.
-    rgb_source: str = "auto"           # "auto" | "beer_lambert" | "voxel"
-    thermal_source: str = "auto"       # same options
-    # When ``rgb_source="voxel"`` and the FireSensorSuite is active,
-    # stack a global Beer-Lambert pass on top of the voxel RGB to
-    # simulate "environment smoke outside the active fire room".
-    compound_rgb: bool = False
 
     # --- IO -------------------------------------------------------------
     save_npz: bool = False
@@ -226,13 +181,11 @@ class FireSensorConfig:
     save_dashboard: bool = True
     dashboard_size: Tuple[int, int] = (2000, 900)  # (W, H) of the big image
 
-    # --- Backwards-compat shims -----------------------------------------
-    # The first version of this module exposed flat fields like
-    # ``smoke_density`` directly on FireSensorConfig. Mirror the most
-    # common ones so callers built against the old API keep working.
+    # --- Convenience ----------------------------------------------------
+    # ``smoke_density`` is exposed flat so callers can write
+    # ``FireSensorConfig(smoke_density=0.7)``; it is synced into the
+    # nested SmokeConfig the depth / lidar / radar sensors read from.
     smoke_density: float = 0.6
 
     def __post_init__(self) -> None:
-        # Sync the legacy flat field into the nested config so callers
-        # can still write ``FireSensorConfig(smoke_density=0.7)``.
         self.smoke.smoke_density = float(self.smoke_density)

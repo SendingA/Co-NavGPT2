@@ -1,346 +1,189 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-07-04T00:00:00Z",
+    "updated_at": "2026-07-12T01:00:00Z",
     "owner": "copilot"
   },
   "items": [
     {
-      "id": "T001",
-      "title": "Add 'fire' class to perception vocabulary in all agents",
+      "id": "T104",
+      "title": "Human thermal signature as true body silhouette (depth carve) not a blob",
       "status": "done",
-      "priority": "P1",
+      "priority": "P0",
+      "depends_on": ["T102"],
+      "acceptance": "thermal human mask follows the person's real outline from the depth image (head/torso/limbs), leaves background cold, and the display overlay is a crisp silhouette not a Gaussian ellipse",
+      "notes": "Added _carve_person_from_depth in utils/fire_sensors/humans_thermal.py: within the projected bbox, threshold depth to a band around the person's distance, morphological open/close, keep the connected component nearest the projected centre, distance-transform for a soft core->edge ramp. Falls back to the old ellipse blob only when depth is unavailable/occluded. Tightened the display bloom (glow_ksize 25->7, gain 0.9->0.35) so it no longer smears the outline back into a blob. Verified with scripts/test_human_thermal.py: silhouette/cluster area ratio 1.00, arm-gap columns stay cold.",
+      "last_updated": "2026-07-12T01:00:00Z"
+    },
+    {
+      "id": "T103",
+      "title": "Fix thermal temperature field: stop using RGB luma as temperature",
+      "status": "done",
+      "priority": "P0",
       "depends_on": [],
-      "acceptance": "self.classes contains 'fire' in vlm_multi_agents, vlm_agents, ros2_agents, ros2_single_agent",
-      "last_updated": "2026-06-09T00:10:00Z"
+      "acceptance": "compose_thermal returns a physical temperature map (ambient where no heat, ~ambient+25 for a person, ~600 for fire) independent of RGB luma; display uses FLIR-style AGC with fixed low anchor + adaptive high anchor (min ambient+40) so warm bodies are visible without a fire",
+      "notes": "Old code added (luma-0.5)*35 into the returned temperature and hard-pinned the display stretch at 600C, so the thermal map was a recoloured RGB and everything but fire was crushed. Rewrote compose_thermal in utils/fire_sensors/voxel_render.py: temperature = ambient + max(voxel_excess, flame_excess); luma now only a faint display-only texture that fades on hot pixels. Verified with scripts/test_human_thermal.py (no-fire map flat at ambient; fire peak 620C).",
+      "last_updated": "2026-07-12T00:00:00Z"
+    },
+    {
+      "id": "T102",
+      "title": "Fix human thermal signature never rendering (camera_K type mismatch)",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "humans painted into thermal image + temperature map when camera_K is the argparse.Namespace returned by get_camera_K; failure no longer swallowed silently",
+      "notes": "Root cause: humans_thermal.py indexed camera_K[0,0] but get_camera_K returns a Namespace (.fx/.fy/.cx/.cy), raising TypeError that fire_pipeline swallowed via bare except: pass, so humans never appeared in IR (visible in Depth panel but absent in Thermal panel of the teleop screenshot). Added _unpack_intrinsics() supporting both matrix and attribute forms; surfaced the overlay error once instead of silently passing. Verified with scripts/test_human_thermal.py (painted fraction 0.124, peak temp 50C).",
+      "last_updated": "2026-07-12T00:00:00Z"
+    },
+    {
+      "id": "T101",
+      "title": "Fix depth_use_clean wiping flame/smoke from fire render/dashboard",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "RGB/thermal ray-march uses pristine geometric depth independent of depth_use_clean; flame_px identical for 0 and 1 and stable across frames",
+      "notes": "Root cause: volumetric_composite terminates rays at observations['depth']; smoke-degraded depth clipped rays before the fire. Fix in utils/fire_pipeline.step_fire_observation: stash pristine depth as observations['_fire_clean_depth_raw'] and always render against it; flag now only controls mapping write-back. Verified on real timeline 83679a07b632 (flame_px 0.506 in all cases vs 0.011/oscillating before). Updated arguments.py help + docs/main_usage.md. Temp debug scripts removed.",
+      "last_updated": "2026-07-11T00:00:00Z"
+    },
+    {
+      "id": "T100",
+      "title": "Rewrite docs/fire_world_pipeline.md as a rigorous benchmark-paper pipeline doc",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "doc reflects current code (wallclock clock default, voxel-only RGB/Thermal, real propagation stages, correct flags); reads as an academic benchmark methodology section",
+      "notes": "verified against propagation.py/templates.py/scene.py/scene_scan.py/runtime.py/suite.py/config.py/main.py/arguments.py; all CLI flags in repro recipe (scene_scan/planner/propagation/main/teleop) confirmed against source; md diagnostics clean",
+      "last_updated": "2026-07-10T02:00:00Z"
+    },
+    {
+      "id": "T001",
+      "title": "Slim config.py: SmokeRGBConfig->SmokeConfig, drop ThermalConfig/rgb_source/thermal_source/compound_rgb",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "config.py imports cleanly; SmokeConfig keeps smoke_density/color/k_max; no rgb_source/thermal_source/compound_rgb fields",
+      "notes": "depth/lidar/radar keep reading cfg.smoke.*; verified import + FireSensorConfig(smoke_density=0.7)",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T002",
-      "title": "Augment Object_Detection_and_Segmentation with HSV flame detector",
+      "title": "Relocate density_to_k to base.py; delete rgb_smoke.py and thermal.py",
       "status": "done",
-      "priority": "P1",
+      "priority": "P0",
       "depends_on": ["T001"],
-      "acceptance": "detect() returns sv.Detections including fire bboxes/masks when 'fire' is in classes",
-      "last_updated": "2026-06-09T00:10:00Z"
+      "acceptance": "depth_smoke.py and lidar.py import density_to_k from base; non-voxel RGB/Thermal sensor files removed",
+      "notes": "verified density_to_k(0.5,2.3)=1.15 via base import",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T003",
-      "title": "Validate edited files",
+      "title": "Refactor suite.py to voxel-only RGB/Thermal (remove _resolve_source, _global_beer_lambert, rgb/thermal sensors)",
       "status": "done",
-      "priority": "P2",
-      "depends_on": ["T001", "T002"],
-      "acceptance": "py_compile passes; HSV smoke test prints OK",
-      "last_updated": "2026-06-09T00:10:00Z"
+      "priority": "P0",
+      "depends_on": ["T002"],
+      "acceptance": "FireSensorSuite always drives RGB+Thermal from voxel sensor; no-scene => clean passthrough",
+      "notes": "added _passthrough_rgb_thermal so depth/lidar/radar stay usable without a scene",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T004",
-      "title": "Reproduce 0.18 false-stop claim",
+      "title": "smoke_perception.py: remove dehaze_with_depth + estimate_smoke_k",
       "status": "done",
-      "priority": "P1",
+      "priority": "P0",
       "depends_on": [],
-      "acceptance": "Captured every detection vs sem_threshold decision, confirmed 0.85 threshold is enforced",
-      "notes": "All 10 pass=True events had conf >= 0.888. The screenshot scenario cannot stop on 0.18 in the current code path.",
-      "last_updated": "2026-06-09T01:00:00Z"
+      "acceptance": "only apply_clean_depth_and_thermal + thermal_mask_to_detections remain",
+      "notes": "verified via dir(smoke_perception)",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T005",
-      "title": "Diagnose why episode 0 stops at 17 steps with success=0",
+      "title": "detection_segmentation.py: remove detect_flames_hsv + HSV fallback branch",
       "status": "done",
-      "priority": "P1",
-      "depends_on": ["T004"],
-      "acceptance": "Per-step action log identifies which agent emits action=0 and why",
-      "notes": "Root cause: At step=2 a single bed detection (conf=0.888) crosses sem_threshold and locks found_goal=True. Its 3D back-projection writes a wrong target into object_pcd (truth distance 6.6m). For the next 14 steps the ShortestPathFollower drives the agent toward that incorrect 3D point. At step=17 the follower decides the goal is reached and returns 0; because found_goal is True, the override 'if not found_goal and action==0' does NOT trigger, so action=0 propagates to env.step and is_stop_called=True ends the episode. Recommended fixes: (a) require N-frame multi-confirmation before setting found_goal; (b) reset found_goal/object_pcd if proximity to nearest_point disagrees with detection; (c) raise --sem_threshold for synthetic+smoke scenes. Awaiting user choice.",
-      "last_updated": "2026-06-09T01:30:00Z"
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "detect() uses thermal mask only for fire; no HSV path",
+      "notes": "grep confirms no FLAME_HSV/detect_flames_hsv references remain",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T006",
-      "title": "Make flames penetrate smoke in the RGB sensor",
+      "title": "agents vlm_agents.py + vlm_multi_agents.py: remove rgb_dehaze block",
       "status": "done",
-      "priority": "P1",
-      "depends_on": [],
-      "acceptance": "SmokeRGBSensor preserves flame pixels and adds a soft glow halo under dense smoke; HSV flame detector still fires on the smoke-attenuated RGB.",
-      "notes": "Added flame_* knobs to SmokeRGBConfig (passthrough/glow/color bleed/HSV ranges). Rewrote SmokeRGBSensor: HSV flame mask + Gaussian glow boost transmittance T'=T+(1-T)*boost; surrounding smoke gets tinted by the local fire color; particulate noise is suppressed on the flame core. Verified with scripts/test_rgb_flame_through_smoke.py (flame mean RGB=240,111,44 vs bg 179,179,178 at density=0.9, 4 m) and scripts/test_flame_after_smoke.py (HSV detector returns one box, score 0.950).",
-      "last_updated": "2026-06-13T00:00:00Z"
+      "priority": "P0",
+      "depends_on": ["T004"],
+      "acceptance": "no dehaze_with_depth import/use in either agent",
+      "notes": "",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T007",
-      "title": "Smoke-scene perception path: clean depth + smoky RGB + thermal",
+      "title": "arguments.py: remove --fire_sensors, --rgb_dehaze, --fire_world_compound_rgb",
       "status": "done",
       "priority": "P0",
-      "depends_on": ["T006"],
-      "acceptance": "Pipeline keeps Habitat clean depth for mapping, sources fire detections from thermal, and optionally dehazes the smoky RGB before YOLO-World.",
-      "notes": "Added utils/smoke_perception.py (apply_clean_depth_and_thermal, dehaze_with_depth + estimate_smoke_k, thermal_mask_to_detections). Wired three new flags in arguments.py: --depth_use_clean (preserve clean depth obs), --use_thermal_perception (inject thermal channel + use thermal as fire source), --rgb_dehaze (depth-aware inverse Beer-Lambert + CLAHE). main.py and main_vec.py now call apply_clean_depth_and_thermal so observations carry smoky_rgb + clean_depth + thermal_image + thermal_flame_mask. Object_Detection_and_Segmentation.detect() takes thermal_flame_mask=...; when present, fire detections come from thermal (smoke-invariant) instead of HSV-on-smoky-RGB. vlm_agents/vlm_multi_agents pull obs['thermal_flame_mask'] and run the optional dehaze before transform_rgb_bgr. Validated via scripts/test_smoke_perception.py (apply/dehaze/thermal-detections all OK; bg dehazed from 179,179,179 to 150,151,151) and scripts/test_detect_with_thermal.py (gray RGB + thermal mask -> 1 fire detection conf 0.95). Existing tests test_flame_hsv.py and test_flame_after_smoke.py still pass under the project's co-nav env.",
-      "last_updated": "2026-06-15T00:00:00Z"
+      "depends_on": [],
+      "acceptance": "args gone; comments updated; everything gated on --fire_world",
+      "notes": "verified removed flags absent from source",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T008",
-      "title": "Document main.py CLI flags and keyboard teleop controls",
+      "title": "main.py: gate on fire_world only; drop rgb_source/thermal_source/compound_rgb config args",
       "status": "done",
-      "priority": "P2",
-      "depends_on": [],
-      "acceptance": "docs/main_usage.md lists all argparse flags from arguments.py plus teleop keymaps from scripts/keyboard_teleop*.py.",
-      "notes": "main.py itself has no key handler; keyboard control lives in scripts/keyboard_teleop.py and scripts/keyboard_teleop_fire.py. Both keymaps and CLI args captured in docs/main_usage.md.",
-      "last_updated": "2026-06-21T00:00:00Z"
+      "priority": "P0",
+      "depends_on": ["T003", "T007"],
+      "acceptance": "no fire_sensors references; FireSensorConfig built without removed fields",
+      "notes": "lidar_360 now gated on fire_world",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T009",
-      "title": "Run FireWorld voxel + Beer-Lambert RGB-D degradation together",
+      "title": "fire_pipeline.py: remove compose_fire_step legacy alias",
       "status": "done",
-      "priority": "P0",
-      "depends_on": ["T007"],
-      "acceptance": "main.py / main_vec.py / scripts/keyboard_teleop_fire.py can enable --fire_world and --fire_sensors simultaneously; obs carry voxel RGB + suite-noisy depth + thermal; dashboard reflects what the agent actually sees.",
-      "notes": "Added utils/fire_pipeline.compose_fire_step that runs FireWorldController.render_for_agent and FireSensorSuite.process on the clean RGB-D, then merges the outputs (FireWorld RGB + thermal + flame, suite depth_smoke + radar + lidar + dashboard) and patches observations in place. New flag --fire_world_compound_rgb stacks an extra global Beer-Lambert pass on top of the voxel RGB. main.py/main_vec.py replace the old if/elif with a single call. scripts/keyboard_teleop_fire.py gained --enable-suite/--smoke-density/--compound-rgb/--show-dashboard so the teleop window can show the voxel RGB while a second window shows the suite dashboard. Verified with a stub-driven smoke test (fw-only / suite-only / fw+suite all pass).",
-      "last_updated": "2026-06-21T00:00:00Z"
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": "only step_fire_observation remains",
+      "notes": "thermal default simplified (always on)",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T010",
-      "title": "Refactor architecture: fire_world = world model, fire_sensors = observation",
+      "title": "fire_world: remove FireWorldRenderer/runtime_process shims; delete controller.py and topdown_video.py",
       "status": "done",
       "priority": "P1",
-      "depends_on": ["T009"],
-      "acceptance": "fire_world only owns FireWorld + FireClock + FireScene; the voxel ray-march renderer + VoxelSmokeSensor live under fire_sensors; FireSensorSuite picks RGB/thermal source via cfg.rgb_source / cfg.thermal_source; legacy FireWorldController / FireWorldRenderer keep working through shims.",
-      "notes": "Created utils/fire_world/scene.py (FireScene + FireClock + habitat_agent_state_to_cam). Trimmed utils/fire_world/runtime.py to host only FireWorld; FireWorldRenderer is now a back-compat shim that delegates to utils/fire_sensors/voxel_render.py. New utils/fire_sensors/voxel_render.py centralises the ray-march math and the volumetric_composite() entry point. New utils/fire_sensors/sensors/voxel_smoke.py wraps it as a BaseSensor. utils/fire_sensors/config.py gained VoxelSmokeConfig + rgb_source / thermal_source / compound_rgb. FireSensorSuite now accepts scene=FireScene + camera_K, instantiates VoxelSmokeSensor and uses it whenever rgb_source/thermal_source resolve to 'voxel'. utils/fire_pipeline.py shrank to a small step_fire_observation helper (compose_fire_step kept as alias). main.py / main_vec.py / scripts/keyboard_teleop_fire.py all rewritten around FireScene + FireSensorSuite. Verified by stub-driven tests (Beer-Lambert / voxel / voxel+compound) and by re-running the existing scripts/test_fire_world_step_clock.py against the real timeline.npz.",
-      "last_updated": "2026-06-21T00:00:00Z"
+      "depends_on": [],
+      "acceptance": "runtime.py keeps only FireWorld data layer; controller.py + topdown_video.py deleted",
+      "notes": "",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T011",
-      "title": "Voxel renderer: flame penetrates smoke; teleop dashboard layout fix",
+      "title": "Update teleop scripts + delete obsolete tests/demos referencing removed code",
       "status": "done",
       "priority": "P1",
-      "depends_on": ["T010"],
-      "acceptance": "Volumetric composite uses two transmittance accumulators so flame emission isn't eaten by smoke; teleop window shows RGB / Depth (smoke-degraded) / Thermal (INFERNO) instead of two depth-like panels.",
-      "notes": "Added VoxelRenderParams.flame_smoke_passthrough (default 0.85). The marcher now keeps a separate T_acc_flame that uses (1-passthrough)*smoke_k + flame_k as the optical depth, so flame radiation leaks through smoke just like real visible-band fire imagery (Starr & Lattimer 2014 Fig. 7). Exposed via VoxelSmokeConfig + the legacy FireWorldRenderer shim. keyboard_teleop_fire.py now renders 3 panels (RGB / Depth-smoke / Thermal-INFERNO), forces thermal_color_blend=1.0 so it visually differs from JET-colored depth, always shows the suite's degraded depth (independent of --depth_use_clean), and exposes --flame-smoke-passthrough. Verified with a 1-ray micro test: with passthrough=0.0 a flame behind a smoke wall yields neutral grey RGB (R-B=0); with passthrough=0.85 the same configuration produces a warm tint (R=230, B=207). Existing scripts/test_fire_world_step_clock.py still passes against the real timeline.npz.",
-      "last_updated": "2026-06-21T00:00:00Z"
+      "depends_on": ["T003", "T010"],
+      "acceptance": "teleop scripts drop rgb_source/thermal_source/compound_rgb; dead tests removed",
+      "notes": "deleted 8 obsolete scripts; teleop_fire/full updated; docs (main_usage/habitat3_migration) updated",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T012",
-      "title": "Fix flame visibility through smoke (teleop screenshot showed 2-pixel speck)",
+      "title": "Validate: import + syntax smoke checks across edited modules",
       "status": "done",
-      "priority": "P1",
-      "depends_on": ["T011"],
-      "acceptance": "Voxel-rendered flame is clearly visible behind dense smoke even with --compound-rgb=1; the second Beer-Lambert pass no longer erases the flame.",
-      "notes": "Root causes: (a) flame_threshold=0.20 was higher than what trilinear interpolation yields at the flame envelope (0.05-0.30) so only the 0.6 source core survived as 1-2 pixels; (b) flame_emission_gain=4 was too low to penetrate dense smoke after attenuation; (c) compound_rgb=1 ran a second global Beer-Lambert that fogs flame pixels alongside everything else. Fix: lowered flame_threshold to 0.04 (and widened the smooth-step ramp to 0.05 above), bumped flame_emission_gain to 8.0, raised flame_smoke_passthrough default to 0.95, and added an optional flame_mask guard to _global_beer_lambert that blends the original voxel RGB back over flame pixels (with a Gaussian-dilated mask so the warm halo is preserved too). Quantified with a synthetic teleop-style scene (smoke wall in front of a 3x3x3 flame source): old defaults produced 0 warm pixels and max R-B=2; new defaults produce 24 warm pixels and max R-B=54; compound pass with the flame guard preserves all 24 pixels (without guard: 0).",
-      "last_updated": "2026-06-21T00:00:00Z"
+      "priority": "P0",
+      "depends_on": ["T001","T002","T003","T004","T005","T006","T007","T008","T009","T010","T011"],
+      "acceptance": "py_compile passes; key modules import; scripts/test_fire_sensors.py passes",
+      "notes": "py_compile OK on all edited files; test_fire_sensors.py passed (fwd + 360 stitching); grep confirms no dead imports",
+      "last_updated": "2026-07-10T01:00:00Z"
     },
     {
       "id": "T013",
-      "title": "Document plan.json schema and add kitchen + chair ignitions to 83679a07b632",
+      "title": "Update docs fire_world_pipeline.md + fire_world_handoff.md to voxel-only reality",
       "status": "done",
-      "priority": "P2",
+      "priority": "P1",
       "depends_on": ["T012"],
-      "acceptance": "User-facing explanation of every key in plan.json; 4 new ignitions appended to scenes/Nfvxx8J5NCo/plans/83679a07b632.json (1 kitchen-grease near sink + 3 chairs).",
-      "notes": "Documented schema_version, plan_id, world_aabb, ignitions[i] (object_id/category/position/ignite_time_s/source_radius_m/source_temp_c/fuel_kg/smoke_yield) and propagation_rules with their physical meaning. Appended ignitions for object_id=50 (kitchen sink anchor, 870C, fuel 8kg, smoke_yield 0.85), object_id=340/339 (kitchen chairs, 780/760C), object_id=93 (chair in another region, 800C). Times staggered 120/150/200/240s so the user can watch the fire spread in teleop. Plan parses cleanly and now lists 7 ignitions; plan_id is unchanged but no longer matches the deterministic seed hash, which is fine because runtime.py only consumes the body. To pick up the new ignitions in the renderer the user has to rerun: python -m utils.fire_world.propagation --scene Nfvxx8J5NCo --plan-id 83679a07b632 --voxel-m 0.15.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T014",
-      "title": "Fix cross-numpy-version load failure in timeline.npz; restore staggered ignite times",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T013"],
-      "acceptance": "FireWorld.load works in conda env co-nav (numpy 1.24) regardless of which numpy wrote the npz; plan ignite_time_s values for the 4 new ignitions persisted.",
-      "notes": "Root cause: propagation.py was saving meta as np.array([..], dtype=object) which forces pickle. The pickled string carried a numpy 2.x qualname (numpy._core), so loading under numpy 1.x raised ModuleNotFoundError: No module named 'numpy._core'. Fix: write meta as a 0-d numpy unicode array under key 'meta_json' (no pickle), still emit the timeline_meta.json sidecar, and have FireWorld.load prefer the JSON sidecar -> meta_json -> legacy 'meta' (in that order) so old npzs keep loading too. Also: the kitchen/chair ignite_time_s values had reverted to 0; restored to 120/150/200/240. Reran propagation in /home/liushe10/miniconda3/envs/co-nav/bin/python so the cache is written by numpy 1.24 itself. Verified the new timeline reports first_flame at the expected timestamps for all 7 ignitions.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T015",
-      "title": "arguments.py cleanup: remove dead flags, refresh help text",
-      "status": "done",
-      "priority": "P2",
-      "depends_on": ["T014"],
-      "acceptance": "arguments.py contains only flags actually consumed by main.py / main_vec.py / agents; help text reflects the post-refactor architecture (FireWorld + FireSensorSuite).",
-      "notes": "Removed --exp_name (only present in arguments.py, never read), --log_interval (same), --agent (the legacy 'sem_exp' string; nobody reads args.agent anywhere). Refreshed help for nav_mode/gpt_type (dropped text-davinci-003 from list), --fire_world_compound_rgb (no longer worded as a fire_sensors-only switch), --rgb_dehaze (notes the depth_use_clean dependency), --fire_apply_to_obs / --depth_use_clean cross-references. Verified: grep across the repo for args.exp_name / args.log_interval / args.agent returns zero hits. Argparse --help renders cleanly; running with the user's command produces the same effective parameter set with no missing keys.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T016",
-      "title": "Author docs/fire_world_pipeline.md as the authoritative pipeline summary + paper-ready methodology",
-      "status": "done",
-      "priority": "P2",
-      "depends_on": ["T015"],
-      "acceptance": "docs/fire_world_pipeline.md walks through the 6 pipeline stages with implementation details and a self-contained methodology section that can be copied into a paper.",
-      "notes": "Stage-by-stage write-up: (1) scene_scan with the sRGB OETF decode and per-face instance grouping, (2) planner templates + intensity presets + plan_id hashing, (3) reaction-diffusion-buoyancy-ceiling-jet voxel propagation, (4) FireScene runtime facade and the steps-per-unit / seconds-per-unit clock semantics, (5) FireSensorSuite voxel ray-march with dual-T flame channel + Beer-Lambert depth/radar/lidar/thermal, (6) integration into main.py / main_vec.py / keyboard_teleop_fire.py. Bottom half is a paper-ready methodology section with citations to Starr & Lattimer 2014 and a recommended ablation table. Appendix A is a file map; Appendix B is the minimal reproduction recipe.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T017",
-      "title": "Make voxel smoke actually fill the scene (was effectively invisible)",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T016"],
-      "acceptance": "After propagation, air-voxel smoke at eye height (1-1.7 m) reaches >5% coverage, persists through the full episode duration, and has plan smoke_yield as a controlling knob.",
-      "notes": "Diagnosed: smoke max=0.998 in the OLD timeline but mean=0.0003 (only ~100 voxels above 0.1 in 310k), all confined to ceiling 1.9-2.6m. Three root causes: (1) no smoke self-diffusion, so the plume was locked to the hot mask and pinned under the ceiling; (2) reaction-step smoke gain hard-coded at 0.5*burn_rate, divorced from the plan's smoke_yield; (3) sustained-source injection rate hard-coded at 0.10/s regardless of smoke_yield; plus a hidden mass leak: every transport substep cleared smoke in solid voxels, draining the room over ~30 s once the source stopped.\n\nFixes in utils/fire_world/propagation.py:\n  * Added smoke self-diffusion (smoke_alpha=0.02 m^2/s) with CFL substep (smoke_cfl=0.08); solid-zero pulled OUT of the substep loop entirely so transport never leaks mass into walls.\n  * smoke_buoy_frac=0.5 so smoke does not pin to the ceiling on the first step.\n  * smoke_reaction_gain=4.0 (was 0.5) for reaction-driven production.\n  * smoke_source_gain=4.0 multiplies the per-source rate by smoke_yield -> kitchen 0.85*4=3.4/s, bed 0.80*4=3.2/s. plan smoke_yield now actually drives room density.\n  * smoke_decay_per_s=0.0008 (was 0.005) -> ~860 s half-life so a 900 s episode keeps a visible plume.\n  * add_source(...) signature now carries smoke_yield through the source registry.\n  * Removed solid-zero from the buoyancy and ceiling-jet steps - the renderer never samples through solids, so trapping smoke in walls is mass-conserved and harmless visually, but zeroing it caused the silent ~30 s leak.\n\nNew rule keys (all fall back to defaults so older plans still work):\n  smoke_diffusivity, smoke_cfl, smoke_buoy_fraction, smoke_reaction_gain, smoke_source_gain, smoke_decay_per_s.\n\nVerified: re-baked timeline.npz; air-voxel smoke at t=240s mean=0.078 (>200x the old 0.0003), 27% of air voxels above 0.05; plume persists to t=900s (68% air voxels >0.05). Eye-height layers (y=1.0-1.7 m) now have smoke max ~1.0 throughout 200-500 s.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T018",
-      "title": "Per-pixel depth/thermal in clean rooms; main.py and teleop dashboards consistent; flame spreads farther",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T017"],
-      "acceptance": "Depth in clean rooms is clean (mean err <0.05 m, 0% dropout); thermal pops on flame pixels (BGR diff >50); main.py uses thermal_color_blend=1.0 to match teleop; flame spread covers 2-3x more voxels per ignition.",
-      "notes": "Four problems fixed:\n\n1. SmokeDepthSensor was driven by a single global smoke_density, so a clean room degraded identically to a smoky one. Refactored process() to accept a per-pixel transmittance from the voxel renderer; FireSensorSuite now passes voxel_out['transmittance'] in. local_density = clip(1 - T, 0, 1) drives noise sigma, dropout probability, and Jin's visibility cutoff per pixel. Verified: T=1.0 region has mean|err|=0.02 m & 0% dropout; T=0.1 region has 2.4 m err and 46% dropout.\n\n2. Thermal panel hardly showed flame because compose_thermal didn't read flame_along (only temp_max), and the percentile auto-stretch let flame_c=600 dilute against scene luma. Added a 600 C floor on t_hi and an explicit flame_excess = clip(flame_along, 0, 1) * 600 contribution that drives flame pixels to the top of the colormap. Verified: flame patch BGR=(117,239,241) vs bg=(4,0,0) under INFERNO blend.\n\n3. main.py and main_vec.py now construct VoxelSmokeConfig with thermal_color_blend=1.0, matching keyboard_teleop_fire's default, so the agent's thermal observation is the same colorized image users see in the teleop dashboard. (compound_rgb=0 is still the default, which together with T017's voxel-smoke fixes means main.py no longer needs the global Beer-Lambert pass to produce visible smoke.)\n\n4. Flame spread was crawling: spread_speed=0.04 m/s + ignition_temp=350 C + spread mask requiring fuel>0 meant flame couldn't cross the air gap between disjoint pieces of furniture. Three changes in propagation.py / templates.py: spread_speed -> 0.18 m/s default; ignition_temp -> 200 C; new radiative_gain_c (250 C/s default, scaled by intensity) with a 4-cell box-blur kernel that pre-heats fuel within ~0.6 m of any flame voxel (NFPA 921 radiative pre-heating); spread_mask now is `(fuel>0) | (temp>t_ignite)` so flame can sustain itself while crossing pre-heated air. New rule keys (radiative_gain_c, radiative_radius_cells) added to plan.json for 83679a07b632 and the default rule generator. Verified on the existing plan: flame voxel count grows from 619 (t=0, source-only) to 1662 (t=240s); intense flame (>0.3) grows from 251 to 1015 voxels (4x).",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T019",
-      "title": "Fire-time independent of robot steps: add wallclock mode + speedup",
-      "status": "done",
-      "priority": "P1",
-      "depends_on": ["T018"],
-      "acceptance": "main.py, main_vec.py and keyboard_teleop_fire.py all advance fire-time with real wall clock by default; --fire_speedup scales fire-seconds per real-second; legacy step mode still reachable via --fire_clock_mode=step.",
-      "notes": "Refactored FireClock to support two modes:\n  * mode='wallclock' (default): uses time.monotonic() captured at clock.start(), returns base_t0_s + (now - origin) * speedup. Robot_step argument is ignored.\n  * mode='step': legacy mapping t_sim = floor(N / steps_per_unit) * seconds_per_unit, used when reproducible benchmarks need bit-exact alignment to env.step() count.\n\nFireScene.from_args reads new args (fire_clock_mode, fire_speedup) and calls clock.start() on construction. main.py and main_vec.py call fire_scene.clock.start() on every env.reset() so each episode starts at the same fire-time origin. keyboard_teleop_fire.py adds --clock-mode and --speedup flags, restarts the clock on R, and shows the active clock policy in the HUD overlay.\n\nVoxelSmokeSensor.process and FireWorldController.render_for_agent now call scene.t_sim(robot_step) (the unified API) instead of the old scene.t_sim_for_step(robot_step), so wallclock mode is honored automatically; step mode still works because t_sim(robot_step) routes to t_sim_for_step internally when mode='step'.\n\nAdditional FireClock features used by future eval harnesses: pause()/resume() pair so an LLM-bound run can freeze fire-time while waiting for the API.\n\nVerified: wallclock test (speedup=2 over 0.2s wall -> 0.4s fire-time, monotonic, ignores robot_step), pause/resume freezes t_sim within 0.02s, step-mode legacy test (50 steps -> 20.0s) passes. The existing scripts/test_fire_world_step_clock.py also still works against the real timeline.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T020",
-      "title": "Teleop: poll instead of block on cv2.waitKey so wallclock fire keeps evolving while the operator is idle",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T019"],
-      "acceptance": "When the user does not press any key, t_sim continues to increase in the HUD and flame/smoke continue evolving. Pressing 'p' toggles a freeze.",
-      "notes": "Root cause: keyboard_teleop_fire.py used cv2.waitKey(0), which blocks the loop until a key is pressed. While blocked, the scene was never re-queried, so even though FireClock advanced internally the renderer never asked it for a fresh field. Fix: poll cv2.waitKey(POLL_MS=50) so the renderer re-queries the FireScene at ~20 FPS regardless of input. Frame dumps are now anchored to actual agent steps (not poll cycles) so we don't flood disk with idle frames. Added 'p' as a toggle that calls clock.pause()/resume(), useful when the operator wants to study a single frame without burning timeline. The HUD now shows 'PAUSED' when the wall clock is frozen.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T021",
-      "title": "Propagation: floors are semi-transparent thermal barriers; flame size scales with local fuel abundance; optional Gaussian spread kernel",
-      "status": "done",
-      "priority": "P1",
-      "depends_on": ["T020"],
-      "acceptance": "Multi-storey heat conducts across floors at attenuated rate (NFPA 921 §5.10); flame intensity in fuel-dense zones is visibly larger than in sparse zones; Gaussian spread kernel available as an alternative to the Laplacian.",
-      "notes": "Documented current model first: 6-step reaction-diffusion solver (heat Laplacian + smoke Laplacian + buoyancy + ceiling jet + reaction with k_burn=1/240 + Laplacian flame spread + decay/cooling/sustained sources) plus 2 enhancements (1-cell conduction and 4-cell radiative pre-heating). Reviewed your two requests:\n\n1. 'Flame should not skip structural objects': true bug — the original code put walls + ceilings + floors all in a single zero-flux + force-to-ambient mask, which prevented vertical heat transfer across storeys. Fixed by treating floors separately as 'semi-transparent thermal barriers' (rule key floor_thermal_attenuation=0.20 default): the heat-diffusion Laplacian still runs through floors but the resulting Δtemp is multiplied by 0.20, so a fire on storey N raises the assembly temperature on storey N-1 over several minutes (matches NFPA 921 §5.10). Walls/ceilings remain zero-flux. flame_through_floors is a separate opt-in for letting flame voxels actually exist in floor decking; default 0 (heat path is enough to ignite fuel below).\n\n2. 'Flame should grow when surrounded by fuel': the Laplacian transport is mass-conserving so total flame mass cannot grow from spread alone. The 'getting bigger' must come from the *reaction* term. Implemented fuel-abundance modulation: fuel_avg = box_blur_3d(fuel, k=2) gives a ~0.45 m neighbourhood mean; abundance = clip(fuel_avg/flammable_threshold, 0.5, 2.5) drives both burn_rate (multiplicative) AND flame_cap (0.85+0.15*abundance, clipped at 1.0). Sustained source pin bumped from 0.6*falloff to 0.95*falloff so the source itself can reflect the higher cap. Fixed a bug where np.clip(flame, 0, flame_cap) clipped DOWN existing flame values; replaced with 'grow only' clip (np.maximum(w.flame, np.minimum(grown, cap))).\n\n3. Discussed Gaussian spread vs Laplacian: physically the Laplacian *is* an infinitesimal Gaussian step, so they're not fundamentally different transport models — both are mass-conserving smoothing operators. Gaussian gives larger isotropic radius per step + closer to NIST-FDS-validated plume shapes. Implemented as 3-iteration separable box-blur (sigma_cells = spread_speed*dt/v) controlled by rule key spread_kernel='laplacian'|'gaussian'. Plan 83679a07b632 now uses gaussian.\n\nAlso bumped sustain_s default from 0.5*duration to full remaining duration so plans without explicit sustain_s keep their sources alive through the whole episode.\n\nVerified on plan 83679a07b632 after re-baking: flame max 0.95 (was 0.85), burning voxel count grows 619→1096 (1.77x) over 0→240s, intense flame (>0.3) grows 251→454 (1.81x), super-intense (>0.7) grows 7→25 (3.6x), maintains steady-state through 720s, smoke accumulates monotonically to mean=0.22 by end.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T022",
-      "title": "Inextinguishable point source + floor-as-fuel propagation + vertical flame column",
-      "status": "done",
-      "priority": "P1",
-      "depends_on": ["T021"],
-      "acceptance": "Single point source flame never goes out; fire spreads from the source across the floor to nearby furniture (room-filling); flames have a visible vertical extent rather than rendering as a flat blob.",
-      "notes": "User clarified the goal was NOT for air to burn but for fire to: (1) crawl across floors and ignite everything in a room, (2) never extinguish (so the user can keep watching), (3) display visible vertical flame height. Backed out the flashover air-burning logic from T021 and implemented three targeted features:\n\n1. inextinguishable_sources=1 (default): the sustained-source step now ignores its sustain_s timer, and pins source fuel at 0.85*falloff each step. This guarantees the seven plan ignitions stay alive indefinitely.\n\n2. Floor-as-fuel propagation. Step 4b deposits floor_fuel_value=0.7 of synthetic fuel into any floor voxel whose temperature crosses floor_ignite_temp_c=250 C. flame_through_floors defaults to 1 so the existing spread_mask + reaction loop can then burn the floor. Conduction & radiative gain were updated to also deposit heat into floor voxels (previously only fuel-bearing voxels). Result: kitchen fire crawls along the floor and ignites the dining chairs even without direct line-of-sight to the source.\n\n3. Vertical flame column (step 8, post-source). For each non-zero flame voxel, project an upward plume of up to flame_column_cells=6 cells with geometric decay flame_column_decay=0.75/cell. Walls / ceilings clip the projection. A small fraction (0.05*dt*column) is added to smoke so the plume top contributes to the rising soot.\n\nAlso: radiative gain switched from box-MEAN to box-SUM (sqrt(window) normalised). Now each lit voxel acts as an independent point radiator, so densely-burning regions saturate nearby air quickly and the fire visibly expands outward in waves rather than asymptoting to a small static halo.\n\nVerified on plan 83679a07b632 (rebaked): t=60s -> 744 voxels in 1.5x2.2m, t=120s -> 920 in 6.3x5.2m, t=240s -> 1255 in 6.3x6.0m (full room), holds through t=900s with fl_max=0.95 the whole time. Burning floor voxels grow 61 -> 420 (7x). Vertical column above the kitchen sink: peak flame=0.95 at y=0.86m, decays smoothly to flame=0.05 at y=2.5m (1.4 m visible column).",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T023",
-      "title": "Fire actually spreads across the floor — two root causes (incorrect floor mask + spike-smoothing) fixed",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T022"],
-      "acceptance": "After ignition, fire spreads visibly across the floor and engulfs the room; burning floor voxels grow >90x; XZ coverage reaches the full storey footprint.",
-      "notes": "Two compounding bugs masked floor propagation:\n\n1. scene_scan.rasterise_structural_voxels was stamping the full AABB of HM3D's ``floor`` and ``ceiling`` semantic instances. Those instances are single meshes whose AABB y-extent covers the entire storey height (e.g. 0..2.2 m), so the resulting voxel mask marked 20.5% of the world as 'floor' - effectively the entire room volume. Once the propagation step zero-fluxed those voxels back to ambient, no heat could survive long enough to ignite anything. Fixed by only stamping the bottom ``floor_slab_cells=2`` of a floor AABB (top ``ceiling_slab_cells=2`` for ceilings). The new floor mask is 2.4% of the world, occupying a clean 0.3 m slab at y=-0.04..0.11 m with realistic 19.9x10.3 m XZ footprint.\n\n2. Step 4b's `(temp > floor_ignite_temp_c)` predicate was checked AFTER heat diffusion. The single-voxel thermal spike (a chair on fire at 900 C) was averaged out by the CFL-substepped Laplacian within one step (one substep absorbs 6*0.16 = 96% of the centre's excess into the 6 neighbours), so by the time floor ignition was evaluated the floor voxel just below the chair had cooled to ~60 C. Fix: add a 'direct contact' ignition path using a 3D box-SUM over flame voxels. Any floor voxel within ``floor_ignite_radius_cells=2`` of an active flame voxel (intensity > floor_flame_contact_thresh=0.2) gets the synthetic fuel deposit immediately, plus a seed flame intensity (0.3 * floor_fuel_value) and a forced temperature bump to (t_ignite + 50) so the next reaction step picks it up. The diffusion-based 'sustained heating' path is kept for the secondary effect (e.g. a fire on the storey above igniting the floor below).\n\nVerified on plan 83679a07b632 (rebaked after re-scanning the scene):\n  * t=0  -> burning=619,  floor=61,   XZ=1.5x1.5m\n  * t=60  -> burning=938,  floor=159,  XZ=3.3x2.2m\n  * t=120 -> burning=1148, floor=176,  XZ=6.3x5.2m\n  * t=240 -> burning=8166, floor=4098, XZ=13.2x10.5m\n  * t=480 -> burning=11247,floor=5677, XZ=19.9x10.5m (full storey footprint)\n  * Maintained through t=900s with fl_max=0.95.\n  * Vertical column unchanged: peak 3233 voxels at floor layer y=-0.04m, decaying smoothly to 33 voxels at y=1.46m.\n\nNew tunables (all in propagation_rules):\n  * floor_ignite_radius_cells (default 2 cells = ~0.3 m): direct contact reach\n  * floor_flame_contact_thresh (default 0.2): minimum flame intensity for contact ignition\n  * In scene_scan.rasterise_structural_voxels: floor_slab_cells / ceiling_slab_cells (default 2 each) caps how thick the structural slab is.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T024",
-      "title": "Procedural flame texture: sub-voxel noise, time flicker, color jitter, smoke wisps; randomised floor ignition seed to break flat-sheet look",
-      "status": "done",
-      "priority": "P2",
-      "depends_on": ["T023"],
-      "acceptance": "Flame voxels show fractal texture rather than smooth blobs; flame visibly flickers with t_sim; floor flame has tongue-like heterogeneity instead of a uniform membrane.",
-      "notes": "Two-side fix:\n\n1. Renderer side (utils/fire_sensors/voxel_render.py): added a 3-octave value-noise field cached per shape+seed, sampled trilinearly at each ray-march point with a time-domain y-offset so the texture 'scrolls upward'. Three modulations applied inside the per-step loop:\n   * flame intensity = fl * (1 + flame_noise_strength*n + flame_edge_break*edge_weight*n), where edge_weight = 4*fl*(1-fl) peaks at fl=0.5. Result: ragged silhouette at the edge, stable bright core.\n   * lut_input = clip(fl_used + flame_color_jitter*n_color, 0, 1) using a second seed. Result: same intensity samples flip between red/orange/yellow LUT bands, producing per-voxel color variation.\n   * sm = sm * (1 + smoke_noise_strength*n_smoke). Result: plume has visible wisps instead of uniform grey.\n   New params: flame_noise_strength=0.55, flame_edge_break=0.8, flame_color_jitter=0.25, flame_time_speed=12.0, smoke_noise_strength=0.30.\n   t_sim plumbed through volumetric_composite -> VoxelSmokeSensor.process / FireWorldController.render_for_agent / runtime_process so wallclock advance drives flicker.\n\n2. Propagation side (utils/fire_world/propagation.py): floor ignition now seeds each newly-ignited floor voxel with a uniform-random flame magnitude in [floor_seed_flame_min, floor_seed_flame_max] * floor_fuel_value (defaults 0.1-0.65). Temperature also jittered by 0..100 C extra. This breaks the 'flat membrane' look since adjacent floor voxels start with different intensities and propagation evolves them in lock-step but at different magnitudes.\n\nVerified:\n  * Floor flame std at t=240s = 0.07 across 3413 lit voxels (was uniform 0.21 before).\n  * Flame pixel count in test render grew 64803 -> 97024 (heterogeneity makes more voxels visible at varying brightness).\n  * Frame-to-frame flame-region delta ~4 RGB units = subtle but visible flicker.\n  * Legacy step-clock test still passes; 5 files diagnostics clean.\n\nAll new params have plan.json overrides; defaults are tuned to give a 'lively but not noisy' fire. To disable any effect set the corresponding strength to 0.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T025",
-      "title": "Fix IndexError in noise sampler when coord lands on exact wrap boundary",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T024"],
-      "acceptance": "Teleop no longer crashes after a few env.step() calls; volumetric_composite survives arbitrary camera poses and t_sim values.",
-      "notes": "Root cause: _sample_noise computed `coord_mod = np.mod(coord, N)` then `i0 = np.floor(coord_mod)`. In float32 mod can return exactly N at certain boundary inputs (mod(-1e-7, 16) -> 16.0 due to IEEE rounding), so np.floor yields 16 = N which is out of bounds for an axis of size N. The teleop hit it after ~14 steps with t_sim=42 s when the ray-march sampled a point whose mod result landed on a boundary cell. Fix: add a defensive `i0 = i0 % N_arr` after the floor, mirroring the existing wrap on i1. Verified with 20 random camera poses x 4 t_sim values + a unit test that hammers extreme coordinates (-1e7, +1e7, exact integers): no IndexError, all outputs finite.",
-      "last_updated": "2026-06-21T00:00:00Z"
-    },
-    {
-      "id": "T026",
-      "title": "Delete Habitat 0.2.1 patched stack (multi-robot-setting + shortest_path_follower shim)",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": [],
-      "acceptance": "multi-robot-setting/ removed; utils/shortest_path_follower.py removed; project relies exclusively on installed habitat-lab 0.3.3.",
-      "notes": "Removed multi-robot-setting/ (the H2 patched habitat package) and utils/shortest_path_follower.py (the H2 compat follower). Also removed stale zip artefacts at the repo root (=0.29.1, Co-NavGPTv3(1).zip, data.zip). README installation instruction referencing 'mv -r multi-robot-setting/habitat ...' will be rewritten in T032.",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T027",
-      "title": "Rewrite arguments.py for Habitat 3.3 (Hydra config + humans + robot models)",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T026"],
-      "acceptance": "arguments.py exposes num_agents, num_humans, robot-profile, humanoid data paths, gpu_id, config paths; produces a DictConfig via habitat.get_config; sets agents_order dynamically.",
-      "notes": "Rewrote arguments.py to compose the Hydra config via habitat.config.default.get_config, replicate the first agent template into num_agents entries under habitat.simulator.agents (main_agent + agent_1 + ...), and expose humanoid_kwargs() / robot_model_kwargs() helpers matching envs/random_humanoid.py + envs/robot_models.py. All fire / nav / mapping CLI flags preserved verbatim. New flags: --num_humans, --robot_models_enabled, --robot_profiles, --robot_urdfs, --dataset_path, --scenes_dir, --scene_dataset, --config.",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T028",
-      "title": "Author configs/multi_objectnav_hm3d.yaml as a Habitat 3.3 hydra config",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T027"],
-      "acceptance": "Config extends /benchmark/nav/objectnav/objectnav_hm3d, declares agents_order + per-agent sim_sensors, and includes a conav section (num_robots, num_humans, human_urdfs, motion data, robot model profiles).",
-      "notes": "Rewrote configs/multi_objectnav_hm3d.yaml as a Hydra @package _global_ file that inherits from /benchmark/nav/objectnav/objectnav_hm3d. Two agents by default (main_agent + agent_1 via YAML anchor). Sensor stack matches the H2 setup: RGB 640x480 hfov 79 at 0.88m, depth 0-5m same origin. Scene_dataset points at data/scene_datasets/hm3d_v0.2/hm3d_annotated_basis.scene_dataset_config.json; data_path at data/datasets/objectnav_hm3d_v2/{split}/{split}.json.gz. New conav section holds humanoid + robot-model knobs consumed by envs/random_humanoid.py and envs/robot_models.py.",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T029",
-      "title": "Port envs/ helpers (RandomHumanoidWalker + RobotModelManager) from reference",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T027"],
-      "acceptance": "envs/random_humanoid.py and envs/robot_models.py spawn multiple kinematic humanoids + visible robot URDF models on top of ObjectNav nav agents.",
-      "notes": "Copied the two managers verbatim from Co-NavGPTv3/envs/*.py, adjusted PROJECT_ROOT for the main project (parents[1] since envs/ now sits at the repo root instead of Co-NavGPTv3/envs/). envs/__init__.py re-exports both public classes.",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T030",
-      "title": "Adapt VLM_Agent, ShortestPathFollower, fire pipeline to Habitat 3.3 APIs",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T027", "T028", "T029"],
-      "acceptance": "vlm_agents.py + vlm_multi_agents.py + utils/shortest_path_follower.py compile and run against habitat 0.3.3.",
-      "notes": "After reading Co-NavGPTv3/habitat/sims/habitat_simulator/habitat_simulator.py it turns out the H3.3 multi-agent code path (a) returns a List[Observations] for reset/step just like the H2 patch, (b) keys each per-agent obs dict by the bare sensor uuid ('rgb', 'depth') from RGBSensor/DepthSensor base classes, and (c) still uses numpy.quaternion in AgentState.sensor_states[...].rotation. That means VLM_Agent + VLM_Multi_Agent do NOT need per-frame surgery. What DID change is the H2 ShortestPathFollowerCompat: rewrote utils/shortest_path_follower.py against the H3.3 sim (lowercase forward_step_size / turn_angle, HabitatSimActions.stop/move_forward/turn_left/turn_right lowercase singleton). Also migrated fire pipeline configs: utils/fire_pipeline.py now resolves depth cfg from either DictConfig (habitat.simulator.agents.<main>.sim_sensors.depth_sensor) or the legacy YACS config; utils/fire_world/scene.py::FireScene.from_args accepts habitat.simulator.scene from DictConfig; utils/fire_world/controller.py picks the right depth cap from either schema. utils/fire_sensors/lidar_360.py::install_lidar_depth_sensors rewritten around DictConfig sim_sensors group (drop the AGENT_0.SENSORS list-mutation approach that only works under YACS).",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T031",
-      "title": "Rewrite main.py + main_vec.py for Habitat 3.3 multi-agent + humanoids",
-      "status": "done",
-      "priority": "P0",
-      "depends_on": ["T030"],
-      "acceptance": "python main.py runs one episode on hm3d v2 val with N robot agents + M humanoid pedestrians + optional visible robot URDFs; env.step accepts a list of int actions (one per robot agent); fire pipeline still triggers when --fire_sensors or --fire_world are set.",
-      "notes": "Rewrote both entry points to (a) load config via arguments.load_config (Hydra DictConfig), (b) wire in RandomHumanoidWalker + RobotModelManager after Env construction, (c) treat env.reset()/env.step() return values as either list-of-obs (multi-agent) or single dict (single-agent), (d) advance the walker and robot models between steps. Preserved all four nav modes (gpt / nearest / co_ut / fill), fire pipeline hooks, and the FMM-planner-driven per-agent action computation. main_vec.py additionally uses habitat.config.read_write to overwrite per-worker content_scenes + scene fields before Env(config=..., dataset=...).",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T032",
-      "title": "Update scripts/keyboard_teleop.py, keyboard_teleop_fire.py, README, docs/main_usage.md",
-      "status": "done",
-      "priority": "P1",
-      "depends_on": ["T031"],
-      "acceptance": "Teleop scripts use the new DictConfig loader and list-of-actions env.step. docs/main_usage.md notes the H3.3 change plus new humanoid flags. README installation instructions target habitat 0.3.3.",
-      "notes": "scripts/keyboard_teleop.py rewritten to use arguments.load_config + lowercase HabitatSimActions singleton indices and to tolerate list-vs-dict env.step returns. scripts/keyboard_teleop_fire.py migrated: dropped every config.SIMULATOR.* access, replaced with DictConfig-native lookups via config.habitat.simulator.agents[main_agent].sim_sensors.{rgb,depth}_sensor. README installation section rewritten around habitat 0.3.3 install + habitat_humanoids / hab_spot_arm / hab_stretch downloads; usage examples now show --num_humans and --robot_models_enabled. docs/main_usage.md gets a top-of-file migration banner and a new section 2.3.1 for the humanoid + robot-model flags.",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T033",
-      "title": "Author docs/habitat3_migration.md summarizing every change",
-      "status": "done",
-      "priority": "P1",
-      "depends_on": ["T026", "T027", "T028", "T029", "T030", "T031", "T032"],
-      "acceptance": "Standalone markdown lists (1) files deleted, (2) files added, (3) files rewritten, (4) config-schema diff (YACS -> Hydra), (5) API mapping table (agent_state / actions / observations), (6) run instructions.",
-      "notes": "This is the deliverable the user explicitly requested at the top-level.",
-      "last_updated": "2026-07-04T00:00:00Z"
-    },
-    {
-      "id": "T034",
-      "title": "Smoke-test the ported main.py against habitat 0.3.3",
-      "status": "blocked",
-      "priority": "P1",
-      "depends_on": ["T031"],
-      "acceptance": "python main.py --num_agents 1 --nav_mode nearest advances at least 5 env.step() calls without exception. If habitat 0.3.3 is not installed on this machine, record the compile-only validation (py_compile + import inspection) in the notes and flag the runtime test as an open item.",
-      "notes": "Runtime test is BLOCKED on this workstation because /home/liushe10/miniconda3/envs/co-nav ships habitat-lab 0.2.1 (from /home/liushe10/habitat-lab) and no habitat 0.3.3 install was found on disk. Ran py_compile on every rewritten file — all clean: arguments.py, main.py, main_vec.py, envs/__init__.py, envs/random_humanoid.py, envs/robot_models.py, utils/shortest_path_follower.py, utils/fire_pipeline.py, utils/fire_world/scene.py, utils/fire_world/controller.py, utils/fire_sensors/lidar_360.py, scripts/keyboard_teleop.py, scripts/keyboard_teleop_fire.py. Also grep-verified no residual config.SIMULATOR.* / config.TASK.* / config.defrost() outside deliberate legacy-YACS fallback branches in utils/fire_*/*.py, and no remaining references to the deleted multi-robot-setting/ tree. To finish the runtime test the user needs to install habitat-sim 0.3.3 + habitat-lab 0.3.3 (see docs/habitat3_migration.md section 1 + README installation) and run `python main.py --num_agents 1 --nav_mode nearest --dump_location /tmp/conav_smoke`.",
-      "last_updated": "2026-07-04T00:00:00Z"
+      "acceptance": "no runnable doc command references deleted flags/modules; architecture tables reflect voxel-only RGB+Thermal",
+      "notes": "kept historical migration log + git history/ASCII diagram; updated stage tables, args lists, recipes, ablations",
+      "last_updated": "2026-07-10T02:00:00Z"
     }
   ]
 }

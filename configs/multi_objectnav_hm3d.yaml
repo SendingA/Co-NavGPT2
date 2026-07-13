@@ -54,6 +54,7 @@ habitat:
             normalize_depth: True
             position: [0.0, 0.88, 0.0]
       agent_1: *robot_agent
+
     habitat_sim_v0:
       gpu_device_id: 0
       allow_sliding: True

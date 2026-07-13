@@ -13,88 +13,14 @@ from ultralytics import YOLO
 from ultralytics import SAM
 
 
-# ---------------------------------------------------------------------------
-# HSV-based flame detector
-# ---------------------------------------------------------------------------
-# YOLO-World does not reliably pick up the synthetic flames rendered by the
-# fire-scene simulator. The thermal sensor in
-# ``utils/fire_sensors/sensors/thermal.py`` already isolates flames via two
-# HSV ranges (covering the hue wrap-around for orange/red). We reuse the same
-# ranges here so the RGB perception pipeline can produce a "fire" detection
-# that the agents' goal-checking logic can consume just like a YOLO box.
-FLAME_HSV_LOW1 = np.array([0, 100, 200], dtype=np.uint8)
-FLAME_HSV_HIGH1 = np.array([35, 255, 255], dtype=np.uint8)
-FLAME_HSV_LOW2 = np.array([160, 100, 200], dtype=np.uint8)
-FLAME_HSV_HIGH2 = np.array([180, 255, 255], dtype=np.uint8)
-
-# Connected components below this many pixels are treated as noise.
-_FLAME_MIN_AREA = 60
-# Confidence assigned to HSV-derived detections. Set above the default
-# ``sem_threshold`` (0.85) so flames pass the goal filter.
-_FLAME_CONFIDENCE = 0.95
-
-
-def detect_flames_hsv(image_rgb):
-    """Return (boxes_xyxy, masks, scores) for HSV-detected flame regions.
-
-    Args:
-        image_rgb: (H, W, 3) uint8 RGB image.
-
-    Returns:
-        boxes: (N, 4) float32 xyxy, possibly empty.
-        masks: (N, H, W) bool, possibly empty.
-        scores: (N,) float32, possibly empty.
-    """
-    if image_rgb is None or image_rgb.size == 0:
-        return (np.zeros((0, 4), np.float32),
-                np.zeros((0, 0, 0), bool),
-                np.zeros((0,), np.float32))
-
-    hsv = cv2.cvtColor(image_rgb, cv2.COLOR_RGB2HSV)
-    mask1 = cv2.inRange(hsv, FLAME_HSV_LOW1, FLAME_HSV_HIGH1)
-    mask2 = cv2.inRange(hsv, FLAME_HSV_LOW2, FLAME_HSV_HIGH2)
-    flame_mask = cv2.bitwise_or(mask1, mask2)
-    flame_mask = cv2.morphologyEx(
-        flame_mask, cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8)
-    )
-
-    n_lbl, lbl_img, stats, _ = cv2.connectedComponentsWithStats(
-        flame_mask, connectivity=8
-    )
-
-    H, W = flame_mask.shape
-    boxes = []
-    masks = []
-    scores = []
-    # label 0 is background
-    for lbl in range(1, n_lbl):
-        x, y, w, h, area = stats[lbl]
-        if area < _FLAME_MIN_AREA:
-            continue
-        boxes.append([x, y, x + w, y + h])
-        masks.append(lbl_img == lbl)
-        scores.append(_FLAME_CONFIDENCE)
-
-    if not boxes:
-        return (np.zeros((0, 4), np.float32),
-                np.zeros((0, H, W), bool),
-                np.zeros((0,), np.float32))
-
-    return (
-        np.asarray(boxes, dtype=np.float32),
-        np.stack(masks, axis=0).astype(bool),
-        np.asarray(scores, dtype=np.float32),
-    )
-
-
 class Object_Detection_and_Segmentation():
-    r""" YOLO-World + SAM, augmented with an HSV flame fallback.
+    r""" YOLO-World + SAM, augmented with a thermal flame detection.
 
-    If the class list passed in contains ``"fire"`` we additionally run a
-    color-based flame detector on every frame and merge its boxes/masks into
-    the YOLO-derived detections. This is more robust than relying on
-    YOLO-World alone for the synthetic flames produced by the fire-scene
-    simulator.
+    If the class list passed in contains ``"fire"`` we derive a smoke-
+    invariant fire detection from the voxel thermal flame mask and merge
+    its boxes/masks into the YOLO-derived detections. This is more robust
+    than relying on YOLO-World alone for the synthetic flames produced by
+    the fire-scene simulator.
     """
 
     def __init__(self, args, classes, device):
@@ -121,8 +47,8 @@ class Object_Detection_and_Segmentation():
             image: HxWx3 uint8 BGR (matches the rest of the pipeline).
             thermal_flame_mask: optional float32 in [0, 1], shape (H, W).
                 If provided and the ``fire`` class is registered, fire
-                detections are derived from this mask (smoke-invariant)
-                instead of running HSV on the smoky RGB.
+                detections are derived from this (smoke-invariant) voxel
+                thermal mask.
         """
         # ----------------------- 1) YOLO-World ------------------------
         yolo_s_time = time.time()
@@ -149,22 +75,19 @@ class Object_Detection_and_Segmentation():
             masks_tensor = sam_out[0].masks.data
             masks_np = masks_tensor.cpu().numpy().astype(bool)
 
-        # ----------------------- 3) Fire fallback ---------------------
-        # Prefer thermal: it is unaffected by smoke. Fall back to the HSV
-        # detector on the (possibly smoky) RGB only when thermal is absent.
-        if self.fire_class_id >= 0:
-            if thermal_flame_mask is not None:
-                from utils.smoke_perception import thermal_mask_to_detections
+        # ----------------------- 3) Fire detection --------------------
+        # Fire detections are derived from the voxel thermal flame mask,
+        # which is unaffected by smoke.
+        if self.fire_class_id >= 0 and thermal_flame_mask is not None:
+            from utils.smoke_perception import thermal_mask_to_detections
 
-                target_hw = (
-                    masks_np.shape[1:] if masks_np is not None else image.shape[:2]
-                )
-                fire_xyxy, fire_masks, fire_scores = thermal_mask_to_detections(
-                    np.asarray(thermal_flame_mask, dtype=np.float32),
-                    target_hw=target_hw,
-                )
-            else:
-                fire_xyxy, fire_masks, fire_scores = detect_flames_hsv(image)
+            target_hw = (
+                masks_np.shape[1:] if masks_np is not None else image.shape[:2]
+            )
+            fire_xyxy, fire_masks, fire_scores = thermal_mask_to_detections(
+                np.asarray(thermal_flame_mask, dtype=np.float32),
+                target_hw=target_hw,
+            )
 
             if len(fire_xyxy) > 0:
                 # Align mask spatial dims with YOLO/SAM masks if any.

@@ -1,16 +1,14 @@
 """Voxel ray-march: composite RGB / Thermal from a FireWorld field.
 
-This is the math previously hosted in ``utils/fire_world/runtime.py``
-(``FireWorldRenderer``). It now lives on the **sensor** side, because
-the role of this code is to *observe* the fire world from a camera
-pose, not to model the world itself. ``utils.fire_world`` should only
-worry about flame/smoke/temperature voxels and how they evolve in time.
+This code lives on the **sensor** side, because its role is to
+*observe* the fire world from a camera pose, not to model the world
+itself. ``utils.fire_world`` only worries about flame/smoke/temperature
+voxels and how they evolve in time.
 
 The world is passed in via three ``(Nx, Ny, Nz)`` fields plus origin /
 voxel size; the camera is described by intrinsics ``K``, world position,
-and rotation. The function returns the same dict that
-``SmokeRGBSensor.process`` does so it slots straight into the rest of
-the sensor suite.
+and rotation. The function returns a dict of smoky-RGB / thermal
+arrays that slots straight into the rest of the sensor suite.
 
 Everything is pure-numpy and stateless — :class:`VoxelSmokeSensor` is
 the BaseSensor wrapper that owns the configuration and the camera
@@ -245,7 +243,7 @@ def fractal_flame_noise(points_world: np.ndarray,
 
 
 # ---------------------------------------------------------------------------
-# Thermal compositing (luma + flame contribution + ambient)
+# Thermal compositing (physical temperature field + FLIR-style display AGC)
 # ---------------------------------------------------------------------------
 def compose_thermal(
     rgb_clean: np.ndarray,
@@ -254,20 +252,23 @@ def compose_thermal(
     ambient_c: float,
     color_blend: float = 0.0,
 ) -> Tuple[np.ndarray, np.ndarray]:
-    """Compose a thermal IR image from voxel temperature + flame masks.
+    """Compose a thermal IR image + physical temperature field.
 
-    The visualisation has three contributors stacked in temperature
-    space:
+    Returns ``(image_bgr, temperature_c)`` where:
 
-    * a baseline "scene structure" field driven by RGB luma so walls,
-      floors, doors are still visible (FLIR auto-gain mimics this);
-    * the per-ray maximum voxel temperature from the ray-march;
-    * the per-ray flame intensity, which is added as a hot bias so
-      flame pixels saturate near the top of the colormap even when
-      ``temp_max`` is partially attenuated by sampling.
+    * ``temperature_c`` is a physical temperature map in deg C built from
+      ambient + voxel/flame heat only. RGB luma is NOT folded in, so the
+      array is meaningful for a temperature threshold (person ~ ambient+25,
+      flame pushing toward ~600). This is what downstream detection reads.
+    * ``image_bgr`` is the 8-bit display, produced with a FLIR-style
+      adaptive gain (AGC): a fixed lower anchor a few degrees below ambient
+      and an upper anchor that grows with the hottest pixel (min ambient+40)
+      so warm bodies stay visible without a fire, and a real fire saturates
+      the top of the range. A faint luma texture is added to the *display
+      only* (fading out on hot pixels) so scene structure stays legible.
 
-    The final image is auto-stretched into 8-bit and optionally blended
-    with INFERNO so flame regions look unmistakably hot.
+    Optionally blended with INFERNO (``color_blend``) so flame regions look
+    unmistakably hot.
     """
     try:
         import cv2
@@ -277,24 +278,39 @@ def compose_thermal(
         luma = cv2.cvtColor(rgb_clean, cv2.COLOR_RGB2GRAY).astype(np.float32) / 255.0
     else:
         luma = rgb_clean.mean(axis=-1).astype(np.float32) / 255.0
-    scene_field = (luma - 0.5) * 35.0  # ~ +/-17 C around ambient
 
-    # Voxel-driven contributions.
+    # ---- Physical temperature field (returned for downstream detection) --
+    # Scene surfaces sit at ambient; only the voxel temperature field and
+    # the flame contribute real heat. We deliberately do NOT fold RGB luma
+    # into the temperature here — the old code added ``(luma-0.5)*35`` which
+    # made bright walls/lamps read as +17 C and dark corners as -17 C, so
+    # the "thermal" map was really just a recoloured RGB and the returned
+    # ``thermal_temperature`` was unusable for a temperature threshold.
+    #
+    # ``temp_max`` is the per-ray maximum voxel temperature (deg C) from the
+    # ray-march; ``flame_along`` is the per-ray flame intensity accumulator.
+    # We take the max of the voxel excess and a flame-driven excess so a
+    # flame pixel never gets dimmed by a cold sample in front of it.
     voxel_excess = np.maximum(temp_max - float(ambient_c), 0.0)
     flame_excess = np.clip(flame_along, 0.0, 1.0) * 600.0
-    # Use the max so a flame pixel never gets dimmed by a cold sample
-    # in front of it. ``flame_along`` is the per-ray flame intensity
-    # accumulator, which is non-zero whenever any voxel along the ray
-    # was burning - exactly the locus we want to highlight in IR.
     excess = np.maximum(voxel_excess, flame_excess)
-    temperature = float(ambient_c) + scene_field + excess
+    temperature = float(ambient_c) + excess
 
-    # Auto-stretch with a hard floor at flame_c=600 so the flame band
-    # always reaches near-saturation, regardless of how much of the
-    # frame is on fire.
-    t_lo = float(np.percentile(temperature, 2))
-    t_hi = float(max(np.percentile(temperature, 99.5), 600.0))
+    # ---- Display image (8-bit) with adaptive gain (FLIR-style AGC) -------
+    # Map the physical temperature to gray with a sensible minimum span so
+    # an ambient-only scene is mid-gray (not crushed to black) and a warm
+    # body at ~ambient+25 C is clearly visible, while a real fire pushes the
+    # top of the range up to near-saturation. The lower anchor sits a few
+    # degrees below ambient; the upper anchor is at least ambient+40 C.
+    t_lo = float(ambient_c) - 10.0
+    t_hi = float(max(np.percentile(temperature, 99.5), float(ambient_c) + 40.0))
     norm = np.clip((temperature - t_lo) / max(t_hi - t_lo, 1e-3), 0.0, 1.0)
+    # Faint structural texture (VISUAL ONLY): add a small luma-driven bias so
+    # walls / doors / furniture stay legible the way a real thermal AGC keeps
+    # scene structure visible. It fades out where the scene is hot (weighted
+    # by 1-norm) so it never pollutes the flame band, and it does not touch
+    # the returned ``temperature`` array.
+    norm = np.clip(norm + (luma - 0.5) * 0.16 * (1.0 - norm), 0.0, 1.0)
     norm = np.power(norm, 0.7)
     gray_u8 = (norm * 255).astype(np.uint8)
     if cv2 is not None:
@@ -402,7 +418,7 @@ def volumetric_composite(
     The remaining ``T_acc`` weights the original scene RGB at the end.
 
     Returns a dict ``{image, transmittance, flame_mask, thermal_image,
-    thermal_temperature}`` matching the legacy FireWorldRenderer.render().
+    thermal_temperature}``.
     """
     try:
         import cv2

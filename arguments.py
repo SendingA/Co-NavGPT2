@@ -86,6 +86,12 @@ def get_args() -> argparse.Namespace:
                         help="Habitat-sim GPU device id")
     parser.add_argument("--num_agents", type=int, default=2,
                         help="number of robot agents in the simulator")
+    parser.add_argument("--self_exclusion_radius", type=float, default=0.45,
+                        help="metres: discard depth points within this XZ "
+                             "radius of the camera during mapping so the "
+                             "agent never treats its own visible robot URDF "
+                             "(or the floor right under itself when looking "
+                             "down) as an obstacle. 0 disables the filter.")
 
     # Habitat 3 humanoid pedestrians
     parser.add_argument("--num_humans", type=int, default=0,
@@ -137,11 +143,10 @@ def get_args() -> argparse.Namespace:
                              "3: gpt-4o-mini  (only used when nav_mode=gpt)")
 
     # ------------------------------------------------------------------
-    # Fire-scene observation suite (Beer-Lambert RGB + noisy depth +
-    # radar / lidar / thermal). Suite is auto-constructed when
-    # --fire_world=1, even if --fire_sensors=0.
+    # Fire-scene observation suite (voxel RGB + Thermal + noisy depth +
+    # radar / lidar). The suite is constructed automatically when
+    # --fire_world=1.
     # ------------------------------------------------------------------
-    parser.add_argument("--fire_sensors", type=int, default=0)
     parser.add_argument("--fire_apply_to_obs", type=int, default=1)
     parser.add_argument("--smoke_density", type=float, default=0.6)
     parser.add_argument("--fire_dump_dir", type=str,
@@ -153,9 +158,22 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--lidar_resolution", type=int, default=320)
 
     # Smoke-scene perception switches
-    parser.add_argument("--depth_use_clean", type=int, default=0)
+    parser.add_argument("--depth_use_clean", type=int, default=-1,
+                        help="Which depth is written back into observations "
+                             "FOR MAPPING. -1 (default) = auto: use clean "
+                             "depth whenever a FireWorld scene is active, "
+                             "because the smoke-degraded depth clips distant "
+                             "walls/floors to the smoke layer (Jin "
+                             "visibility) and the mapper would then bake the "
+                             "whole flame region as an obstacle wall. Set 1 "
+                             "to force clean depth, 0 to force the "
+                             "smoke-degraded depth (only if you WANT smoke to "
+                             "occlude the map). NOTE: this flag no longer "
+                             "affects the RGB/thermal fire render or the "
+                             "dashboard — those always ray-march against the "
+                             "pristine geometric depth, so flame/smoke look "
+                             "identical for 0 and 1.")
     parser.add_argument("--use_thermal_perception", type=int, default=1)
-    parser.add_argument("--rgb_dehaze", type=int, default=0)
 
     # FireWorld runtime
     parser.add_argument("--fire_world", type=int, default=0)
@@ -171,7 +189,16 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--fire_world_smoke_k_ext", type=float, default=4.0)
     parser.add_argument("--fire_world_n_steps", type=int, default=24)
     parser.add_argument("--fire_world_render_scale", type=float, default=0.5)
-    parser.add_argument("--fire_world_compound_rgb", type=int, default=0)
+    parser.add_argument("--fire_fast", type=int, default=1,
+                        help="1 (default): navigation-speed fire rendering "
+                             "- disables the procedural flame flicker/wisp "
+                             "noise and lowers ray-march steps + render "
+                             "scale for a ~5-15x speedup. Set 0 for the "
+                             "pretty teleop-demo look (much slower).")
+    parser.add_argument("--fire_flame_noise", type=float, default=None,
+                        help="Override flame procedural-noise strength "
+                             "[0..1.5]. None = decided by --fire_fast "
+                             "(0 when fast, 0.55 otherwise).")
 
     args = parser.parse_args()
     args.cuda = torch.cuda.is_available()
@@ -239,6 +266,50 @@ def load_config(args: argparse.Namespace):
     return config
 
 
+def voxel_smoke_kwargs(args) -> dict:
+    """Return kwargs for utils.fire_sensors.config.VoxelSmokeConfig that
+    honour --fire_fast / --fire_flame_noise.
+
+    Fast mode (default) trades the procedural flame flicker/wisp noise
+    and high ray-march resolution for a large speedup — the noise is
+    pure eye-candy that does nothing for navigation. Pretty mode
+    (``--fire_fast 0``) restores the teleop-demo defaults.
+    """
+    fast = bool(int(getattr(args, "fire_fast", 1)))
+
+    if fast:
+        n_steps = min(int(args.fire_world_n_steps), 10)
+        render_scale = min(float(args.fire_world_render_scale), 0.35)
+        default_noise = 0.0
+    else:
+        n_steps = int(args.fire_world_n_steps)
+        render_scale = float(args.fire_world_render_scale)
+        default_noise = 0.55
+
+    noise = getattr(args, "fire_flame_noise", None)
+    noise = default_noise if noise is None else float(noise)
+    # When noise is off, kill all three noise terms; when on, use the
+    # canonical teleop ratios (edge_break/color_jitter/smoke scale with it).
+    if noise <= 0.0:
+        flame_noise = edge_break = color_jitter = smoke_noise = 0.0
+    else:
+        flame_noise = noise
+        edge_break = 0.8 * (noise / 0.55)
+        color_jitter = 0.25 * (noise / 0.55)
+        smoke_noise = 0.30 * (noise / 0.55)
+
+    return {
+        "n_steps": n_steps,
+        "smoke_k_ext": float(args.fire_world_smoke_k_ext),
+        "render_scale": render_scale,
+        "thermal_color_blend": 1.0,
+        "flame_noise_strength": flame_noise,
+        "flame_edge_break": edge_break,
+        "flame_color_jitter": color_jitter,
+        "smoke_noise_strength": smoke_noise,
+    }
+
+
 def humanoid_kwargs(config, seed: int) -> dict:
     """Bundle up kwargs for :class:`envs.random_humanoid.RandomHumanoidWalker`."""
     return {
@@ -291,6 +362,7 @@ def robot_model_kwargs(config, num_agents: int) -> dict:
 # ---------------------------------------------------------------------------
 def _apply_camera_geometry(config, args: argparse.Namespace) -> None:
     sim_cfg = config.habitat.simulator
+    hfov = int(round(float(args.hfov)))  # H3.3 typing: hfov is int
     for agent_cfg in sim_cfg.agents.values():
         for sensor_cfg in agent_cfg.sim_sensors.values():
             if hasattr(sensor_cfg, "width"):
@@ -298,7 +370,7 @@ def _apply_camera_geometry(config, args: argparse.Namespace) -> None:
             if hasattr(sensor_cfg, "height"):
                 sensor_cfg.height = int(args.frame_height)
             if hasattr(sensor_cfg, "hfov"):
-                sensor_cfg.hfov = float(args.hfov)
+                sensor_cfg.hfov = hfov
 
 
 def _set_num_robot_agents(config, num_robots: int) -> None:

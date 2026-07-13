@@ -104,13 +104,8 @@ def parse_args():
                         "always on now; toggle individual modalities via "
                         "--smoke-density / --compound-rgb / etc.")
     p.add_argument("--smoke-density", type=float, default=0.6,
-                   help="Beer-Lambert smoke density [0,1] applied to the "
-                        "suite's noisy depth model and (when "
-                        "--compound-rgb=1) to the global RGB pass.")
-    p.add_argument("--compound-rgb", type=int, default=0,
-                   help="1: stack a global Beer-Lambert pass on top of "
-                        "the FireWorld voxel RGB so areas outside the "
-                        "active fire room still feel smoky.")
+                   help="Smoke density [0,1] applied to the suite's noisy "
+                        "depth / lidar / radar models.")
     p.add_argument("--show-dashboard", type=int, default=1,
                    help="1: open a second window with the suite's 2x4 "
                         "dashboard (RGB clean/smoke, Depth clean/smoke, "
@@ -207,9 +202,6 @@ def main():
         hfov_deg=float(depth_cfg.hfov),
         smoke_density=float(args.smoke_density),
         save_npz=bool(int(args.save_npz)),
-        rgb_source="voxel",
-        thermal_source="voxel",
-        compound_rgb=bool(int(args.compound_rgb)),
         voxel=VoxelSmokeConfig(
             n_steps=int(args.n_steps),
             smoke_k_ext=float(args.smoke_k_ext),
@@ -236,8 +228,7 @@ def main():
         scene=scene,
         camera_K=K,
     )
-    print(f"[teleop] suite enabled (rgb_source=voxel, thermal_source=voxel, "
-          f"compound_rgb={bool(int(args.compound_rgb))}, "
+    print(f"[teleop] suite enabled (voxel RGB + Thermal, "
           f"depth_use_clean={bool(int(args.depth_use_clean))})")
 
     # `step_fire_observation` reads these flags by name.
@@ -340,7 +331,6 @@ def main():
                 f"step={robot_step:>4d}  t_sim={t_sim:>6.1f}s  "
                 f"T_mean={T_mean:.2f}  flame={flame_frac:.1%}",
                 f"{clock_line}  "
-                f"compound={'on' if int(args.compound_rgb) else 'off'}  "
                 f"clean_depth={'on' if int(args.depth_use_clean) else 'off'}  "
                 f"flame_passthrough={float(args.flame_smoke_passthrough):.2f}",
             ]

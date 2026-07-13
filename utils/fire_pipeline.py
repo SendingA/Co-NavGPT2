@@ -4,8 +4,8 @@ After the architecture refactor the heavy lifting is split clearly:
 
 * :mod:`utils.fire_world` owns the *world model* (voxel timeline +
   clock + camera-pose helper).
-* :mod:`utils.fire_sensors` owns the *observation layer* (Beer-Lambert
-  RGB / noisy depth / radar / lidar / thermal / voxel observer / dashboard).
+* :mod:`utils.fire_sensors` owns the *observation layer* (voxel RGB /
+  Thermal observer + noisy depth / radar / lidar / dashboard).
 
 The runtime navigation loop only needs to:
 
@@ -24,6 +24,9 @@ from typing import Any, Dict, Optional
 import numpy as np
 
 from utils.smoke_perception import apply_clean_depth_and_thermal
+
+# Emit the human-thermal overlay failure only once to avoid log spam.
+_HUMAN_THERMAL_WARNED = False
 
 
 def _depth_to_metric(depth_raw: np.ndarray, normalize: bool, max_d: float) -> np.ndarray:
@@ -69,8 +72,17 @@ def step_fire_observation(
     robot_step: int,
     config,
     args,
+    walker: Optional[Any] = None,
+    humans: Optional[Any] = None,
 ) -> Optional[Dict[str, np.ndarray]]:
     """Run the sensor suite on one frame and patch ``observations`` in place.
+
+    When ``walker`` (or an explicit ``humans`` list) is passed, each
+    live humanoid is projected into the current camera and added to
+    the thermal image + temperature map as a ~+9 C blob so it stays
+    visible against the ambient background — this is what a real
+    FLIR-style IR camera would see for a person walking through the
+    scene.
 
     Returns the suite's output dict (handy for ``suite.save_step`` and
     GUI viewers) or ``None`` if the suite is disabled.
@@ -79,18 +91,50 @@ def step_fire_observation(
         return None
 
     max_d, normalize = _resolve_depth_config(config)
-    use_clean_depth = bool(int(getattr(args, "depth_use_clean", 0)))
+    # depth_use_clean: -1 = auto. The smoke-degraded depth clips distant
+    # surfaces to the Jin visibility layer, so in a flame/smoke region
+    # the mapper would treat the whole area as a near-field obstacle
+    # wall (the "floor fire = obstacle" bug). Default to clean depth for
+    # mapping whenever a fire scene is active; only honour a smoky depth
+    # when the user explicitly asks for it with --depth_use_clean 0.
+    _duc = int(getattr(args, "depth_use_clean", -1))
+    if _duc < 0:
+        use_clean_depth = bool(suite.scene is not None)
+    else:
+        use_clean_depth = bool(_duc)
     apply_smoky_rgb = bool(int(getattr(args, "fire_apply_to_obs", 1)))
-    # When the voxel sensor is producing the thermal channel we want it
-    # in obs by default. With Beer-Lambert / HSV we keep the legacy
-    # opt-in behaviour to avoid surprising existing callers.
-    use_thermal_default = 1 if suite.scene is not None else 0
-    use_thermal = bool(int(getattr(args, "use_thermal_perception", use_thermal_default)))
+    # The voxel sensor always produces the thermal channel, so inject it
+    # into observations by default (opt out with --use_thermal_perception 0).
+    use_thermal = bool(int(getattr(args, "use_thermal_perception", 1)))
 
     rgb_clean = np.asarray(observations["rgb"])[..., :3]
     if rgb_clean.dtype != np.uint8:
         rgb_clean = np.clip(rgb_clean, 0, 255).astype(np.uint8)
-    depth_raw = np.asarray(observations["depth"])
+
+    # ---- Pristine clean depth for the RGB/thermal ray-march -------------
+    # The volumetric renderer terminates every camera ray at the depth
+    # surface, so the fire is only integrated *between the camera and
+    # that surface*. The smoke-degraded LIDAR depth clips smoky pixels to
+    # the Jin-visibility layer (~0.5 m), which — if it ever becomes the
+    # render's ray length — stops the rays short of the flame/smoke voxels
+    # and wipes the fire out of the RGB/thermal image.
+    #
+    # That coupling is wrong: the RGB camera's rays physically terminate
+    # at true geometry, not at the LIDAR's smoke-clipped range. Smoke
+    # degradation belongs only to the depth *sensor* output. So we always
+    # ray-march against the pristine geometric depth, independent of
+    # --depth_use_clean (which now controls *only* the depth written back
+    # for mapping).
+    #
+    # We stash the pristine depth on the observation dict so it survives
+    # the write-back and stays clean across frames that reuse the same
+    # dict (e.g. teleop idle polls). A fresh env.step() returns a new dict
+    # without the stash, so the simulator's clean depth is re-captured.
+    if "_fire_clean_depth_raw" in observations:
+        depth_raw = np.asarray(observations["_fire_clean_depth_raw"])
+    else:
+        depth_raw = np.asarray(observations["depth"])
+        observations["_fire_clean_depth_raw"] = depth_raw
     depth_m = _depth_to_metric(depth_raw, normalize, max_d)
 
     sensors = suite.process(
@@ -99,6 +143,73 @@ def step_fire_observation(
         agent_state=agent_state,
         robot_step=int(robot_step),
     )
+
+    # ---- Add humanoid thermal signatures ---------------------------------
+    if humans is None and walker is not None:
+        try:
+            from utils.fire_sensors.humans_thermal import humans_from_walker
+            humans = humans_from_walker(walker)
+        except Exception:
+            humans = None
+    if humans:
+        try:
+            from utils.fire_sensors.humans_thermal import (
+                add_humans_to_thermal_image,
+                project_humans_to_thermal,
+            )
+            camera_K = getattr(
+                suite.voxel_sensor,
+                "camera_K",
+                getattr(suite, "camera_K", None),
+            )
+            if camera_K is not None:
+                # Expose the raw pixel mask so downstream detectors
+                # (or GPT reasoning) can distinguish person from flame.
+                H = int(sensors["thermal_temperature"].shape[0])
+                W = int(sensors["thermal_temperature"].shape[1])
+                human_mask = project_humans_to_thermal(
+                    humans=humans,
+                    agent_state=agent_state,
+                    camera_K=camera_K,
+                    image_hw=(H, W),
+                    depth_m=depth_m,
+                    max_depth_m=float(max_d),
+                )
+                thermal_img_new, thermal_temp_new = add_humans_to_thermal_image(
+                    thermal_image_bgr=sensors["thermal_image"],
+                    thermal_temperature=sensors["thermal_temperature"],
+                    humans=humans,
+                    agent_state=agent_state,
+                    camera_K=camera_K,
+                    depth_m=depth_m,
+                    max_depth_m=float(max_d),
+                    color_blend=float(getattr(
+                        getattr(getattr(suite, "cfg", None), "voxel", None),
+                        "thermal_color_blend",
+                        1.0,
+                    ) if getattr(suite, "cfg", None) is not None else 1.0),
+                )
+                sensors["thermal_image"] = thermal_img_new
+                sensors["thermal_temperature"] = thermal_temp_new
+                # Binary 0/1 mask of pixels that are "human warm" so
+                # downstream code can e.g. add a 'person' detection
+                # sourced from thermal (mirrors thermal_flame_mask).
+                sensors["thermal_human_mask"] = (
+                    human_mask > 0.5
+                ).astype(np.float32)
+        except Exception as exc:
+            # Human thermal overlay is best-effort; never break the
+            # main fire pipeline over a rendering issue. But do surface
+            # the failure once so a real bug (e.g. an intrinsics type
+            # mismatch) doesn't silently wipe humans from the IR image.
+            global _HUMAN_THERMAL_WARNED
+            if not _HUMAN_THERMAL_WARNED:
+                _HUMAN_THERMAL_WARNED = True
+                import traceback
+                print(
+                    "[fire_pipeline] human thermal overlay disabled after "
+                    f"error: {exc!r}\n" + traceback.format_exc()
+                )
 
     apply_clean_depth_and_thermal(
         observations,
@@ -111,43 +222,3 @@ def step_fire_observation(
         max_depth_m=max_d,
     )
     return sensors
-
-
-# Back-compat alias for the previous helper name.
-def compose_fire_step(
-    *,
-    observations,
-    agent_state,
-    robot_step,
-    fire_world_ctrl=None,
-    fire_suite=None,
-    config,
-    args,
-):
-    """Legacy entry point kept for the previous compose_fire_step API.
-
-    The new code path constructs the suite once with ``scene=...`` and
-    calls :func:`step_fire_observation` per step. We keep this wrapper
-    so callers built before the refactor (and tests / downstream
-    scripts) keep working: it lazily re-binds the suite to the
-    controller's scene if needed and forwards.
-    """
-    if fire_suite is None and fire_world_ctrl is None:
-        return None
-    suite = fire_suite
-    if suite is not None and fire_world_ctrl is not None and suite.scene is None:
-        # If the caller constructed the suite without a scene but is
-        # also passing a controller, bind them now.
-        from utils.general_utils import get_camera_K
-        K = getattr(fire_world_ctrl, "camera_K", None) or get_camera_K(
-            args.frame_width, args.frame_height, args.hfov,
-        )
-        suite.bind_scene(fire_world_ctrl.scene, camera_K=K)
-    return step_fire_observation(
-        observations=observations,
-        suite=suite,
-        agent_state=agent_state,
-        robot_step=robot_step,
-        config=config,
-        args=args,
-    )

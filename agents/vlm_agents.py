@@ -14,7 +14,6 @@ from multiprocessing import Process, Queue
 from PIL import Image
 import yaml
 import quaternion
-from yacs.config import CfgNode as CN
 import logging
 
 import numpy as np
@@ -85,8 +84,8 @@ class VLM_Agent():
         # ------------------------------------------------------------------
         ##### Initialize the perception model
         # ------------------------------------------------------------------
-        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "fire"]
-        
+        self.classes = ["chair", "bed", "potted plant", "toilet", "tv_screen", "couch", "person", "fire"]
+
         self.obj_det_seg = Object_Detection_and_Segmentation(self.args, self.classes, self.device)
         
         self.annotated_image = None
@@ -217,16 +216,6 @@ class VLM_Agent():
         proc_time = time.time()
         image_rgb = observations['rgb']
         depth = observations['depth']
-        # Optional dehaze: requires accurate depth (use --depth_use_clean=1).
-        if int(getattr(self.args, 'rgb_dehaze', 0)):
-            from utils.smoke_perception import dehaze_with_depth
-            max_d = float(getattr(self.args, 'max_depth_m', 5.0))
-            depth_m = depth[..., 0] if depth.ndim == 3 else depth
-            if depth_m.dtype != np.float32 and depth_m.max() <= 1.0 + 1e-6:
-                depth_m = depth_m.astype(np.float32) * max_d
-            else:
-                depth_m = depth_m.astype(np.float32)
-            image_rgb = dehaze_with_depth(image_rgb, depth_m)
         image = transform_rgb_bgr(image_rgb)
         self.annotated_image = image
 
@@ -248,6 +237,29 @@ class VLM_Agent():
             if self.goal_id == detections.class_id[mask_idx] and (detections.confidence[mask_idx] > self.args.sem_threshold or ('plant' in self.goal_name and detections.confidence[mask_idx] > 0.5)):
                 mask = detections.mask[mask_idx]
 
+                # --- Debug: log every time we accept a goal detection.
+                # Useful for chasing false positives that later drive the
+                # follower to a wrong 3D point and cause STOP with
+                # success=0. Comment out once tuned.
+                try:
+                    conf = float(detections.confidence[mask_idx])
+                    logging.info(
+                        "[agent %d step %d] accept detection: class=%s conf=%.3f "
+                        "camera_pos=%s",
+                        self.agent_id,
+                        int(self.l_step),
+                        self.goal_name,
+                        conf,
+                        np.round(self.camera_position, 2).tolist(),
+                    )
+                    print(
+                        f"[agent {self.agent_id} step {int(self.l_step)}] "
+                        f"detect {self.goal_name} conf={conf:.3f} "
+                        f"cam_xyz={np.round(self.camera_position, 2).tolist()}"
+                    )
+                except Exception:
+                    pass
+
                 # make the pcd and color it
                 camera_object_pcd = create_object_pcd(
                     depth,
@@ -256,8 +268,8 @@ class VLM_Agent():
                     image,
                     obj_color = None
                 )
-                
-                if len(camera_object_pcd.points) < 10: 
+
+                if len(camera_object_pcd.points) < 10:
                     continue
                 
                 camera_object_pcd.transform(camera_matrix_T)
@@ -784,12 +796,27 @@ class VLM_Agent():
         points = np.asarray(point_sum.points)
         colors = np.asarray(point_sum.colors)
 
-        # mask = (points[:, 1] <= camera_position[1] + 0.5 )
-        mask = (points[:, 1] <= camera_position[1] + 0.5 )
+        # 1) Drop points above the camera (ceiling / overhead clutter).
+        mask = (points[:, 1] <= camera_position[1] + 0.5)
+
+        # 2) Self-body exclusion: when a visible robot URDF is synced to
+        #    the nav agent (or when the agent LOOKs_DOWN and sees the
+        #    floor right under itself), the depth camera captures points
+        #    belonging to the robot's own body. Those land inside the
+        #    obstacle height band and get baked into obstacle_map at the
+        #    agent's own cell, trapping the FMM planner. Discard any
+        #    point whose XZ distance to the camera is below a small
+        #    self-radius so the agent never treats itself as an obstacle.
+        self_radius = float(getattr(self.args, "self_exclusion_radius",0))
+        if self_radius > 0.0 and points.shape[0] > 0:
+            dx = points[:, 0] - float(camera_position[0])
+            dz = points[:, 2] - float(camera_position[2])
+            xz_dist2 = dx * dx + dz * dz
+            mask = mask & (xz_dist2 >= self_radius * self_radius)
 
         points_filtered = points[mask]
         colors_filtered = colors[mask]
-        
+
         pcd = o3d.geometry.PointCloud()
         pcd.points = o3d.utility.Vector3dVector(points_filtered)
         pcd.colors = o3d.utility.Vector3dVector(colors_filtered)

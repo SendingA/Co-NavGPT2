@@ -18,7 +18,7 @@ habitat:
       - agent_1
     agents:
       main_agent: &robot_agent
-        height: 1.28
+        height: 1.58
         radius: 0.18
         max_climb: 0.2
         max_slope: 45.0
@@ -28,7 +28,7 @@ habitat:
             width: 640
             height: 480
             hfov: 79
-            position: [0.0, 1.28, 0.0]
+            position: [0.0, 1.58, 0.0]
           depth_sensor:
             type: HabitatSimDepthSensor
             width: 640
@@ -37,8 +37,28 @@ habitat:
             min_depth: 0.0
             max_depth: 5.0
             normalize_depth: True
-            position: [0.0, 1.28, 0.0]
+            position: [0.0, 1.58, 0.0]
       agent_1: *robot_agent
+        height: 1.58
+        radius: 0.18
+        max_climb: 0.2
+        max_slope: 45.0
+        sim_sensors:
+          rgb_sensor:
+            type: HabitatSimRGBSensor
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0.0, 1.58, 0.0]
+          depth_sensor:
+            type: HabitatSimDepthSensor
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.0
+            max_depth: 5.0
+            normalize_depth: True
+            position: [0.0, 1.58, 0.0]
     habitat_sim_v0:
       gpu_device_id: 0
       allow_sliding: True

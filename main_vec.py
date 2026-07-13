@@ -81,6 +81,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
 
         rgb_source = "voxel" if fire_scene is not None else "beer_lambert"
         thermal_source = "voxel" if fire_scene is not None else "hsv"
+        from arguments import voxel_smoke_kwargs
         fire_cfg = FireSensorConfig(
             max_depth_m=float(depth_cfg.max_depth),
             hfov_deg=float(depth_cfg.hfov),
@@ -89,12 +90,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             rgb_source=rgb_source,
             thermal_source=thermal_source,
             compound_rgb=bool(int(getattr(args, "fire_world_compound_rgb", 0))),
-            voxel=VoxelSmokeConfig(
-                n_steps=int(args.fire_world_n_steps),
-                smoke_k_ext=float(args.fire_world_smoke_k_ext),
-                render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),
-                thermal_color_blend=1.0,
-            ),
+            voxel=VoxelSmokeConfig(**voxel_smoke_kwargs(args)),
         )
         K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
         fire_suites = [
@@ -125,10 +121,11 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
 
     while count_episodes < num_episodes:
         observations = env.reset()
+        # walker/robot_models.reset() only spawn/repose articulated
+        # objects; do NOT re-issue env.sim.step(None) — that would
+        # bypass the ObjectNav task sensors (objectgoal/gps/compass).
         walker.reset()
         robot_models.reset()
-        if walker.num_humans > 0 or robot_models.enabled:
-            observations = env.sim.step(None)
         if not isinstance(observations, list):
             observations = [observations]
 
@@ -163,6 +160,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                         robot_step=int(getattr(agent[i], "l_step", 0)),
                         config=config,
                         args=args,
+                        walker=walker,
                     )
                     if sensors is not None:
                         fire_suites[i].save_step(

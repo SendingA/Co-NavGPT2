@@ -7,24 +7,17 @@ now lives on the sensor side at
 :mod:`utils.fire_sensors.voxel_render` /
 :mod:`utils.fire_sensors.sensors.voxel_smoke`.
 
-The pre-refactor public API is preserved as thin shims:
-
-* ``FireWorldRenderer``   -> re-exports
-  :class:`utils.fire_sensors.sensors.voxel_smoke.VoxelSmokeSensor` so
-  legacy demo / test scripts keep importing from here.
-* ``runtime_process``     -> thin wrapper that calls
-  :func:`utils.fire_sensors.voxel_render.volumetric_composite` and
-  formats the result with the legacy keys.
-
-New code should depend on :class:`utils.fire_world.scene.FireScene`
-and the sensor suite instead.
+New code depends on :class:`utils.fire_world.scene.FireScene` and the
+sensor suite (:class:`utils.fire_sensors.FireSensorSuite`), which drives
+:class:`utils.fire_sensors.sensors.voxel_smoke.VoxelSmokeSensor` to
+observe this world model.
 """
 from __future__ import annotations
 
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Tuple
 
 import numpy as np
 
@@ -162,129 +155,3 @@ class FireWorld:
             self.smoke[fi].astype(np.float32),
             self.temp[fi].astype(np.float32),
         )
-
-
-# ---------------------------------------------------------------------------
-# Back-compat shims
-# ---------------------------------------------------------------------------
-class FireWorldRenderer:
-    """Backwards-compatible wrapper around the new voxel renderer.
-
-    ``utils/fire_sensors/voxel_render.py`` owns the actual ray-march;
-    we just expose the legacy ``render(rgb_clean, depth_m, cam_pos,
-    R_cam2world, t_sim)`` signature so the demo and test scripts keep
-    working unchanged. New code should drive
-    :class:`utils.fire_sensors.sensors.voxel_smoke.VoxelSmokeSensor`
-    through the suite instead.
-    """
-
-    def __init__(
-        self,
-        fw: FireWorld,
-        camera_K,
-        max_depth_m: float = 5.0,
-        n_steps: int = 16,
-        smoke_k_ext: float = 1.5,
-        smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180),
-        flame_threshold: float = 0.20,
-        flame_emission_gain: float = 4.0,
-        flame_k_ext: float = 0.8,
-        flame_glow_ksize: int = 41,
-        flame_glow_gain: float = 0.55,
-        flame_smoke_passthrough: float = 0.85,
-        thermal_color_blend: float = 0.0,
-        render_scale: float = 0.5,
-    ) -> None:
-        from utils.fire_sensors.voxel_render import VoxelRenderParams
-        self.fw = fw
-        self.camera_K = camera_K
-        self.params = VoxelRenderParams(
-            max_depth_m=float(max_depth_m),
-            n_steps=int(n_steps),
-            smoke_k_ext=float(smoke_k_ext),
-            smoke_color_rgb=smoke_color_rgb,
-            flame_threshold=float(flame_threshold),
-            flame_emission_gain=float(flame_emission_gain),
-            flame_k_ext=float(flame_k_ext),
-            flame_glow_ksize=int(flame_glow_ksize),
-            flame_glow_gain=float(flame_glow_gain),
-            flame_smoke_passthrough=float(flame_smoke_passthrough),
-            thermal_color_blend=float(thermal_color_blend),
-            render_scale=float(render_scale),
-        )
-
-    @property
-    def render_scale(self) -> float:
-        return self.params.render_scale
-
-    @render_scale.setter
-    def render_scale(self, v: float) -> None:
-        self.params.render_scale = float(v)
-
-    @property
-    def n_steps(self) -> int:
-        return self.params.n_steps
-
-    @n_steps.setter
-    def n_steps(self, v: int) -> None:
-        self.params.n_steps = int(v)
-
-    @property
-    def smoke_k_ext(self) -> float:
-        return self.params.smoke_k_ext
-
-    @smoke_k_ext.setter
-    def smoke_k_ext(self, v: float) -> None:
-        self.params.smoke_k_ext = float(v)
-
-    def render(
-        self,
-        rgb_clean: np.ndarray,
-        depth_m: np.ndarray,
-        cam_pos_world: np.ndarray,
-        R_cam2world: np.ndarray,
-        t_sim: float,
-    ) -> Dict[str, np.ndarray]:
-        from utils.fire_sensors.voxel_render import volumetric_composite
-        flame_field, smoke_field, temp_field = self.fw.query(t_sim)
-        return volumetric_composite(
-            rgb_clean=rgb_clean,
-            depth_m=depth_m,
-            cam_pos_world=cam_pos_world,
-            R_cam2world=R_cam2world,
-            flame_field=flame_field,
-            smoke_field=smoke_field,
-            temp_field=temp_field,
-            origin=self.fw.origin,
-            voxel_m=self.fw.voxel_m,
-            grid_shape=self.fw.shape,
-            ambient_c=self.fw.ambient_c,
-            camera_K=self.camera_K,
-            params=self.params,
-            t_sim=float(t_sim),
-        )
-
-
-def runtime_process(
-    fire_world: FireWorld,
-    renderer: FireWorldRenderer,
-    rgb: np.ndarray,
-    depth_m: np.ndarray,
-    cam_pos_world: np.ndarray,
-    R_cam2world: np.ndarray,
-    t_sim: float,
-) -> Dict[str, np.ndarray]:
-    """Adapter that returns the smoky-RGB / thermal dict shape used by
-    ``apply_clean_depth_and_thermal``.
-    """
-    rendered = renderer.render(rgb, depth_m, cam_pos_world, R_cam2world, t_sim)
-    return {
-        "rgb": rgb,
-        "depth_clean": (depth_m if depth_m.ndim == 3 else depth_m[..., None]).astype(np.float32),
-        "rgb_smoke": rendered["image"],
-        "depth_smoke": (depth_m if depth_m.ndim == 3 else depth_m[..., None]).astype(np.float32),
-        "transmittance": rendered["transmittance"],
-        "thermal_image": rendered["thermal_image"],
-        "thermal_temperature": rendered["thermal_temperature"],
-        "thermal_flame_mask": rendered["flame_mask"],
-    }

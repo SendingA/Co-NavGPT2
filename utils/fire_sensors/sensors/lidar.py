@@ -21,8 +21,7 @@ from typing import Dict, Optional
 
 import numpy as np
 
-from .base import BaseSensor
-from .rgb_smoke import density_to_k
+from .base import BaseSensor, density_to_k
 from ..lidar_360 import LIDAR_DEPTH_UUIDS, stitch_lidar_360
 
 

@@ -15,6 +15,5 @@ Layout (kept stable across PRs):
   planner.py       -> plan.json (LLM-generated, hash-cached)
   voxel_world.py   -> voxel grid construction
   propagation.py   -> reaction-diffusion + buoyancy + ceiling jet
-  topdown_video.py -> validation mp4
   runtime.py       -> FireWorld.load(scene_id, plan_id) for the agent loop
 """

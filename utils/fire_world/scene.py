@@ -129,8 +129,7 @@ class FireClock:
         elapsed = max(0.0, now - float(self._wall_origin) - self._pause_offset)
         return float(self.base_t0_s + elapsed * float(self.speedup))
 
-    # Legacy alias kept so back-compat callers (e.g. demo scripts and
-    # the FireWorldController shim) keep working.
+    # Legacy alias kept so callers using the older name keep working.
     def t_sim_for_step(self, robot_step: int) -> float:
         units = max(0, int(robot_step)) // max(1, int(self.steps_per_unit))
         return float(self.base_t0_s + units * self.seconds_per_unit)

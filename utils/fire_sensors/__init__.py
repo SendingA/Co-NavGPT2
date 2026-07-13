@@ -1,9 +1,10 @@
 """Fire-scene multi-modal sensor simulator package.
 
-Each modality lives in its own module under ``utils.fire_sensors.sensors``
-and inherits from :class:`BaseSensor`. The :class:`FireSensorSuite`
-orchestrates them, persists per-step files and renders a 2x3 dashboard
-(clean RGB / clean Depth / smoky RGB / smoky Depth / radar / thermal).
+The smoky RGB and thermal images come from the voxel renderer
+(:class:`~utils.fire_sensors.sensors.voxel_smoke.VoxelSmokeSensor`);
+depth / radar / lidar model their own smoke degradation. The
+:class:`FireSensorSuite` orchestrates them, persists per-step files and
+renders a dashboard.
 
 Public API (kept stable for callers in main.py / main_vec.py)::
 

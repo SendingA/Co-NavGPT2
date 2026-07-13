@@ -97,9 +97,8 @@ are tiny (~0.2–1 MB) and review-friendly.
 | `planner.py`         | Stage 2 driver: `plan_id = sha1(scene\|fire_type\|intensity\|seed\|tplV)[:12]`, `build_plan(inventory, ...) -> plan dict`, CLI |
 | `voxel_world.py`     | `VoxelWorld.from_aabb`, `attach_structural_masks`, `stamp_object_aabbs`, `kindle_ignition` (returns slice + falloff for sustained sources) |
 | `propagation.py`     | Stage 3: 6+1-step integrator (sub-stepped diffusion, buoyancy, ceiling jet, reaction, surface spread, decay, sustained-source pinning). Walls / floors / ceilings act as zero-flux barriers |
-| `topdown_video.py`   | Stage 4: max-projects flame/smoke around the active floor onto an XZ floor plan with wall footprints, writes mp4/png/summary |
-| `runtime.py`         | Stage 5: `FireWorld.load(scene, plan_id)`, `FireWorldRenderer` (cumulative front-to-back Beer-Lambert ray-march for RGB; temperature max-along-ray for thermal). `runtime_process` adapter returns the SmokeRGBSensor-style dict |
-| `controller.py`      | Stage 5 glue for `main.py`: `FireClock` translates robot-step → `t_sim`, `FireWorldController.from_args(args, config)` and `render_for_agent(obs, agent_state, robot_step, ...)` |
+| `runtime.py`         | Stage 4: `FireWorld.load(scene, plan_id)` — pure voxel-timeline data loader (+ stale-cache warning). Rendering lives on the sensor side (`utils/fire_sensors/voxel_render.py`). |
+| `scene.py`           | Stage 4 facade: `FireScene` + `FireClock` (`FireClock` translates robot-step → `t_sim`; `FireScene.from_args(args, config)`). Consumed by `FireSensorSuite`. |
 
 ### Why two GLB parsing facts mattered for stage 1
 
@@ -120,34 +119,30 @@ Plus a Habitat-axis fix: GLB is `+Z up`; Habitat is `+Y up`. Apply a
 −90° rotation about X (`(x, y, z)_glb → (x, z, −y)_habitat`) to make
 the recovered AABBs match ObjectGoal positions to a few centimetres.
 
-### Smoke-perception path (pre-fire-world, still in tree)
+### Perception path (voxel-only)
 
-The `--fire_sensors` and `--fire_world` paths coexist. Older modules:
+RGB and Thermal are produced exclusively by the voxel renderer, driven
+by `--fire_world`. The legacy 2D Beer-Lambert RGB / HSV thermal sensors
+and the dehaze path have been removed.
 
 | File | Purpose |
 |---|---|
-| `utils/fire_sensors/` | the 2D smoke RGB sensor + thermal + radar + 360 LIDAR + dashboard |
-| `utils/smoke_perception.py` | helpers used by both paths: `apply_clean_depth_and_thermal`, `dehaze_with_depth`, `thermal_mask_to_detections` |
-| `utils/detection_segmentation.py` | `Object_Detection_and_Segmentation.detect()` accepts `thermal_flame_mask` so fire detections come from thermal (smoke-invariant) when available |
-
-These haven't been removed because the v1 `--fire_sensors` codepath
-(global density, no 3D world) is still useful as a fast baseline and
-for the dashboard images.
+| `utils/fire_sensors/` | voxel RGB + Thermal camera + noisy depth + radar + 360 LIDAR + dashboard |
+| `utils/smoke_perception.py` | helpers: `apply_clean_depth_and_thermal`, `thermal_mask_to_detections` |
+| `utils/detection_segmentation.py` | `Object_Detection_and_Segmentation.detect()` reads `thermal_flame_mask` so fire detections come from the (smoke-invariant) voxel thermal channel |
 
 ### Args added across the pipeline (in `arguments.py`)
 
 ```
---fire_sensors {0,1}                          # legacy 2D smoke suite
---fire_apply_to_obs {0,1}
---smoke_density 0..1
+--fire_apply_to_obs {0,1}                     # write degraded RGB/Depth back to obs
+--smoke_density 0..1                          # depth / lidar / radar smoke noise
 --fire_dump_dir / --fire_save_every / --fire_save_npz / --fire_show_window
---lidar_360 {0,1} / --lidar_resolution N
+--lidar_360 {0,1} / --lidar_resolution N      # only when --fire_world=1
 
 --depth_use_clean {0,1}                       # keep clean Habitat depth
 --use_thermal_perception {0,1}                # default 1
---rgb_dehaze {0,1}                            # depth-aware inverse Beer-Lambert + CLAHE
 
---fire_world {0,1}                            # NEW: enable runtime hook
+--fire_world {0,1}                            # enable the voxel fire suite
 --fire_world_plan_id <12hex>                  # NEW: which plan to load
 --fire_world_scenes_root scenes
 --fire_world_out_root outputs/fire_world
@@ -161,11 +156,11 @@ for the dashboard images.
 
 * `arguments.py` — all the new switches above.
 * `main.py` / `main_vec.py` — when `--fire_world=1`, build a
-  `FireWorldController` and call `render_for_agent` in the per-step
-  loop **before** the agent's `mapping(...)` call; result goes through
-  `apply_clean_depth_and_thermal`.
-* `agents/vlm_agents.py`, `agents/vlm_multi_agents.py` — optional
-  dehaze; pass `obs['thermal_flame_mask']` into the detector.
+  `FireScene` + `FireSensorSuite` and call `step_fire_observation` in
+  the per-step loop **before** the agent's `mapping(...)` call; result
+  goes through `apply_clean_depth_and_thermal`.
+* `agents/vlm_agents.py`, `agents/vlm_multi_agents.py` — pass
+  `obs['thermal_flame_mask']` into the detector.
 * `utils/detection_segmentation.py` — `detect(image, thermal_flame_mask=...)`.
 * `utils/smoke_perception.py` — new module.
 * `.gitignore` — added `outputs/`, `*.glb`, `*.mp4`, `*.pdf`,
@@ -181,17 +176,10 @@ for the dashboard images.
 | `test_scene_scan.py`              | Smoke tests for stage-1 (material table, build_inventory, write_inventory). |
 | `test_fire_planner.py`            | Smoke tests for stage-2 (plan_id determinism, all 4×3 templates×intensities, same-floor invariant). |
 | `test_fire_propagation.py`        | Smoke tests for stage-3 (end-to-end run, determinism, smoke growth+decay, T@source > 600 °C). |
-| `test_fire_topdown_video.py`      | Smoke tests for stage-4 (mp4 written, mid-fire frame contains both flame and smoke pixels, deterministic re-render). |
-| `demo_fire_world_runtime.py`      | Stage-5 demo: orbits a synthetic camera around the first ignition or sweeps time at a fixed eye. Writes per-view PNGs + `all_views.png` + `timelapse.mp4`. |
-| `test_fire_world_step_clock.py`   | Stub-driven verification that `t_sim` advances with robot_step and the renderer's flame_px reacts. |
-| `keyboard_teleop_fire.py`         | **NEW**: WASD/QE/S/R teleop with FireWorld overlay. Walk through the scene and watch the fire evolve as you take steps. |
+| `keyboard_teleop_fire.py`         | WASD/QE/S/R teleop with FireWorld overlay. Walk through the scene and watch the fire evolve as you take steps. |
 | `keyboard_teleop.py`              | Legacy teleop (no fire overlay), kept for reference. |
-| `test_smoke_perception.py`        | Tests for `apply_clean_depth_and_thermal`, `dehaze_with_depth`, `thermal_mask_to_detections`. |
 | `test_detect_with_thermal.py`     | End-to-end check: gray RGB + thermal mask still yields a fire detection. |
-| `test_rgb_flame_through_smoke.py` | (Pre-fire-world) Sanity check that flame pixels survive Beer-Lambert smoke. |
-| `test_flame_after_smoke.py`       | (Pre-fire-world) HSV detector regression on smoky RGB. |
-| `test_flame_hsv.py`               | HSV flame detector unit test. |
-| `test_fire_sensors.py`            | Legacy multi-sensor suite test. |
+| `test_fire_sensors.py`            | Multi-sensor suite test (voxel passthrough + 360° LIDAR stitching). |
 | `test_radar_depth_reproject.py`   | Radar reprojection check. |
 | `compare_radar_depth_ep0.py`      | Radar vs depth visual diff. |
 
@@ -217,12 +205,6 @@ python -m utils.fire_world.planner \
 python -m utils.fire_world.propagation \
     --scene Nfvxx8J5NCo --plan_id 83679a07b632 \
     --voxel_m 0.15 --dt 0.5 --save_dt 2.0
-
-# 4. Render top-down validation video
-python -m utils.fire_world.topdown_video \
-    --scene Nfvxx8J5NCo --plan_id 83679a07b632 \
-    --px_per_m 32 --fps 30
-# -> outputs/fire_world/Nfvxx8J5NCo/83679a07b632/{topdown.mp4, topdown.png}
 ```
 
 Available `--fire_type` values: `kitchen_grease_fire`, `bedroom_textile`,
@@ -235,9 +217,7 @@ Available `--fire_type` values: `kitchen_grease_fire`, `bedroom_textile`,
 python scripts/test_scene_scan.py
 python scripts/test_fire_planner.py
 python scripts/test_fire_propagation.py
-python scripts/test_fire_topdown_video.py
-python scripts/test_fire_world_step_clock.py
-python scripts/test_smoke_perception.py
+python scripts/test_fire_sensors.py
 python scripts/test_detect_with_thermal.py
 ```
 
@@ -245,21 +225,9 @@ All scripts exit `0` and print `ALL OK` on success.
 
 ### C) Synthetic camera demo (no Habitat needed)
 
-```bash
-# Orbiting camera at peak smoke
-python scripts/demo_fire_world_runtime.py \
-    --scene Nfvxx8J5NCo --plan_id 83679a07b632 \
-    --t_sim -1 --n_views 8 \
-    --max_depth_m 4 --radius_m 2.5 --eye_height_off 0.6 \
-    --look_up_off 0.6 --smoke_k_ext 6.0 --n_steps 32
-
-# Time-lapse from a fixed camera
-python scripts/demo_fire_world_runtime.py \
-    --scene Nfvxx8J5NCo --plan_id 83679a07b632 \
-    --time_lapse 30 --max_depth_m 4 --radius_m 2.5 \
-    --eye_height_off 0.6 --look_up_off 0.6 --smoke_k_ext 6.0 --n_steps 32
-# -> outputs/fire_world/.../runtime_demo/timelapse.mp4
-```
+The standalone synthetic-camera demo has been removed. To view the
+voxel render interactively, use the keyboard teleop below (section D),
+which drives the same `VoxelSmokeSensor` through `FireSensorSuite`.
 
 ### D) Keyboard teleop with live fire overlay (interactive)
 

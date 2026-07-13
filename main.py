@@ -39,6 +39,27 @@ def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
 
 
+def _find_scene_for_fire_plan(args):
+    """Return the scene short-id that owns args.fire_world_plan_id.
+
+    We look under ``scenes/<scene>/plans/<plan_id>.json`` — that's the
+    layout the fire propagator writes. The scene short-id is used by
+    the habitat dataset (``content_scenes: [<scene>]``) to restrict
+    the episode iterator to matching scenes.
+    """
+    from pathlib import Path
+
+    root = Path(getattr(args, "fire_world_scenes_root", "scenes"))
+    if not root.is_absolute():
+        root = Path(__file__).resolve().parent / root
+    plan_id = args.fire_world_plan_id
+    if not plan_id:
+        return None
+    for plan_file in root.glob(f"*/plans/{plan_id}.json"):
+        return plan_file.parents[1].name
+    return None
+
+
 def main(args, send_queue, receive_queue):
     # ------------------------------------------------------------------
     # Logging
@@ -62,7 +83,7 @@ def main(args, send_queue, receive_queue):
 
     # Optional 360° LIDAR — installs 4 yaw-rotated depth sensors on every
     # navigation agent so utils.fire_sensors can stitch a 360° cloud.
-    if int(getattr(args, "lidar_360", 0)) and getattr(args, "fire_sensors", 0):
+    if int(getattr(args, "lidar_360", 0)) and int(getattr(args, "fire_world", 0)):
         from utils.fire_sensors.lidar_360 import (
             install_lidar_depth_sensors,
             LIDAR_DEPTH_UUIDS,
@@ -74,6 +95,16 @@ def main(args, send_queue, receive_queue):
                 num_agents=args.num_agents,
             )
         print(f"[lidar_360] installed sensors: {LIDAR_DEPTH_UUIDS}")
+
+    # When fire_world is on we can only render the scene the plan
+    # was baked for. Filter the dataset to episodes whose scene_id
+    # matches so env.reset() never loads an unrelated scene mid-run.
+    if int(getattr(args, "fire_world", 0)) and args.fire_world_plan_id:
+        _target_scene = _find_scene_for_fire_plan(args)
+        if _target_scene:
+            with habitat.config.read_write(config):
+                config.habitat.dataset.content_scenes = [_target_scene]
+            print(f"[fire_world] restricting dataset to scene {_target_scene}")
 
     # ------------------------------------------------------------------
     # Environment + agents (robot navigation policies)
@@ -103,18 +134,30 @@ def main(args, send_queue, receive_queue):
     )
 
     # ------------------------------------------------------------------
-    # Fire scene + sensor suite (optional). Owns the world model and the
-    # observation degradation layer separately.
+    # Fire scene + sensor suite (optional). The FireScene / FireSensorSuite
+    # references ``config.habitat.simulator.scene``, which is only set to
+    # the real episode scene AFTER ``env.reset()`` runs and calls
+    # ``sim.reconfigure``. Env(config=...) initialises it to whatever the
+    # dataset iterator's first episode is (often a different scene), so
+    # we defer construction to the first iteration of the episode loop.
     # ------------------------------------------------------------------
     fire_scene = None
-    if int(getattr(args, "fire_world", 0)):
+    fire_suites = None
+    fire_viewers = None
+    from utils.fire_pipeline import step_fire_observation  # noqa: E402
+
+    def _build_fire_scene_and_suites():
+        """Lazy construction; runs once, after the first env.reset()."""
+        nonlocal fire_scene, fire_suites, fire_viewers
+        if fire_scene is not None or fire_suites is not None:
+            return
+        if not int(getattr(args, "fire_world", 0)):
+            return
+
         from utils.fire_world.scene import FireScene
         fire_scene = FireScene.from_args(args, config)
         print(f"[fire_world] {fire_scene.describe()}")
 
-    fire_suites = None
-    fire_viewers = None
-    if getattr(args, "fire_sensors", 0) or fire_scene is not None:
         from utils.general_utils import get_camera_K
         from utils.fire_sensors.config import VoxelSmokeConfig
 
@@ -124,22 +167,13 @@ def main(args, send_queue, receive_queue):
             .sim_sensors.depth_sensor
         )
 
-        rgb_source = "voxel" if fire_scene is not None else "beer_lambert"
-        thermal_source = "voxel" if fire_scene is not None else "hsv"
+        from arguments import voxel_smoke_kwargs
         fire_cfg = FireSensorConfig(
             max_depth_m=float(depth_cfg.max_depth),
             hfov_deg=float(depth_cfg.hfov),
             smoke_density=float(args.smoke_density),
             save_npz=bool(args.fire_save_npz),
-            rgb_source=rgb_source,
-            thermal_source=thermal_source,
-            compound_rgb=bool(int(getattr(args, "fire_world_compound_rgb", 0))),
-            voxel=VoxelSmokeConfig(
-                n_steps=int(args.fire_world_n_steps),
-                smoke_k_ext=float(args.fire_world_smoke_k_ext),
-                render_scale=float(getattr(args, "fire_world_render_scale", 0.5)),
-                thermal_color_blend=1.0,
-            ),
+            voxel=VoxelSmokeConfig(**voxel_smoke_kwargs(args)),
         )
         K = get_camera_K(args.frame_width, args.frame_height, args.hfov)
         fire_suites = [
@@ -164,11 +198,8 @@ def main(args, send_queue, receive_queue):
                 )
                 for i in range(num_agents)
             ]
-        print(f"[fire_sensors] enabled, density={args.smoke_density}, "
-              f"rgb_source={rgb_source}, thermal_source={thermal_source}, "
-              f"dump_dir={args.fire_dump_dir}")
-
-    from utils.fire_pipeline import step_fire_observation
+        print(f"[fire_sensors] enabled (voxel RGB + Thermal), "
+              f"density={args.smoke_density}, dump_dir={args.fire_dump_dir}")
 
     # ------------------------------------------------------------------
     # Episode loop
@@ -182,11 +213,16 @@ def main(args, send_queue, receive_queue):
     while count_episodes < num_episodes:
         observations = env.reset()
 
+        # Fire construction is deferred until we know the real scene id.
+        _build_fire_scene_and_suites()
+
         # Wire in the humanoid pedestrians and visible robot models.
+        # Their reset() only spawns/reposes the articulated objects; the
+        # observations dict returned from env.reset() already has the
+        # ObjectNav task sensors, so we do NOT re-issue env.sim.step(None)
+        # here — that would skip the task and drop 'objectgoal' etc.
         walker.reset()
         robot_models.reset()
-        if walker.num_humans > 0 or robot_models.enabled:
-            observations = env.sim.step(None)
 
         if not isinstance(observations, list):
             observations = [observations]
@@ -222,6 +258,7 @@ def main(args, send_queue, receive_queue):
                         robot_step=int(getattr(agent[i], "l_step", 0)),
                         config=config,
                         args=args,
+                        walker=walker,
                     )
                     if sensors is not None:
                         fire_suites[i].save_step(
@@ -421,6 +458,24 @@ def main(args, send_queue, receive_queue):
         ]) + "\n"
 
         metrics = env.get_metrics()
+
+        # --- Debug: show why an episode was marked failed.
+        try:
+            ep = env.current_episode
+            goal_pos = np.array(ep.goals[0].position, dtype=float)
+            final_pos = np.array(
+                env.sim.get_agent_state(0).position, dtype=float
+            )
+            log += (
+                f"[dbg] target_class={getattr(agent[0], 'goal_name', '?')}  "
+                f"final_agent0_xyz={np.round(final_pos, 2).tolist()}  "
+                f"goal_xyz={np.round(goal_pos, 2).tolist()}  "
+                f"final_l2={np.linalg.norm(final_pos - goal_pos):.2f}m  "
+                f"success_thr={config.habitat.task.measurements.success.success_distance}m\n"
+            )
+        except Exception:
+            pass
+
         for m, v in metrics.items():
             if isinstance(v, dict):
                 for sub_m, sub_v in v.items():

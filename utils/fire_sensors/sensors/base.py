@@ -8,6 +8,12 @@ import numpy as np
 from ..config import FireSensorConfig
 
 
+def density_to_k(density: float, k_max: float) -> float:
+    """Map a dimensionless smoke density in [0, 1] to an extinction
+    coefficient ``k`` (1/m). Shared by the depth / lidar / radar sensors."""
+    return float(np.clip(density, 0.0, 1.0)) * k_max
+
+
 class BaseSensor:
     """Tiny abstract base. Subclasses override :meth:`process`.
 

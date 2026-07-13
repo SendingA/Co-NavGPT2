@@ -5,17 +5,14 @@ the per-sensor configurations and, optionally, a bound
 :class:`utils.fire_world.scene.FireScene` that the voxel-driven sensors
 can query.
 
-Sensor source selection (controlled by ``cfg.rgb_source`` /
-``cfg.thermal_source``)
------------------------------------------------------------------
-* ``"beer_lambert"`` (or ``"hsv"`` for thermal): the legacy
-  density-driven smoke filter / HSV thermal. No fire scene needed.
-* ``"voxel"``: ask the voxel sensor for the smoky RGB / thermal,
-  using the bound :class:`FireScene`. If no scene is bound this
-  silently falls back to Beer-Lambert / HSV so callers that toggle
-  ``--fire_world=0`` keep working.
-* ``"auto"`` (default): voxel when a scene is bound, otherwise
-  Beer-Lambert / HSV.
+RGB & Thermal source
+--------------------
+The smoky RGB and thermal images are produced exclusively by the
+voxel renderer (:class:`VoxelSmokeSensor`), which ray-marches the bound
+:class:`utils.fire_world.scene.FireScene`. When no scene is bound the
+suite returns a clean RGB passthrough with ambient thermal, so the
+depth / radar / lidar modalities stay usable. Depth / radar / lidar
+model their own smoke degradation from the shared smoke config.
 
 Output dict
 -----------
@@ -47,56 +44,8 @@ from .sensors import (
     LidarSensor,
     RadarSensor,
     SmokeDepthSensor,
-    SmokeRGBSensor,
-    ThermalSensor,
     VoxelSmokeSensor,
 )
-
-
-def _resolve_source(setting: str, has_scene: bool) -> str:
-    s = (setting or "auto").lower()
-    if s == "auto":
-        return "voxel" if has_scene else "beer_lambert"
-    if s in ("hsv", "luma"):
-        return "beer_lambert"
-    return s
-
-
-def _global_beer_lambert(
-    rgb_uint8: np.ndarray,
-    depth_m: np.ndarray,
-    smoke_density: float,
-    smoke_color_rgb,
-    smoke_k_max: float,
-    *,
-    flame_mask: Optional[np.ndarray] = None,
-) -> np.ndarray:
-    """Apply a global Beer-Lambert pass on top of an existing RGB.
-
-    Used when ``cfg.compound_rgb=True`` so the voxel-rendered RGB still
-    feels environmentally smoky outside the active fire room.
-
-    The optional ``flame_mask`` (float32 in [0, 1]) restores flame
-    pixels so the second pass doesn't repaint them with the fog colour.
-    Without this guard, dense compound fog can wash a small flame back
-    out of the picture entirely.
-    """
-    if smoke_density <= 0.0:
-        return rgb_uint8.copy()
-    if depth_m.ndim == 3:
-        depth_m = depth_m[..., 0]
-    k = float(np.clip(smoke_density, 0.0, 1.0)) * float(smoke_k_max)
-    T = np.exp(-k * depth_m).astype(np.float32)[..., None]
-    T = np.clip(T, 0.0, 1.0)
-    smoke = np.asarray(smoke_color_rgb, dtype=np.float32).reshape(1, 1, 3)
-    fogged = rgb_uint8.astype(np.float32) * T + smoke * (1.0 - T)
-    if flame_mask is not None and flame_mask.size > 0:
-        # Soft-blend the original (un-fogged) voxel RGB back in over the
-        # flame mask. flame=1 -> keep flame pixel as the voxel renderer
-        # produced it; flame=0 -> let the global fog do its thing.
-        m = np.clip(flame_mask, 0.0, 1.0).astype(np.float32)[..., None]
-        fogged = fogged * (1.0 - m) + rgb_uint8.astype(np.float32) * m
-    return np.clip(fogged, 0, 255).astype(np.uint8)
 
 
 class FireSensorSuite:
@@ -118,15 +67,12 @@ class FireSensorSuite:
         self._rng = np.random.default_rng(seed)
         os.makedirs(self.dump_dir, exist_ok=True)
 
-        # Beer-Lambert / HSV / active sensors share a single RNG.
-        self.rgb_sensor = SmokeRGBSensor(self.cfg, self._rng)
+        # Depth / radar / lidar share a single RNG.
         self.depth_sensor = SmokeDepthSensor(self.cfg, self._rng)
         self.radar_sensor = RadarSensor(self.cfg, self._rng)
-        self.thermal_sensor = ThermalSensor(self.cfg, self._rng)
         self.lidar_sensor = LidarSensor(self.cfg, self._rng)
 
-        # Voxel observer of the FireScene. Built lazily so callers that
-        # don't use it don't pay the camera-K validation cost.
+        # Voxel observer of the FireScene produces the smoky RGB + thermal.
         self.scene = scene
         self.camera_K = camera_K
         self.voxel_sensor: Optional[VoxelSmokeSensor] = None
@@ -162,6 +108,28 @@ class FireSensorSuite:
             self.voxel_sensor.bind_scene(scene)
 
     # ------------------------------------------------------------------
+    @staticmethod
+    def _passthrough_rgb_thermal(
+        rgb: np.ndarray, depth_m: np.ndarray, robot_step: int
+    ) -> Dict[str, np.ndarray]:
+        """Clean RGB + ambient thermal for the no-scene case.
+
+        Keeps depth / radar / lidar usable (e.g. the 360° stitching
+        smoke test) without a bound FireScene.
+        """
+        H, W = (depth_m.shape[:2] if depth_m.ndim >= 2 else rgb.shape[:2])
+        zeros = np.zeros((H, W), dtype=np.float32)
+        return {
+            "image": rgb.copy(),
+            "transmittance": np.ones((H, W), dtype=np.float32),
+            "flame_mask": zeros,
+            "thermal_image": np.zeros((H, W, 3), dtype=np.uint8),
+            "thermal_temperature": np.full((H, W), 25.0, dtype=np.float32),
+            "t_sim_s": 0.0,
+            "robot_step": int(robot_step),
+        }
+
+    # ------------------------------------------------------------------
     def process(
         self,
         rgb: np.ndarray,
@@ -171,69 +139,28 @@ class FireSensorSuite:
         agent_state=None,
         robot_step: int = 0,
     ) -> Dict[str, np.ndarray]:
-        rgb_source = _resolve_source(self.cfg.rgb_source, has_scene=self.scene is not None)
-        thermal_source = _resolve_source(
-            self.cfg.thermal_source, has_scene=self.scene is not None
-        )
-        # Voxel sensors need an agent_state. Fall back gracefully if it
-        # wasn't supplied (e.g. unit tests with mocked input).
-        if rgb_source == "voxel" and (
-            self.voxel_sensor is None or agent_state is None
-        ):
-            rgb_source = "beer_lambert"
-        if thermal_source == "voxel" and (
-            self.voxel_sensor is None or agent_state is None
-        ):
-            thermal_source = "hsv"
-
-        # ---- Run RGB / Thermal source first ----
-        voxel_out = None
-        if "voxel" in (rgb_source, thermal_source):
-            voxel_out = self.voxel_sensor.process(
+        # ---- Voxel RGB + Thermal (single ray-march produces both) ----
+        # A bound FireScene is the normal path. With no scene the voxel
+        # sensor (or the fallback below) returns a clean passthrough:
+        # no smoke, no flame, ambient thermal.
+        voxel_out = (
+            self.voxel_sensor.process(
                 rgb, depth_m,
                 agent_state=agent_state, robot_step=int(robot_step),
             )
-
-        if rgb_source == "voxel":
-            rgb_smoke = voxel_out["image"]
-            transmittance = voxel_out["transmittance"]
-            flame_mask_voxel = voxel_out.get("flame_mask")
-            if self.cfg.compound_rgb:
-                # Soft-dilate the flame mask so the warm halo around
-                # the flame core also resists the global fog pass.
-                fm = flame_mask_voxel
-                if fm is not None and fm.size > 0:
-                    try:
-                        fm = cv2.GaussianBlur(fm.astype(np.float32),
-                                              (21, 21), 0)
-                        m = float(fm.max())
-                        if m > 1e-6:
-                            fm = np.clip(fm / m, 0.0, 1.0)
-                    except Exception:
-                        pass
-                rgb_smoke = _global_beer_lambert(
-                    rgb_smoke, depth_m,
-                    smoke_density=self.cfg.smoke.smoke_density,
-                    smoke_color_rgb=self.cfg.smoke.smoke_color_rgb,
-                    smoke_k_max=self.cfg.smoke.smoke_k_max,
-                    flame_mask=fm,
-                )
-            rgb_out = {
-                "image": rgb_smoke,
-                "transmittance": transmittance,
-                "flame_mask": flame_mask_voxel,
-            }
-        else:
-            rgb_out = self.rgb_sensor.process(rgb, depth_m)
-
-        if thermal_source == "voxel":
-            thermal_out = {
-                "image": voxel_out["thermal_image"],
-                "temperature_c": voxel_out["thermal_temperature"],
-                "flame_mask": voxel_out["flame_mask"],
-            }
-        else:
-            thermal_out = self.thermal_sensor.process(rgb, depth_m)
+            if self.voxel_sensor is not None
+            else self._passthrough_rgb_thermal(rgb, depth_m, robot_step)
+        )
+        rgb_out = {
+            "image": voxel_out["image"],
+            "transmittance": voxel_out["transmittance"],
+            "flame_mask": voxel_out.get("flame_mask"),
+        }
+        thermal_out = {
+            "image": voxel_out["thermal_image"],
+            "temperature_c": voxel_out["thermal_temperature"],
+            "flame_mask": voxel_out["flame_mask"],
+        }
 
         depth_out = self.depth_sensor.process(
             rgb, depth_m,
@@ -265,14 +192,10 @@ class FireSensorSuite:
             "radar":       radar_out["image_bev"],
             "radar_az":    radar_out["image_az"],
         }
-        title_src = (
-            "FireWorld voxel + Beer-Lambert" if rgb_source == "voxel"
-            else "Beer-Lambert"
-        )
         dashboard = render_dashboard(
             panels,
             size=self.cfg.dashboard_size,
-            title=f"Fire-Scene Sensors ({title_src}){title_extra}",
+            title=f"Fire-Scene Sensors (FireWorld voxel){title_extra}",
             extra_panel=radar_out["image_el"],
         )
         self.last_dashboard = dashboard
@@ -301,9 +224,6 @@ class FireSensorSuite:
             "radar_points_3d": radar_out["points_3d"],
             # composite
             "dashboard": dashboard,
-            # provenance
-            "rgb_source": rgb_source,
-            "thermal_source": thermal_source,
         }
         if voxel_out is not None and "t_sim_s" in voxel_out:
             out["t_sim_s"] = float(voxel_out["t_sim_s"])
