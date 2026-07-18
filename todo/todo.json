@@ -1,10 +1,450 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-07-12T01:00:00Z",
+    "updated_at": "2026-07-17T22:52:33-04:00",
     "owner": "copilot"
   },
   "items": [
+    {
+      "id": "T128",
+      "title": "Define the shared ObjectNav contract for person",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "person observations use the same point-cloud goal map, greedy/FMM planner, STOP decision, and Habitat-native metric path as every other ObjectNav category",
+      "notes": "Confirmed that the shared contract is detection point cloud to goal_map, nearest detected surface for Greedy, ordinary disk(5) FMM goal dilation, ordinary planner STOP, then Habitat VIEW_POINTS plus STOP evaluation. The completed T124-T127 stop-ring experiment is historical and is superseded by this request.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "git diff -- agents/vlm_agents.py agents/vlm_multi_agents.py",
+          "rg -n \"person_stop|_person_stop|goal_name == ['\\\"]person\" agents/vlm_agents.py agents/vlm_multi_agents.py"
+        ],
+        "summary": "Audited both agent implementations and the native evaluator contract; all person-only navigation decision points were identified and the desired shared path was defined before editing."
+      },
+      "last_updated": "2026-07-17T22:40:51-04:00"
+    },
+    {
+      "id": "T129",
+      "title": "Remove person-only planner and STOP branches",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T128"],
+      "acceptance": "both VLM agent files contain no person-specific goal-map, FMM, or STOP branch, while detection class mapping and non-person behavior remain intact",
+      "notes": "Removed stop-ring imports/state/helpers, Greedy STOP gating, FMM branching, CLI flags, and config keys. Preserved person category mapping, int objectgoal decoding, thermal_human_mask support, and static humanoid lifecycle.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile agents/vlm_agents.py agents/vlm_multi_agents.py arguments.py utils/person_objectnav.py",
+          "MPLCONFIGDIR=/tmp/matplotlib-cache /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav -v",
+          "rg -n \"person_stop|_person_stop|goal_name == ['\\\"]person\" agents/vlm_agents.py agents/vlm_multi_agents.py"
+        ],
+        "summary": "Both agent variants produce identical detected-object goal maps, nearest points, FMM paths, and Greedy STOP actions for chair and person; 13 focused tests pass and no person-only branch remains."
+      },
+      "last_updated": "2026-07-17T22:40:51-04:00"
+    },
+    {
+      "id": "T130",
+      "title": "Generate dense navigable person view points",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T128"],
+      "acceptance": "the person dataset generator creates a dense, visible, navigable near-person success region and rejects goals whose view-point coverage leaves valid close-stop samples outside Habitat's success distance",
+      "notes": "Implemented a 0.20-1.10m, 5cm Cartesian view lattice with LOS, same-island, height, snap-error, and close-point checks. An independent half-cell 0.20-1.00m probe lattice must have max geodesic distance below 0.15m; failing person positions are skipped rather than receiving hidden or non-navigable endpoints.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "MPLCONFIGDIR=/tmp/matplotlib-cache /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only"
+        ],
+        "summary": "Dense flat-navmesh and exact historical-stop regressions pass. Live val_mini maximum is 0.035m; all 36 persisted val goals also pass and the worst scene maximum is 0.057m, safely below the 0.15m generation bound and native 0.20m Success threshold."
+      },
+      "last_updated": "2026-07-17T22:47:59-04:00"
+    },
+    {
+      "id": "T131",
+      "title": "Regenerate person ObjectNav benchmark splits",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T130"],
+      "acceptance": "val_mini and val person datasets are rebuilt with the new view points, pass structural plus coverage validation for every included goal, and any episode-count change caused by the new endpoint geometry is reported",
+      "notes": "Rebuilt ignored data artifacts in data/datasets/objectnav_hm3d_person_v1 (832K). val_mini now has 2 scenes/15 episodes; val has 36 scenes/662 episodes. Counts differ from the sparse dataset because the nearest valid endpoint and min-start-distance qualification changed; category mapping remains person:6 and old person benchmark results must be rerun.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only --structural-only",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val --validate-only --structural-only",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"load val_mini through habitat.make_dataset and assert person goals/view_points\""
+        ],
+        "summary": "Both splits generated successfully after every selected goal passed live coverage. Structural validation reports 2 scenes/15 episodes and 36 scenes/662 episodes; a second validate-only pass confirms live coverage for all 36 persisted val goals. Habitat ObjectNav-v1 deserializes val_mini with objectgoal 6 and 1009 view points on its first goal."
+      },
+      "last_updated": "2026-07-17T22:47:59-04:00"
+    },
+    {
+      "id": "T132",
+      "title": "Test and document unified person navigation",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T129", "T131"],
+      "acceptance": "focused tests prove shared category behavior and close-stop view-point coverage; syntax, config, dataset, JSON, and whitespace checks pass; documentation states the native success rule and remaining renderer limitation",
+      "notes": "Documentation explains the shared policy path, dense endpoint contract, live coverage validation, and result incompatibility. All available code, config, dataset, geodesic, humanoid lifecycle, thermal detection, syntax, JSON, and whitespace checks pass. A complete VLM/GPU-rendered navigation episode remains an external runtime validation because it needs the user's CUDA/EGL/model services.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "MPLCONFIGDIR=/tmp/matplotlib-cache /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py",
+          "python -m py_compile constants.py arguments.py main.py agents/vlm_agents.py agents/vlm_multi_agents.py envs/random_humanoid.py utils/person_objectnav.py scripts/build_person_objectnav_dataset.py tests/test_person_objectnav.py tests/test_humanoid_spawn.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val --validate-only",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"verify VBz historical stop has 0.007947m geodesic to new view points\"",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"compose person config and assert ObjectNav-v1, VIEW_POINTS, success_distance=0.2\"",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 14 discovered tests pass. Thermal fire/person compatibility, syntax, native config composition, dataset deserialization, 36-scene live coverage, exact historical-stop geodesic, TODO JSON, dead-branch search, and whitespace validation pass."
+      },
+      "last_updated": "2026-07-17T22:52:33-04:00"
+    },
+    {
+      "id": "T124",
+      "title": "Define a perception-derived person stop ring",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "a shared helper converts a detected person footprint into a 0.65-1.0 metre annulus in occupancy-grid cells, excludes the person centre and invalid/blocked cells, and has a deterministic safe fallback",
+      "notes": "Implemented a pure perception/local-map helper. Dataset goal positions and view points remain evaluation-only; explored free cells authorize STOP, while unknown free cells may only be approach targets.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav -v"
+        ],
+        "summary": "17 focused tests pass, including metric radius bounds, centre exclusion, obstacle clearance, unknown-only planning, blocked fallback, resolution scaling, non-person bypass, and both VLM agent integrations."
+      },
+      "last_updated": "2026-07-17T21:54:03-04:00"
+    },
+    {
+      "id": "T125",
+      "title": "Route person navigation and STOP through the stop ring",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T124"],
+      "acceptance": "both VLM agent implementations plan to the person annulus rather than the detected body centre, while non-person categories preserve their existing goal-map and shortest-path behavior",
+      "notes": "Both greedy-follower and FMM branches now consume the perception-derived annulus. Person goals bypass legacy FMM goal dilation/forced traversibility, and STOP requires the current cell to belong to the strict explored ring. Habitat ground-truth view points remain evaluator-only.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "MPLCONFIGDIR=/tmp/matplotlib-cache /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"import numpy as np; from agents.vlm_agents import VLM_Agent; from utils.person_objectnav import build_person_stop_ring; a=VLM_Agent.__new__(VLM_Agent); a.local_w=a.local_h=101; a.visited_vis=np.zeros((101,101)); a.collision_map=np.zeros((101,101)); a.goal_name='person'; a.found_goal=True; a.replan_count=0; detected=np.zeros((101,101)); detected[50,50]=1; free=np.zeros((101,101)); explored=np.ones((101,101)); r=build_person_stop_ring('person',detected,free,explored,5); a.goal_map=r.planning_map.astype(float); stg,stop,path=a._get_stg(free,[80,50],a.goal_map.copy()); assert not stop; assert not a.goal_map[50,50]; print(stg, path[-1])\"",
+          "python -m py_compile agents/vlm_agents.py agents/vlm_multi_agents.py utils/person_objectnav.py tests/test_person_objectnav.py"
+        ],
+        "summary": "Both VLM implementations select a mid-band ring target, exclude the body-centre cell, plan toward the annulus through FMM without a dtype/padding error, and authorize STOP only from the strict ring."
+      },
+      "last_updated": "2026-07-17T21:54:03-04:00"
+    },
+    {
+      "id": "T126",
+      "title": "Expose and document person stop-ring parameters",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T124"],
+      "acceptance": "the 0.65m inner and 1.0m outer radii are reproducible CLI defaults with validation, and the static-person benchmark documentation explains their relationship to VIEW_POINTS success",
+      "notes": "Defaults are present in both ObjectNav configs and may be overridden independently from the CLI. Runtime validation rejects non-finite, negative, equal, or reversed radii. Documentation also records that the generated 0.8m/1.0m view-point rings remain the native evaluator targets.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"import sys; sys.argv=['check','--task_config','person_objectnav_hm3d.yaml','--num_agents','1']; from arguments import get_args, load_config; args=get_args(); cfg=load_config(args); assert cfg.conav.person_stop_ring_min == 0.65; assert cfg.conav.person_stop_ring_max == 1.0\"",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"import sys; sys.argv=['check','--task_config','person_objectnav_hm3d.yaml','--num_agents','1','--person_stop_ring_min','0.7','--person_stop_ring_max','0.9']; from arguments import get_args, load_config; args=get_args(); cfg=load_config(args); assert cfg.conav.person_stop_ring_min == 0.7; assert cfg.conav.person_stop_ring_max == 0.9\"",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only"
+        ],
+        "summary": "Default 0.65-1.0m composition and 0.7-0.9m CLI override both pass; the existing val_mini person dataset remains valid with 2 scenes and 7 episodes."
+      },
+      "last_updated": "2026-07-17T21:54:03-04:00"
+    },
+    {
+      "id": "T127",
+      "title": "Validate person stop-ring planning",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T124", "T125", "T126"],
+      "acceptance": "focused tests cover metric-to-cell conversion, annulus bounds, obstacle and explored-space filtering, centre exclusion, fallback behavior, person integration, and unchanged non-person behavior; syntax and whitespace checks pass",
+      "notes": "Focused unit, agent/FMM integration, config composition, dataset validation, syntax, JSON, whitespace, and a no-renderer Habitat-Sim humanoid lifecycle test passed. A complete renderer-backed navigation episode was not run because it requires the user's GPU/EGL runtime and model stack.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "MPLCONFIGDIR=/tmp/matplotlib-cache /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav tests.test_humanoid_spawn -v",
+          "python -m py_compile arguments.py agents/vlm_agents.py agents/vlm_multi_agents.py utils/person_objectnav.py tests/test_person_objectnav.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 18 relevant tests pass (17 person/navigation tests plus one real Habitat-Sim lifecycle test); syntax, TODO JSON, and whitespace checks pass. Full GPU-rendered episode behavior remains a runtime follow-up rather than an implementation blocker."
+      },
+      "last_updated": "2026-07-17T21:54:03-04:00"
+    },
+    {
+      "id": "T123",
+      "title": "Report both agents and the nearest ObjectNav goal distance",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": [],
+      "acceptance": "episode debug output lists both agent positions, identifies the agent and goal instance with the smallest goal-center L2 distance, and reports that distance without assuming agent 0 or goals[0]",
+      "notes": "Implemented a reusable lightweight ObjectNav debug summary and replaced the agent0/goals[0] assumption. It compares goal-center L2 directly; Habitat's native viewpoint/geodesic distance remains in the normal metrics line and runtime measurements are unchanged.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile main.py utils/person_objectnav.py tests/test_person_objectnav.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- main.py utils/person_objectnav.py tests/test_person_objectnav.py todo/todo.json"
+        ],
+        "summary": "Syntax checks passed; all 9 focused tests passed, including both-agent/all-goal and single-goal nearest-center selection; TODO JSON and targeted whitespace checks passed."
+      },
+      "last_updated": "2026-07-15T16:12:00-04:00"
+    },
+    {
+      "id": "T122",
+      "title": "Validate the simplified static-person lifecycle",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T120", "T121"],
+      "acceptance": "syntax checks, focused unit tests, Habitat-Sim lifecycle smoke test, dataset validation, and whitespace checks pass; renderer-only limitations remain documented",
+      "notes": "Exact goal placement, live-object reuse, automatic GLB asset discovery, sim.step(None) visual refresh with preserved ObjectNav task sensors, and omission of the static thermal oracle are covered. Pixel-level RGB confirmation still requires the GPU/EGL host tracked by T113.",
+      "validation": {
+        "status": "partial",
+        "commands": ["python -m py_compile constants.py arguments.py main.py agents/vlm_agents.py agents/vlm_multi_agents.py envs/random_humanoid.py utils/person_objectnav.py utils/fire_pipeline.py utils/fire_sensors/humans_thermal.py scripts/build_person_objectnav_dataset.py tests/test_person_objectnav.py tests/test_humanoid_spawn.py", "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_humanoid_spawn tests.test_person_objectnav", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val --validate-only", "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"import sys; sys.argv=['check','--task_config','person_objectnav_hm3d.yaml','--num_agents','1']; from arguments import get_args, load_config; cfg=load_config(get_args()); assert cfg.habitat.dataset.split == 'val'; assert bool(cfg.conav.static_person_goal)\"", "python -m json.tool todo/todo.json", "git diff --check"],
+        "summary": "Eight combined tests pass, including real Habitat-Sim creation/reuse/GLB discovery and task-sensor merge coverage. Dynamic thermal detection remains compatible; val_mini (2 scenes/7 episodes) and val (36 scenes/659 episodes) datasets validate; config parsing, syntax, JSON, and whitespace checks pass. Only renderer-backed RGB pixels remain untestable on this host."
+      },
+      "last_updated": "2026-07-13T17:14:00-04:00"
+    },
+    {
+      "id": "T121",
+      "title": "Remove obsolete render diagnostics and document the minimal flow",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T120"],
+      "acceptance": "main.py no longer calls explicit-skin diagnostics and documentation describes reset, direct goal placement, post-spawn visual refresh, and normal ObjectNav sensing without claims of forced SKIN or per-episode AO recreation",
+      "notes": "Keep the task-sensor-preserving refresh and static thermal projection gate because both are required for correct ObjectNav observations and non-oracle evaluation.",
+      "validation": {
+        "status": "passed",
+        "commands": ["rg -n 'render_diagnostics|_add_skinned_articulated_object|_remove_all_states|_validate_skinned_humanoid|require_skin|enable_human_thermal_projection|explicit.*skin' envs main.py utils tests docs configs", "python -m py_compile main.py utils/fire_pipeline.py", "git diff --check"],
+        "summary": "Removed the diagnostics call and helper, simplified static thermal gating to omit walker at the call site, changed visual refresh to the original sim.step(None) plus a task-sensor merge, and updated benchmark/config/CLI documentation. No obsolete explicit-skin or forced-recreation references remain."
+      },
+      "last_updated": "2026-07-13T17:14:00-04:00"
+    },
+    {
+      "id": "T120",
+      "title": "Restore the original reusable humanoid loading path",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T119"],
+      "acceptance": "RandomHumanoidWalker creates humanoids with KinematicHumanoid.reconfigure(), reuses live objects across resets, places static humans at episode goal positions, and skips their movement without explicit AO/SKIN creation or forced recreation",
+      "notes": "Public reset(spawn_positions=None, static=False) remains stable; random walking behavior for ordinary configurations is preserved.",
+      "validation": {
+        "status": "passed",
+        "commands": ["python -m py_compile envs/random_humanoid.py tests/test_humanoid_spawn.py", "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_humanoid_spawn", "python -m unittest tests.test_person_objectnav"],
+        "summary": "RandomHumanoidWalker now uses KinematicHumanoid.reconfigure(), reuses a live articulated object, moves it exactly to each new goal, and leaves static states unchanged during step(). The real Habitat-Sim no-renderer lifecycle test and seven helper tests pass."
+      },
+      "last_updated": "2026-07-13T17:14:00-04:00"
+    },
+    {
+      "id": "T119",
+      "title": "Audit the minimal static-person render lifecycle",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "identify which current additions are required for fixed placement and native ObjectNav observations versus temporary render-debug defenses",
+      "notes": "Required core: episode goal extraction, static reset at the exact position, visual refresh after spawn while retaining task sensors, and no position-based thermal oracle for static person episodes.",
+      "validation": {
+        "status": "passed",
+        "commands": ["diff -u Co-NavGPTv3/envs/random_humanoid.py envs/random_humanoid.py", "rg -n 'render_diagnostics|_add_skinned_articulated_object|_remove_all_states|_validate_skinned_humanoid|refresh_simulator_observations|enable_human_thermal_projection' envs/random_humanoid.py main.py utils docs tests"],
+        "summary": "Confirmed that explicit AO/SKIN construction, forced per-episode recreation, drawable validation, and render diagnostics are temporary defenses. Fixed goal extraction, reusable reset placement, post-spawn sensor refresh, and the static thermal-oracle gate are the required behavior."
+      },
+      "last_updated": "2026-07-13T17:10:00-04:00"
+    },
+    {
+      "id": "T118",
+      "title": "Validate real static humanoid rendering and occlusion-safe detection",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T116", "T117"],
+      "acceptance": "tests cover explicit skinned AO creation, first-frame placement, and absence of synthetic person detections when the model is occluded; syntax and available smoke checks pass",
+      "notes": "Historical diagnostic implementation completed and then superseded by T120 at the user's request. Current runtime uses the original reusable reconfigure path and does not force SKIN or perform drawable fail-fast checks; renderer-backed pixel confirmation remains dependent on a GPU/EGL host.",
+      "validation": {
+        "status": "partial",
+        "commands": ["python -m py_compile main.py envs/random_humanoid.py utils/fire_pipeline.py utils/fire_sensors/humans_thermal.py tests/test_person_objectnav.py tests/test_humanoid_spawn.py", "python -m unittest tests.test_person_objectnav", "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_humanoid_spawn", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only", "python -m json.tool todo/todo.json", "git diff --check"],
+        "summary": "Eight helper/occlusion tests and one real Habitat-Sim no-renderer AO lifecycle test pass; syntax, thermal detection compatibility, dataset validation, TODO JSON, and whitespace checks pass. Saved output inspection confirms the failing agent-0 RGB and smoky RGB frame are identical while thermal created the false box. Pixel-level GLB confirmation still requires the user's GPU/EGL renderer and remains tracked by T113."
+      },
+      "last_updated": "2026-07-13T16:20:40-04:00"
+    },
+    {
+      "id": "T117",
+      "title": "Remove thermal oracle false-positive boxes from static person benchmark",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "a static-person episode does not inject person:0.95 from walker world coordinates; depth-carve failure with depth available never falls back to a synthetic ellipse over a wall",
+      "notes": "Existing saved outputs prove clean RGB and smoky RGB show the same wall while the projected thermal mask creates the large person box. Static ObjectNav now omits walker from the Fire pipeline call, so it cannot project the known world position; depth-backed dynamic projection also rejects failed or wall-like silhouette components.",
+      "validation": {
+        "status": "passed",
+        "commands": ["python -m unittest tests.test_person_objectnav", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py"],
+        "summary": "Wall-depth regression produces no thermal person mask, no-depth legacy visualization still works, main.py omits the walker for static person episodes, and the existing dynamic thermal detector compatibility script passes."
+      },
+      "last_updated": "2026-07-13T16:20:40-04:00"
+    },
+    {
+      "id": "T116",
+      "title": "Fresh-spawn an explicit skinned Habitat humanoid at each person goal",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "after env.reset and before the first render, each person goal creates a fresh KinematicHumanoid through its sibling ao_config with render_mode skin, URDF link order, free base, valid GLB, and exact goal base position",
+      "notes": "Historical defensive implementation completed and then superseded by T120 at the user's request. The current runtime no longer removes/recreates AOs, forces SKIN, or logs render diagnostics; it follows the original KinematicHumanoid.reconfigure() path and reuses live objects.",
+      "validation": {
+        "status": "passed",
+        "commands": ["/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_humanoid_spawn"],
+        "summary": "A real Habitat-Sim 0.3.3 physics instance loads female_2 through the AO template with SKIN, URDF_ORDER, valid GLB, exact base pose, and replaces it with a fresh humanoid at a second episode goal."
+      },
+      "last_updated": "2026-07-13T16:20:40-04:00"
+    },
+    {
+      "id": "T115",
+      "title": "Validate first-frame humanoid visibility refresh",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T114"],
+      "acceptance": "tests prove refreshed RGB/depth replace stale reset frames while objectgoal/GPS/compass remain intact; syntax and available smoke checks pass",
+      "notes": "Renderer-backed visual confirmation remains covered by blocked GPU smoke item T113.",
+      "validation": {
+        "status": "partial",
+        "commands": ["python -m py_compile main.py utils/person_objectnav.py tests/test_person_objectnav.py", "python -m unittest tests.test_person_objectnav", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only", "git diff --check"],
+        "summary": "Six unit tests pass, including a two-agent stale-frame replacement/task-sensor preservation test. Syntax, thermal person detection, dataset validation, and whitespace checks pass. Actual RGB rendering cannot be inspected on this host because T113 is blocked by NVIDIA/EGL."
+      },
+      "last_updated": "2026-07-13T15:48:00-04:00"
+    },
+    {
+      "id": "T114",
+      "title": "Refresh RGB/depth after spawning fixed Habitat 3 humanoid",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T109"],
+      "acceptance": "the first navigation observation is rendered after the humanoid model is placed; task sensors remain available and no task step is consumed",
+      "notes": "Root cause: env.reset rendered RGB/depth before walker.reset. Fire/thermal projection then used the new human pose with the stale pre-human RGB frame, producing a person box over a wall. refresh_simulator_observations now follows the original sim.step(None) refresh and merges its visual frames with the original task observations, preserving objectgoal/GPS/compass without consuming a task action. Static mode fails fast if a person episode has no valid goals.",
+      "validation": {
+        "status": "passed",
+        "commands": ["python -m unittest tests.test_person_objectnav", "python -m py_compile main.py utils/person_objectnav.py"],
+        "summary": "Unit test confirms fresh per-agent RGB/depth replace stale frames while objectgoal, GPS, and compass remain unchanged; static person goal extraction and category tests also pass."
+      },
+      "last_updated": "2026-07-13T15:48:00-04:00"
+    },
+    {
+      "id": "T113",
+      "title": "Run renderer-backed person benchmark smoke test on a GPU host",
+      "status": "blocked",
+      "priority": "P1",
+      "depends_on": ["T112"],
+      "acceptance": "Habitat Env.reset renders the fixed humanoid, emits objectgoal 6, and a short main.py episode reaches native Success/SPL measurement code",
+      "notes": "Current host has no working NVIDIA driver/EGL context (nvidia-smi cannot communicate with the driver; WindowlessEglApplication cannot create a context). Dataset generation, navmesh/raycast checks, config composition, and ObjectNavDatasetV1 loading all succeeded.",
+      "validation": {
+        "status": "partial",
+        "commands": ["/home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --task_config person_objectnav_hm3d.yaml --num_agents 1"],
+        "summary": "Not runnable on this host because RGB/Depth sensor renderer initialization requires a working GPU/EGL context."
+      },
+      "last_updated": "2026-07-13T12:44:00-04:00"
+    },
+    {
+      "id": "T112",
+      "title": "Validate native static-person ObjectNav benchmark end to end",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T108", "T109", "T110", "T111"],
+      "acceptance": "targeted tests, Python syntax checks, generated-dataset validation, Habitat config parsing, and a minimal environment reset all pass; commands and results are recorded",
+      "notes": "All non-renderer validation passed. Full Env.reset was attempted but renderer creation is unavailable on this host; tracked separately as T113.",
+      "validation": {
+        "status": "partial",
+        "commands": ["python -m py_compile constants.py arguments.py main.py agents/vlm_agents.py agents/vlm_multi_agents.py envs/random_humanoid.py utils/person_objectnav.py scripts/build_person_objectnav_dataset.py tests/test_person_objectnav.py", "python -m unittest tests.test_person_objectnav", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only", "habitat.make_dataset(ObjectNav-v1) smoke script", "git diff --check"],
+        "summary": "Syntax, 5 unit tests, thermal person detection, generated dataset validation (2 scenes/7 episodes), Hydra config composition, ObjectNavDatasetV1 deserialization, and whitespace checks passed. Renderer-backed Env.reset could not run because this host has no NVIDIA/EGL context."
+      },
+      "last_updated": "2026-07-13T12:44:00-04:00"
+    },
+    {
+      "id": "T111",
+      "title": "Document static person benchmark generation and execution",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T108", "T109", "T110"],
+      "acceptance": "documentation explains dataset generation, category semantics, fixed humanoid binding, native Success/SPL, and runnable commands",
+      "notes": "Added docs/static_person_objectnav.md and corrected --num_humans config-default semantics in docs/main_usage.md.",
+      "validation": {
+        "status": "passed",
+        "commands": ["rg -n 'build_person_objectnav_dataset|person_objectnav_hm3d' docs/static_person_objectnav.md"],
+        "summary": "Documented generator, validation, run command, native metric semantics, and multi-person category behavior."
+      },
+      "last_updated": "2026-07-13T12:44:00-04:00"
+    },
+    {
+      "id": "T110",
+      "title": "Route person through normal objectgoal category handling",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T108", "T109"],
+      "acceptance": "person has category id 6 across dataset/constants/YOLO; agents read observations['objectgoal'] without human_goal_eval overrides; Habitat native metrics are the authoritative score",
+      "notes": "Added person to constants index 6; both agents now always decode observations['objectgoal']; removed human_goal_eval CLI/integration and standalone tracker; preserved thermal person detection.",
+      "validation": {
+        "status": "passed",
+        "commands": ["python -m unittest tests.test_person_objectnav", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py", "rg -n 'human_goal_eval|HumanGoalTracker' ."],
+        "summary": "Category alignment and thermal person detection passed; no runtime human_goal_eval override/tracker references remain."
+      },
+      "last_updated": "2026-07-13T12:44:00-04:00"
+    },
+    {
+      "id": "T109",
+      "title": "Bind fixed humanoids to person goals at episode reset",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T108"],
+      "acceptance": "person episodes spawn humanoids exactly at dataset goal positions and do not move them; non-person episodes retain existing random-walker behavior",
+      "notes": "RandomHumanoidWalker.reset accepts dataset goal positions, activates exactly one humanoid per goal, freezes static states, and deactivates surplus models; main.py binds positions from current person episode.",
+      "validation": {
+        "status": "passed",
+        "commands": ["python -m py_compile envs/random_humanoid.py main.py", "python -m unittest tests.test_person_objectnav"],
+        "summary": "Runtime helper extracts only valid person goal positions; static states are excluded from walker.step. Full rendered placement is deferred to T113 due unavailable EGL."
+      },
+      "last_updated": "2026-07-13T12:44:00-04:00"
+    },
+    {
+      "id": "T108",
+      "title": "Build native HM3D person ObjectNav dataset generator",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "a script creates a separate ObjectNav dataset with person:6 mappings, scene_person goals, navigable visible view_points, and person episodes without mutating source HM3D data",
+      "notes": "Implemented deterministic navmesh sampling with Bullet ray-cast visibility, canonical HM3D scene path recovery, source-preserving output, and validation-only mode. Generated local val_mini artifacts under data/datasets/objectnav_hm3d_person_v1 (gitignored project data): 2 scenes, 7 episodes.",
+      "validation": {
+        "status": "passed",
+        "commands": ["/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --episodes-per-scene 5", "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only", "habitat.make_dataset(ObjectNav-v1) smoke script"],
+        "summary": "Generated 2 scene shards with 7 episodes; validator passed; Habitat loaded all episodes with person:6, non-empty goals, and 48+ view points per tested goal."
+      },
+      "last_updated": "2026-07-13T12:44:00-04:00"
+    },
+    {
+      "id": "T106",
+      "title": "Make agent actually navigate to person (not dataset object) in human_goal_eval mode",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T105"],
+      "acceptance": "with --human_goal_eval 1 the nav stack (GPT frontier prompt, detection matching, STOP-on-goal, viz) targets 'person'; person is detectable through smoke via thermal_human_mask; flag off leaves ObjectNav behaviour unchanged",
+      "notes": "Root cause: T105 only scored humans; agents still read observations['objectgoal'] (e.g. bed). Fix: in vlm_agents.py + vlm_multi_agents.py reset(), if human_goal_eval -> goal_name='person', goal_id=classes.index('person'). Added smoke-invariant person detection: detection_segmentation.detect() now takes thermal_human_mask and injects person boxes/masks mirroring the fire path (person_class_id). Wired observations['thermal_human_mask'] into both agents' detect() calls. Verified with scripts/test_detect_with_thermal.py (person-from-thermal + fire+person combined).",
+      "last_updated": "2026-07-12T03:00:00Z"
+    },
+    {
+      "id": "T105",
+      "title": "Evaluate spawned humanoids as ObjectNav-style navigation goals (person target)",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "opt-in --human_goal_eval records human+agent positions each step and reports per-episode + aggregate success rate and SPL for reaching a person, printed/logged next to the ObjectNav metrics under human_nav/*; normal runs (flag off) unaffected",
+      "notes": "Added utils/human_goal_eval.py::HumanGoalTracker: tracks each live humanoid's world pos (base_pos) + each agent pos per step, records closest geodesic approach per (agent,human) and the agent path length at that moment. Episode success = any agent within success_distance of a human; SPL = geo(agent_start, human_first_pos)/max(actual_path, opt). Wired into main.py (construct when --human_goal_eval and --num_humans>0; reset per episode after walker.reset(); update after walker.step()+env.step(); score at episode end into agg_metrics human_nav/success + human_nav/spl). Added args --human_goal_eval, --human_goal_success_distance (default 1.0m). person is already a detection class. Verified with scripts/test_human_goal_eval.py (reach spl=1.0, unreached=0, detour spl=0.4, aggregate averaging).",
+      "last_updated": "2026-07-12T02:00:00Z"
+    },
     {
       "id": "T104",
       "title": "Human thermal signature as true body silhouette (depth carve) not a blob",

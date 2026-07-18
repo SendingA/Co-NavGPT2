@@ -3,7 +3,12 @@ data*
 !dataset.py
 tmp/
 test.py
-envs/
+# Keep the project's Habitat runtime package. Virtual environments should use
+# their conventional .venv/ or external conda locations instead.
+envs/*
+!envs/__init__.py
+!envs/random_humanoid.py
+!envs/robot_models.py
 mobile_sam.pt
 yolov8l-world.pt
 .history

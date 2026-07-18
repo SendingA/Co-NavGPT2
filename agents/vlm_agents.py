@@ -125,8 +125,8 @@ class VLM_Agent():
             self.init_agent_position = agent_state.position
             self.init_sim_rotation = quaternion.as_rotation_matrix(agent_state.sensor_states["depth"].rotation)
 
-            self.goal_name = category_to_id[observations['objectgoal'][0]]
-            self.goal_id = observations['objectgoal'][0]
+            self.goal_id = int(observations['objectgoal'][0])
+            self.goal_name = category_to_id[self.goal_id]
           
         # print("current position: ", agent_state.sensor_states["depth"].position)
         
@@ -230,7 +230,13 @@ class VLM_Agent():
 
         thermal_mask = observations.get('thermal_flame_mask') \
             if int(getattr(self.args, 'use_thermal_perception', 0)) else None
-        detections = self.obj_det_seg.detect(image, thermal_flame_mask=thermal_mask)
+        human_mask = observations.get('thermal_human_mask') \
+            if int(getattr(self.args, 'use_thermal_perception', 0)) else None
+        detections = self.obj_det_seg.detect(
+            image,
+            thermal_flame_mask=thermal_mask,
+            thermal_human_mask=human_mask,
+        )
         
         n_masks = len(detections.xyxy)
         for mask_idx in range(n_masks):
@@ -364,27 +370,29 @@ class VLM_Agent():
             self.curr_frontier_count = 0
                     
         act_time = time.time()
-        if len(self.object_pcd.points) > 0:
+        has_navigation_goal = len(self.object_pcd.points) > 0
+        if has_navigation_goal:
+            goal_pcd = process_pcd(self.object_pcd)
             if self.found_goal == False:
                 self.goal_map = np.zeros((self.local_w, self.local_h))
-            goal_pcd = process_pcd(self.object_pcd)
             self.goal_map[self.object_map_building(goal_pcd)] = 1
-            self.nearest_point = self.find_nearest_point_cloud(goal_pcd, self.camera_position)
-            
-            x = self.nearest_point[0]
-            y = self.nearest_point[1]
-            z = self.nearest_point[2]
-            
+            self.nearest_point = self.find_nearest_point_cloud(
+                goal_pcd, self.camera_position
+            )
+            x, y, z = self.nearest_point
+
+        if has_navigation_goal:
             self.found_goal = True
         else:
             self.found_goal = False
-            
             self.goal_map = np.zeros((self.local_w, self.local_h))
             self.goal_map[goal_points[0], goal_points[1]] = 1
-            
-            x = (goal_points[0] - int(self.origins_grid[0])) * self.args.map_resolution / 100.0
+
+            x = ((goal_points[0] - int(self.origins_grid[0]))
+                 * self.args.map_resolution / 100.0)
             y = self.camera_position[1]
-            z = (goal_points[1] - int(self.origins_grid[1])) * self.args.map_resolution / 100.0
+            z = ((goal_points[1] - int(self.origins_grid[1]))
+                 * self.args.map_resolution / 100.0)
    
    
         Open3d_goal_pose = [x, y, z]
@@ -634,7 +642,7 @@ class VLM_Agent():
         if ("plant" in self.goal_name or "tv" in self.goal_name) and \
             np.sum(self.goal_map) > 1:
             selem = skimage.morphology.disk(15)
-        else: 
+        else:
             selem = skimage.morphology.disk(5)
         goal = skimage.morphology.binary_dilation(
             goal, selem) != True

@@ -1,0 +1,20 @@
+# @package _global_
+#
+# Native static-person ObjectNav benchmark. Generate its default split with:
+#   python scripts/build_person_objectnav_dataset.py --split val
+
+defaults:
+  - multi_objectnav_hm3d
+  - _self_
+
+habitat:
+  dataset:
+    type: ObjectNav-v1
+    split: val
+    data_path: data/datasets/objectnav_hm3d_person_v1/{split}/{split}.json.gz
+    scenes_dir: data/scene_datasets
+
+conav:
+  # Random-walker default; static avatar count comes from episode goals.
+  num_humans: 1
+  static_person_goal: True

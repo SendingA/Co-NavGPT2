@@ -95,6 +95,31 @@ def main() -> int:
         print("FAIL: thermal-derived confidence too low")
         return 1
     print("OK: thermal source gave a fire detection on a flame-free RGB")
+
+    # ---- Person from thermal_human_mask (smoke-invariant) --------------
+    classes_p = ["chair", "bed", "person", "fire"]
+    det_p = Object_Detection_and_Segmentation(args, classes_p, device="cpu")
+    human_mask = np.zeros((H, W), dtype=np.float32)
+    human_mask[80:170, 140:180] = 1.0   # an upright person-ish blob
+    out_p = det_p.detect(image, thermal_human_mask=human_mask)
+    np_ = len(out_p.xyxy)
+    print(f"person detections={np_}, class_ids={out_p.class_id.tolist()}")
+    if np_ != 1 or int(out_p.class_id[0]) != classes_p.index("person"):
+        print("FAIL: expected exactly one person detection from thermal")
+        return 1
+    print("OK: thermal source gave a person detection on a flame-free RGB")
+
+    # ---- Both masks together ------------------------------------------
+    out_both = det_p.detect(
+        image, thermal_flame_mask=mask, thermal_human_mask=human_mask
+    )
+    ids = sorted(int(c) for c in out_both.class_id)
+    expected = sorted([classes_p.index("person"), classes_p.index("fire")])
+    print(f"combined class_ids={ids} (expect {expected})")
+    if ids != expected:
+        print("FAIL: expected one fire + one person detection")
+        return 1
+    print("OK: fire + person both detected from thermal")
     return 0
 
 

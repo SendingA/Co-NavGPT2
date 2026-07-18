@@ -38,10 +38,15 @@ class Object_Detection_and_Segmentation():
         self.fire_class_id = (
             self.classes.index("fire") if "fire" in self.classes else -1
         )
+        # Resolve person id once. Used to inject a smoke-invariant person
+        # detection from the voxel thermal human mask, mirroring fire.
+        self.person_class_id = (
+            self.classes.index("person") if "person" in self.classes else -1
+        )
 
     # ------------------------------------------------------------------
-    def detect(self, image, thermal_flame_mask=None):
-        """Run YOLO-World on ``image`` and merge fire detections.
+    def detect(self, image, thermal_flame_mask=None, thermal_human_mask=None):
+        """Run YOLO-World on ``image`` and merge thermal detections.
 
         Args:
             image: HxWx3 uint8 BGR (matches the rest of the pipeline).
@@ -49,6 +54,11 @@ class Object_Detection_and_Segmentation():
                 If provided and the ``fire`` class is registered, fire
                 detections are derived from this (smoke-invariant) voxel
                 thermal mask.
+            thermal_human_mask: optional float32 in [0, 1], shape (H, W).
+                If provided and the ``person`` class is registered, person
+                detections are derived from this (smoke-invariant) voxel
+                thermal human mask, so a human stays findable through
+                smoke that would blind the RGB YOLO detector.
         """
         # ----------------------- 1) YOLO-World ------------------------
         yolo_s_time = time.time()
@@ -120,6 +130,52 @@ class Object_Detection_and_Segmentation():
                     confidences = fire_scores
                     detection_class_ids = fire_class_ids
                     masks_np = fire_masks
+
+        # ----------------------- 3b) Person detection -----------------
+        # Person detections from the voxel thermal human mask (also
+        # smoke-invariant), so a human is findable in dense smoke where
+        # RGB YOLO would miss them. Mirrors the fire path above.
+        if self.person_class_id >= 0 and thermal_human_mask is not None:
+            from utils.smoke_perception import thermal_mask_to_detections
+
+            target_hw = (
+                masks_np.shape[1:] if masks_np is not None else image.shape[:2]
+            )
+            person_xyxy, person_masks, person_scores = thermal_mask_to_detections(
+                np.asarray(thermal_human_mask, dtype=np.float32),
+                target_hw=target_hw,
+            )
+
+            if len(person_xyxy) > 0:
+                if masks_np is not None and masks_np.shape[1:] != person_masks.shape[1:]:
+                    target_h, target_w = masks_np.shape[1:]
+                    resized = np.zeros(
+                        (person_masks.shape[0], target_h, target_w), dtype=bool
+                    )
+                    for i, m in enumerate(person_masks):
+                        resized[i] = cv2.resize(
+                            m.astype(np.uint8),
+                            (target_w, target_h),
+                            interpolation=cv2.INTER_NEAREST,
+                        ).astype(bool)
+                    person_masks = resized
+
+                person_class_ids = np.full(
+                    (len(person_xyxy),), self.person_class_id, dtype=int
+                )
+
+                if len(confidences) > 0:
+                    xyxy_np = np.concatenate([xyxy_np, person_xyxy], axis=0)
+                    confidences = np.concatenate([confidences, person_scores])
+                    detection_class_ids = np.concatenate(
+                        [detection_class_ids, person_class_ids]
+                    )
+                    masks_np = np.concatenate([masks_np, person_masks], axis=0)
+                else:
+                    xyxy_np = person_xyxy
+                    confidences = person_scores
+                    detection_class_ids = person_class_ids
+                    masks_np = person_masks
 
         # ----------------------- 4) Pack detections -------------------
         detections = sv.Detections(

@@ -64,10 +64,13 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 
 | 参数 | 类型/默认 | 说明 |
 | --- | --- | --- |
-| `--num_humans` | int, `0` | 每次 reset 随机撒到场景里的 KinematicHumanoid 数量；`0` 关闭 |
+| `--num_humans` | int, 配置值 | 普通配置中覆盖随机行人数量；启用 `static_person_goal` 后，静态人物数量由当前 episode 的 person ObjectGoals 决定 |
 | `--robot_models_enabled` | int, `0` | `1` 在 nav agent 上叠一层可见的 Habitat 3 机器人 URDF |
 | `--robot_profiles` | str | 逗号分隔的机器人 profile：`fetch,fetch_no_wheels,fetch_suction,spot,stretch`；多机器人按顺序循环 |
 | `--robot_urdfs` | str | 可选：直接指定 URDF 路径覆盖 profile 默认路径 |
+
+固定人物作为原生 ObjectNav category 的数据生成、viewpoint 覆盖约束与运行方式见
+[`docs/static_person_objectnav.md`](static_person_objectnav.md)。
 | `--dataset_path` | str | 覆盖 `habitat.dataset.data_path`（比如切到 `objectnav_hm3d_v2`） |
 | `--scenes_dir` | str | 覆盖 `habitat.dataset.scenes_dir` |
 | `--scene_dataset` | str | 覆盖 `habitat.simulator.scene_dataset` 指向的 `scene_dataset_config.json` |
@@ -305,7 +308,3 @@ python main.py --num_agents 2 --num_humans 2 \
 
 
 ```
-
-
-
-

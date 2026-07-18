@@ -24,6 +24,11 @@ import utils.visualization as vu
 from arguments import get_args, load_config, humanoid_kwargs, robot_model_kwargs
 from envs import RandomHumanoidWalker, RobotModelManager
 from utils.fire_sensors import FireSensorSuite, FireSensorConfig, FireSensorViewer
+from utils.person_objectnav import (
+    objectnav_goal_debug_info,
+    person_goal_positions,
+    refresh_simulator_observations,
+)
 
 import cv2
 import open3d as o3d
@@ -209,6 +214,7 @@ def main(args, send_queue, receive_queue):
     target_edge_map = None
     target_score = None
     log_start = time.time()
+    static_person_goal = bool(config.conav.get("static_person_goal", False))
 
     while count_episodes < num_episodes:
         observations = env.reset()
@@ -216,16 +222,30 @@ def main(args, send_queue, receive_queue):
         # Fire construction is deferred until we know the real scene id.
         _build_fire_scene_and_suites()
 
-        # Wire in the humanoid pedestrians and visible robot models.
-        # Their reset() only spawns/reposes the articulated objects; the
-        # observations dict returned from env.reset() already has the
-        # ObjectNav task sensors, so we do NOT re-issue env.sim.step(None)
-        # here — that would skip the task and drop 'objectgoal' etc.
-        walker.reset()
+        # Follow the original Habitat humanoid lifecycle: reset the task,
+        # create/repose the articulated object, then render it. Static person
+        # episodes only replace the random spawn point with the dataset goal.
+        if static_person_goal:
+            fixed_person_positions = person_goal_positions(
+                env.current_episode
+            )
+            if not fixed_person_positions:
+                raise RuntimeError(
+                    "static_person_goal is enabled, but the current episode "
+                    "has no valid person ObjectGoal positions"
+                )
+            walker.reset(fixed_person_positions, static=True)
+        else:
+            walker.reset()
         robot_models.reset()
 
-        if not isinstance(observations, list):
-            observations = [observations]
+        # This is the ObjectNav-safe equivalent of the original
+        # ``env.sim.step(None)`` refresh: re-render RGB/depth after placement,
+        # but merge them into env.reset() output so objectgoal/GPS/compass are
+        # preserved and no task action is consumed.
+        observations = refresh_simulator_observations(
+            env.sim, observations, num_agents
+        )
 
         map_process.reset()
         if fire_scene is not None:
@@ -258,7 +278,11 @@ def main(args, send_queue, receive_queue):
                         robot_step=int(getattr(agent[i], "l_step", 0)),
                         config=config,
                         args=args,
-                        walker=walker,
+                        # Static-person ObjectNav must use the same visual
+                        # perception chain as chair/bed/etc. Projecting the
+                        # known goal position into thermal created an oracle
+                        # person:0.95 box even when a wall occluded the model.
+                        walker=(None if static_person_goal else walker),
                     )
                     if sensors is not None:
                         fire_suites[i].save_step(
@@ -462,19 +486,31 @@ def main(args, send_queue, receive_queue):
         # --- Debug: show why an episode was marked failed.
         try:
             ep = env.current_episode
-            goal_pos = np.array(ep.goals[0].position, dtype=float)
-            final_pos = np.array(
-                env.sim.get_agent_state(0).position, dtype=float
+            debug_info = objectnav_goal_debug_info(
+                env.sim,
+                ep,
+                num_agents,
+            )
+            agent_position_fields = "  ".join(
+                f"agent{agent_id}_xyz="
+                f"{np.round(position, 2).tolist()}"
+                for agent_id, position in enumerate(
+                    debug_info["agent_positions"]
+                )
             )
             log += (
                 f"[dbg] target_class={getattr(agent[0], 'goal_name', '?')}  "
-                f"final_agent0_xyz={np.round(final_pos, 2).tolist()}  "
-                f"goal_xyz={np.round(goal_pos, 2).tolist()}  "
-                f"final_l2={np.linalg.norm(final_pos - goal_pos):.2f}m  "
+                f"{agent_position_fields}  "
+                f"goal_index={debug_info['goal_index']}  "
+                f"goal_xyz="
+                f"{np.round(debug_info['goal_position'], 2).tolist()}  "
+                f"nearest_agent={debug_info['nearest_agent_id']}  "
+                f"nearest_goal_l2="
+                f"{debug_info['nearest_goal_l2']:.3f}m  "
                 f"success_thr={config.habitat.task.measurements.success.success_distance}m\n"
             )
         except Exception:
-            pass
+            logging.exception("failed to build ObjectNav episode debug info")
 
         for m, v in metrics.items():
             if isinstance(v, dict):

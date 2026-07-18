@@ -78,6 +78,7 @@ conav:
   # Filled in by arguments.load_config from --num_agents / --num_humans.
   num_robots: 2
   num_humans: 0
+  static_person_goal: False
 
   # Visible robot URDF models
   robot_models_enabled: False

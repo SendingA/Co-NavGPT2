@@ -77,12 +77,9 @@ def step_fire_observation(
 ) -> Optional[Dict[str, np.ndarray]]:
     """Run the sensor suite on one frame and patch ``observations`` in place.
 
-    When ``walker`` (or an explicit ``humans`` list) is passed, each
-    live humanoid is projected into the current camera and added to
-    the thermal image + temperature map as a ~+9 C blob so it stays
-    visible against the ambient background — this is what a real
-    FLIR-style IR camera would see for a person walking through the
-    scene.
+    When ``walker`` (or an explicit ``humans`` list) is passed, each live
+    humanoid is projected into the current camera and added to the thermal
+    image. Callers that require RGB-only person perception should omit it.
 
     Returns the suite's output dict (handy for ``suite.save_step`` and
     GUI viewers) or ``None`` if the suite is disabled.

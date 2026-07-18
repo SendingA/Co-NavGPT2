@@ -94,10 +94,11 @@ def get_args() -> argparse.Namespace:
                              "down) as an obstacle. 0 disables the filter.")
 
     # Habitat 3 humanoid pedestrians
-    parser.add_argument("--num_humans", type=int, default=0,
+    parser.add_argument("--num_humans", type=int, default=None,
                         help="number of kinematic humanoid pedestrians to "
-                             "spawn alongside the robots. 0 disables the "
-                             "humanoid walker entirely.")
+                             "spawn alongside the robots. If omitted, use "
+                             "conav.num_humans from the task config.")
+
     # Habitat 3 visible robot URDF models (Fetch / Spot / ...) rendered on
     # top of the classic ObjectNav navigation agents.
     parser.add_argument("--robot_models_enabled", type=int, default=0,
@@ -126,7 +127,6 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--sem_threshold", type=float, default=0.85,
                         help="semantic detection confidence above which "
                              "the goal is considered found")
-
     # ------------------------------------------------------------------
     # Global planner
     # ------------------------------------------------------------------
@@ -394,7 +394,8 @@ def _apply_conav_overrides(config, args: argparse.Namespace) -> None:
     """CLI values win over conav.* defaults from the yaml."""
     conav = config.conav
     conav.num_robots = int(args.num_agents)
-    conav.num_humans = int(args.num_humans)
+    if args.num_humans is not None:
+        conav.num_humans = int(args.num_humans)
 
     if args.robot_models_enabled:
         conav.robot_models_enabled = bool(args.robot_models_enabled)

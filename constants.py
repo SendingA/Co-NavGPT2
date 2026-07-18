@@ -5,7 +5,8 @@ category_to_id = [
         "plant",
         "toilet",
         "tv_monitor",
-        "sofa"
+        "sofa",
+        "person"
 ]
 
 category_to_id_gibson = [

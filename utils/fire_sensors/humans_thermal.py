@@ -183,15 +183,21 @@ def project_humans_to_thermal(
         cx_px, cy_px = int(round(u)), int(round(v))
 
         # ---- Preferred path: carve the TRUE silhouette from depth ------
-        # The humanoid is a solid object in the depth image, so the
-        # pixels around the projected centre whose metric depth matches
-        # the person's distance ARE the person's outline (head, torso,
-        # arms, legs) — exactly what a real thermal camera sees, not a
-        # fuzzy ellipse. This also handles occlusion for free: pixels
-        # where the scene is closer than the person simply fall outside
-        # the depth band and are left cold.
-        carved = False
+        # First reject a target hidden behind a closer surface. Previously
+        # the carve ran before this test, so a wall near the expected person
+        # depth could itself become a large thermal "person" mask.
         if depth_2d is not None:
+            if 0 <= cy_px < H and 0 <= cx_px < W:
+                scene_depth = float(depth_2d[cy_px, cx_px])
+                if (
+                    scene_depth > 0
+                    and scene_depth < 1.0 + 1e-3
+                    and max_depth_m > 1.5
+                ):
+                    scene_depth *= max_depth_m
+                if scene_depth > 0 and scene_depth + 0.3 < depth_from_cam:
+                    continue
+
             carved = _carve_person_from_depth(
                 mask,
                 depth_2d=depth_2d,
@@ -203,18 +209,14 @@ def project_humans_to_thermal(
                 excess_c=float(target.excess_c),
                 max_depth_m=float(max_depth_m),
             )
+            # Depth is authoritative. If no plausible humanoid silhouette is
+            # present, the model is off-screen/occluded/not rendered; never
+            # fall back to a goal-position ellipse over the RGB scene.
+            if not carved:
+                continue
 
-        # ---- Fallback: elliptical blob when depth is unavailable -------
-        # (e.g. callers that pass depth_m=None). Also used when the
-        # depth carve found nothing (person fully occluded / off-band).
-        if not carved:
-            # Occlusion test at the centre before painting the blob.
-            if depth_2d is not None and 0 <= cy_px < H and 0 <= cx_px < W:
-                scene_depth = float(depth_2d[cy_px, cx_px])
-                if scene_depth > 0 and scene_depth < 1.0 + 1e-3 and max_depth_m > 1.5:
-                    scene_depth *= max_depth_m
-                if scene_depth > 0 and scene_depth + 0.3 < depth_from_cam:
-                    continue
+        # Elliptical fallback is only for callers with no depth sensor at all.
+        else:
             _paint_person_blob(
                 mask,
                 center=(cx_px, cy_px),
@@ -297,7 +299,18 @@ def _carve_person_from_depth(
         return False
 
     sil = (lbl == best_lbl)
-    if sil.sum() < 20:
+    area = int(stats[best_lbl, cv2.CC_STAT_AREA])
+    component_w = int(stats[best_lbl, cv2.CC_STAT_WIDTH])
+    component_h = int(stats[best_lbl, cv2.CC_STAT_HEIGHT])
+    # Reject broad planar surfaces. A standing stop-pose humanoid is tall and
+    # occupies only part of the projection window; the failure captured in the
+    # benchmark filled almost the whole window with one wall component.
+    if (
+        area < 20
+        or area > int(0.55 * band.size)
+        or component_w > max(12, int(round(radius_px * 3.4)))
+        or component_h < max(8, int(round(component_w * 1.05)))
+    ):
         return False
 
     # Soft interior→edge falloff so the core reads hottest (skin over
