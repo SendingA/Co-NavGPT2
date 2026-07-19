@@ -1,7 +1,7 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-07-17T22:52:33-04:00",
+    "updated_at": "2026-07-19T15:54:37-04:00",
     "owner": "copilot"
   },
   "items": [
@@ -104,6 +104,88 @@
         "summary": "All 14 discovered tests pass. Thermal fire/person compatibility, syntax, native config composition, dataset deserialization, 36-scene live coverage, exact historical-stop geodesic, TODO JSON, dead-branch search, and whitespace validation pass."
       },
       "last_updated": "2026-07-17T22:52:33-04:00"
+    },
+    {
+      "id": "T133",
+      "title": "Audit rejected push and identify oversized Git blobs",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "all blobs introduced by commits ahead of origin/vulcan are inspected and every file exceeding GitHub's 100 MB limit is identified with its introducing commit",
+      "notes": "Audit found exactly one over-limit blob: weights/clip/ViT-B-32.pt at 353,976,522 bytes, introduced by local-only commit 55c8cbd. origin/vulcan is an ancestor of HEAD, the large-file commit is not on origin, and the branch is exactly two commits ahead.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "git rev-list --objects origin/vulcan..HEAD | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)'",
+          "git log --diff-filter=A -- weights/clip/ViT-B-32.pt"
+        ],
+        "summary": "All blobs introduced by origin/vulcan..HEAD were enumerated. ViT-B-32.pt is the only blob over GitHub's 100 MB limit and exists only in the two-commit local history."
+      },
+      "last_updated": "2026-07-19T15:31:00-04:00"
+    },
+    {
+      "id": "T134",
+      "title": "Remove model weights from unpushed history and ignore artifacts",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T133"],
+      "acceptance": "the local commits retain source changes but no longer contain ViT-B-32.pt, and .gitignore prevents model weights and generated artifacts from being recommitted",
+      "notes": "Created backup-vulcan-large-file-20260719 at the original HEAD, fetched origin/vulcan, and interactively rebased only the three local commits. The rewritten first commit no longer tracks ViT-B-32.pt; the 353,976,522-byte local file remains on disk and is ignored by weights/ and *.pt rules.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "git fetch origin vulcan",
+          "git rebase -i origin/vulcan",
+          "git rm --cached -- weights/clip/ViT-B-32.pt",
+          "git diff --name-status backup-vulcan-large-file-20260719..HEAD^",
+          "git check-ignore -v weights/clip/ViT-B-32.pt"
+        ],
+        "summary": "Remote baseline was unchanged. The rewritten code trees differ from the original local commits only by removal of the tracked weight, and the file remains locally available but ignored."
+      },
+      "last_updated": "2026-07-19T15:48:32-04:00"
+    },
+    {
+      "id": "T135",
+      "title": "Validate cleaned branch before publishing",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T134"],
+      "acceptance": "TODO JSON, whitespace, ignored-file behavior, branch diff, and all unpushed blob sizes pass targeted checks",
+      "notes": "No full runtime benchmark was required because the cleanup changes only Git tracking and ignore rules. The existing person/humanoid, fire sensor, thermal detection, syntax, dataset structure, JSON, whitespace, ignored-file, and blob-range checks all pass.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "git diff --name-only --diff-filter=ACM origin/vulcan..HEAD -- '*.py' | xargs /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/build_person_objectnav_dataset.py --split val_mini --validate-only --structural-only",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_detect_with_thermal.py",
+          "git rev-list --objects origin/vulcan..HEAD | git cat-file --batch-check='%(objecttype) %(objectname) %(objectsize) %(rest)'",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 14 discovered tests pass; fire sensor and thermal detection smoke tests pass; val_mini reports 2 scenes and 15 episodes; changed Python files compile; no pending blob is at or above 100 MB; JSON and whitespace checks pass."
+      },
+      "last_updated": "2026-07-19T15:49:55-04:00"
+    },
+    {
+      "id": "T136",
+      "title": "Push the cleaned vulcan branch",
+      "status": "blocked",
+      "priority": "P0",
+      "depends_on": ["T135"],
+      "acceptance": "the cleaned local branch is pushed to origin/vulcan and local tracking reports no commits ahead",
+      "notes": "The cleaned branch is ready, but the HTTPS remote cannot authenticate in this terminal: gh is not installed, GH_TOKEN/GITHUB_TOKEN are unset, no credential helper is configured, and no SSH private key is present. Do not request credentials in chat; resume after the user authenticates GitHub locally.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "git push --dry-run origin vulcan",
+          "git config --show-origin --get-all credential.helper",
+          "check GH_TOKEN/GITHUB_TOKEN and local SSH key availability without printing secrets"
+        ],
+        "summary": "The dry-run reached GitHub but failed with 'could not read Username for https://github.com'. No usable non-interactive authentication method is configured; the branch has not been pushed."
+      },
+      "last_updated": "2026-07-19T15:54:37-04:00"
     },
     {
       "id": "T124",

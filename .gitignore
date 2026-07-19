@@ -16,6 +16,11 @@ exp_*
 
 # Heavy artifacts that should never be committed.
 outputs/
+weights/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
 *.glb
 *.mp4
 *.pdf
