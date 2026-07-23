@@ -28,6 +28,12 @@ from utils.fire_sensors import FireSensorSuite, FireSensorConfig
 
 
 def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
+    if int(getattr(args, "risk_enabled", 0)):
+        raise RuntimeError(
+            "dynamic risk assessment is wired through main.py only; "
+            "main_vec.py currently refuses --risk_enabled=1 so a run cannot "
+            "be mislabeled without synchronized risk maps/evaluation"
+        )
     args.rank = rank
     seed = int(config.habitat.seed) + rank
     random.seed(seed)
@@ -400,6 +406,11 @@ def _split_scenes_across_processes(scenes, num_processes):
 
 def main():
     args = get_args()
+    if int(getattr(args, "risk_enabled", 0)):
+        raise RuntimeError(
+            "main_vec.py does not yet support RiskRuntime; run main.py for "
+            "dynamic risk assessment"
+        )
 
     log_dir = "{}/logs/{}/".format(args.dump_location, args.nav_mode)
     os.makedirs(log_dir, exist_ok=True)

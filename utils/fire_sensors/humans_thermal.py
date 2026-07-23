@@ -1,12 +1,11 @@
 """Project humanoid pedestrians into the current camera and paint them
-as warm blobs in the thermal image.
+as warm silhouettes in the thermal image.
 
 The thermal composer :func:`utils.fire_sensors.voxel_render.compose_thermal`
-sums three additive temperature fields (scene structure + voxel temp +
-flame). Human skin at ~34 C sits ~9 C above ambient (~25 C), which is
-plenty to show up in the auto-stretched IR image. This module builds
-a per-pixel ``human_excess_c`` field that can be handed to the composer
-or added to any temperature map to make humans light up.
+keeps physical apparent temperature separate from its dark structural
+display. This module adds a per-pixel ``human_excess_c`` field to that
+physical temperature and paints a high-contrast body signature so people
+remain identifiable even beside a much hotter fire.
 
 The projection uses the standard pinhole model and the current
 camera pose (world->camera) derived from the agent's depth-sensor
@@ -423,12 +422,10 @@ def add_humans_to_thermal_image(
     carves the true body outline out of the depth image (head / torso /
     limbs), so the overlay is a real silhouette rather than a blob.
 
-    The composed thermal image is auto-stretched with ``t_hi`` pinned at
-    600 °C when a fire is in view; a 9 °C human excess would collapse
-    into ~1.5% of the 8-bit range and disappear. Instead of trying to
-    fight the auto-stretch we blit the humans directly on top of
-    ``thermal_image_bgr`` with a **hot-body three-band ramp** that
-    matches how FLIR's high-gain-on-warm-objects mode looks: a
+    Flame temperature spans hundreds of degrees, so a physical 9 °C human
+    excess can still be visually subtle beside a fire. We therefore blit
+    humans directly on top of ``thermal_image_bgr`` with a **hot-body
+    three-band ramp** that matches a FLIR high-gain-on-warm-objects mode: a
     near-white core (skin over torso/face), a warm-yellow body, and a
     thin red edge from the camera's PSF around a hot target.
 

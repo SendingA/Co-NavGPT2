@@ -93,7 +93,7 @@ are tiny (~0.2–1 MB) and review-friendly.
 | `__init__.py`        | Package skeleton + roadmap docstring |
 | `hm3d_semantic.py`   | GLB parser (no trimesh / habitat-sim), HM3D-specific sRGB OETF colour decoder, per-instance triangle aggregation |
 | `scene_scan.py`      | Stage 1: `build_inventory(scene_id) -> dict` + `write_inventory()` CLI. Schema v2: `instances` (every HM3D object), `floors`, `structural.{wall,floor,ceiling}_voxel_path` |
-| `templates.py`       | Stage 2 building blocks: `INTENSITIES`, four templates (kitchen/bedroom/livingroom/multi_origin), helpers like `_pick_primary` / `_pick_secondary` (same-floor constraint) |
+| `templates.py`       | Stage 2 building blocks: `INTENSITIES`, exact semantic-backed `TEMPLATE_CATEGORY_GROUPS`, four templates (kitchen/bedroom/livingroom/multi_origin), and strict same-floor/category helpers |
 | `planner.py`         | Stage 2 driver: `plan_id = sha1(scene\|fire_type\|intensity\|seed\|tplV)[:12]`, `build_plan(inventory, ...) -> plan dict`, CLI |
 | `voxel_world.py`     | `VoxelWorld.from_aabb`, `attach_structural_masks`, `stamp_object_aabbs`, `kindle_ignition` (returns slice + falloff for sustained sources) |
 | `propagation.py`     | Stage 3: 6+1-step integrator (sub-stepped diffusion, buoyancy, ceiling jet, reaction, surface spread, decay, sustained-source pinning). Walls / floors / ceilings act as zero-flux barriers |
@@ -367,8 +367,9 @@ MATERIAL_TABLE = {
     "bed":         (0.75, 0.80),    # (flammability, smoke_yield)
     "couch":       (0.80, 0.85),
     "stove":       (0.85, 0.70),
+    "oven and stove": (0.85, 0.70),
     "ventilation hood": (0.20, 0.30),
-    ...                              # 30+ HM3D categories
+    ...                              # exact HM3D semantic.txt categories
     "_default":    (0.30, 0.30),
 }
 STRUCTURAL_CATEGORIES = {"wall", "floor", "ceiling", "door", "window", "stairs", ...}
@@ -381,7 +382,11 @@ INTENSITIES = {
     "medium": IntensityPreset(n_min=1, n_max=2, T_src=750, fuel=5.0,  duration=600),
     "severe": IntensityPreset(n_min=2, n_max=3, T_src=950, fuel=10.0, duration=900),
 }
-# Templates: kitchen_grease_fire, bedroom_textile, living_room_electric, multi_origin.
+# Template v2 category literals are exact semantic.txt spellings.
+# Primary and secondary selection are both category-restricted; there is
+# no arbitrary-object fallback.
+# Templates: kitchen_grease_fire, bedroom_textile, living_room_electric,
+# multi_origin.
 ```
 
 ```python

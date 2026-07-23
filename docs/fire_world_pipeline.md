@@ -9,6 +9,10 @@
 > All quantitative claims below were checked against the source. Where a
 > value is a tunable default it is stated as such and the owning symbol is
 > named, so the paper can cite the exact knob.
+>
+> The optional navigation-time risk layer (evaluator-only, privileged oracle,
+> and sensed belief modes; hazard-aware frontier/FMM planning; CHE outputs) is
+> documented separately in [`docs/risk_assessment.md`](risk_assessment.md).
 
 ---
 
@@ -78,6 +82,9 @@ Stage 5  FireSensorSuite ─► per-step multi-modal observations
       ▼
 Stage 6  main.py / main_vec.py / scripts/keyboard_teleop_fire.py
          (navigation loop, obs integration, dashboard)
+      │
+      └── optional risk assessment (main.py only)
+              ─► planner belief + independent GT metrics
 ```
 
 Every stage writes a serialisable, cacheable, deterministic artefact.
@@ -108,7 +115,11 @@ walls, floors, doors, …) into a fire-simulation-ready description
 4. **Material assignment.** Each category is mapped to
    `(flammability, smoke_yield) ∈ [0,1]²` via `MATERIAL_TABLE` in
    `scene_scan.py` (e.g. `bed=(0.75,0.80)`, `curtain=(0.85,0.75)`,
-   `stove=(0.85,0.70)`, `sink=(0.05,0.05)`). Categories in
+   `stove=(0.85,0.70)`, `oven and stove=(0.85,0.70)`,
+   `sink=(0.05,0.05)`). Every category named by a scenario template has
+   an explicit table entry using the exact lowercase spelling from
+   HM3D `semantic.txt`; detector-only aliases such as `tv_monitor` are
+   not accepted. Categories in
    `STRUCTURAL_CATEGORIES` (wall/floor/ceiling/door/window/column/…) are
    forced to `(0,0)` and tagged `structural=True` so they can never be
    selected as ignition sources.
@@ -153,14 +164,19 @@ and the same ignitions (C1).
 template picks a primary source by **flammability-weighted sampling**
 restricted to the relevant categories, then adds up to *N* secondary
 sources on the **same floor** using **distance- and flammability-weighted**
-sampling:
+sampling. Template v2 also restricts secondary sources to a declared
+scenario-specific category set. There is no arbitrary-object fallback:
+if a scene contains none of a template's exact semantic categories,
+planning fails explicitly instead of silently substituting an unrelated
+object. `TEMPLATE_CATEGORY_GROUPS` is regression-checked against all 36
+installed HM3D `semantic.txt` files and `MATERIAL_TABLE`.
 
-| Template | Primary categories (fallback) | Secondary radius |
+| Template | Primary semantic categories (fallback) | Secondary policy / radius |
 | --- | --- | --- |
-| `kitchen_grease_fire` | stove, ventilation hood (→ tv/chair/plant/sofa) | ≤ 3.5 m |
-| `bedroom_textile` | bed, sofa, couch (→ chair/armchair/plant) | ≤ 4.0 m |
-| `living_room_electric` | tv/monitor/computer (→ sofa/couch/chair) | ≤ 3.0 m |
-| `multi_origin` | two maximally-separated high-flammability nodes on one floor | — |
+| `kitchen_grease_fire` | `stove`, `stovetop`, `oven and stove`, `oven`, `cooker` (→ exact kitchen appliances/hoods) | declared kitchen appliances and nearby kitchen fuels, ≤ 3.5 m |
+| `bedroom_textile` | `bed`, `bed small`, `bedframe`, `pillow`, `blanket`, `bed sheet` (→ exact bedroom textiles/furniture) | declared bedroom textiles and nearby furniture, ≤ 4.0 m |
+| `living_room_electric` | `tv`, `led tv`, `wall tv`, `monitor`, `computer`, tower/laptop variants (→ exact AV electronics) | declared electronics and nearby living-room fuels, ≤ 3.0 m |
+| `multi_origin` | data-driven high-flammability inventory instances | two or more maximally-separated nodes on one floor |
 
 **Intensity presets** (`INTENSITIES`, three tiers):
 
@@ -188,7 +204,10 @@ sampling:
   gap between disjoint furniture),
 - `floor_thermal_attenuation = 0.20` (semi-transparent floors, NFPA 921
   §5.10 rationale), `flame_through_floors = 1`, floor-ignition and
-  fuel-abundance knobs.
+  fuel-abundance knobs,
+- `floor_spread_speed_m_per_s = 0.015` and
+  `floor_max_spread_radius_m = 2.0`: floor flame grows from each ignition
+  source at 1.5 cm/s and cannot extend beyond 2 m from that source.
 
 **Paper framing.** (a) deterministic hashing ⇒ full reproducibility;
 (b) templates map onto recognisable real-world fire classes;
@@ -238,12 +257,19 @@ stages are:
    box-blurred fuel neighbourhood), so a cushion-dense corner burns
    brighter than an isolated chair. Surface flame spread is a
    Laplacian (or Gaussian) operator masked by `𝟙(fuel>0 ∨ T>T_ignite)`.
-6. **Floor ignition** — floor voxels ignite either by **direct flame
+6. **Bounded floor ignition** — floor voxels can ignite by **direct flame
    contact** (a flame voxel within `floor_ignite_radius_cells`) or by
-   **sustained heating** (`T > floor_ignite_temp_c`); on ignition they
-   receive a synthetic fuel deposit `floor_fuel_value` and a per-voxel
-   randomised seed flame, so fire crawls across the floor between
-   furniture instead of requiring line-of-sight to a source.
+   **sustained heating** (`T > floor_ignite_temp_c`) only inside the union
+   of source-centred envelopes
+   `r(t) = min(floor_max_spread_radius_m, source_radius_m +
+   floor_spread_speed_m_per_s · source_age_s)`. On ignition they receive
+   synthetic fuel `floor_fuel_value` and a per-voxel randomised seed
+   flame. The default envelope grows at 0.015 m/s and stops at 2.0 m, so
+   the floor hazard evolves gradually around each source instead of
+   recursively filling the room. Floor flames outside the envelope are
+   also cleared after surface spread and flame-column projection. Smoke
+   transport is intentionally not radius-limited and can still fill the
+   room.
 7. **Radiative pre-heating** — flame voxels heat fuel within
    `radiative_radius_cells` by `radiative_gain_c·dt·(blurred flame)`,
    bridging air gaps so a kitchen fire can reach a chair ~0.6 m away in
@@ -381,11 +407,24 @@ build. Smoke-aware noise and dropout mirror the depth sensor.
 
 ### 5.5 Thermal IR — voxel temperature channel
 
-Voxel temperatures are tone-mapped through a FLIR-style auto-stretch with
-optional INFERNO colour blending (`thermal_color_blend`). LWIR
-(7.5–14 µm) is treated as smoke-invariant, which is the basis for the
-paper's claim that thermal is the *primary* fire-detection modality in
-dense smoke; a radiative halo is added around flame boundaries.
+Thermal sensing is **surface-dominant**. The final 28% of each clean-depth
+ray estimates the visible surface temperature; mean hot air along the
+whole ray contributes only `thermal_air_coupling = 0.025`. The old
+per-ray maximum was incorrect: one hot plume voxel could assign hundreds
+of degrees to an otherwise ambient wall and turn a near-fire frame
+uniformly yellow.
+
+The physical `thermal_temperature` map is ambient plus this localized
+surface/hot-air estimate, with visible flame raised toward 600 °C. RGB
+luminance is never added to the Celsius values. For display only, cold
+scene RGB is darkened to retain doors/furniture/room structure, while a
+fixed logarithmic heat response progressively blends warm surfaces and
+flames toward INFERNO (`thermal_color_blend`, default `0.85`). Fixed
+temperature anchors replace frame-percentile auto-stretch, so a fire
+cannot repaint the exposure of every ambient pixel. Projected humanoids
+then receive a physical warm-body contribution and an explicit
+high-contrast silhouette overlay. LWIR (7.5–14 µm) remains treated as
+smoke-invariant.
 
 ### 5.6 Dashboard
 
@@ -411,7 +450,7 @@ nav loop each frame:
 
 | Entry point | Purpose |
 | --- | --- |
-| `main.py` / `main_vec.py` | automated evaluation; reads the full flag set in `arguments.py` |
+| `main.py` / `main_vec.py` | FireWorld automated evaluation; complete dynamic risk assessment is currently wired only in `main.py` and `main_vec.py` rejects `--risk_enabled=1` |
 | `scripts/keyboard_teleop_fire.py` | manual WASD driving with a first-person view + suite dashboard, for qualitative inspection |
 
 ---
@@ -514,8 +553,12 @@ FireScene from the agent's viewpoint:
   depth is degraded by range- and density-dependent Gaussian noise,
   cm-level quantisation, density-proportional dropout, and a visibility
   cutoff at Jin's law `V = 2.3 / k`.
-* **Thermal IR.** Voxel temperatures are tone-mapped with a FLIR-style
-  auto-stretch; LWIR (7.5–14 µm) is treated as smoke-invariant.
+* **Thermal IR.** Visible/near-surface voxel temperature dominates each
+  clean-depth ray; line-of-sight hot air has weak coupling, preventing a
+  single plume voxel from saturating a background wall. Cold structure is
+  dark RGB context and localized heat uses a fixed logarithmic
+  grayscale/INFERNO response. LWIR (7.5–14 µm) is treated as
+  smoke-invariant.
 * **mmWave radar / LiDAR.** A 256×64 range–azimuth heatmap with
   sinc-shaped sidelobes, optionally converted to a 3D point cloud
   matching RadarHD's reported error; LiDAR stitches four yaw-rotated
@@ -572,7 +615,7 @@ perception (`--depth_use_clean`, `--use_thermal_perception`,
 | `utils/fire_sensors/config.py` | Stage 5: all sensor knobs (`FireSensorConfig` + nested) |
 | `utils/fire_sensors/suite.py` | Stage 5: `FireSensorSuite` orchestration |
 | `utils/fire_pipeline.py` | Stage 6: `step_fire_observation` glue |
-| `main.py` / `main_vec.py` | Stage 6: automated evaluation entry points |
+| `main.py` / `main_vec.py` | Stage 6 FireWorld evaluation; risk runtime only in `main.py` |
 | `scripts/keyboard_teleop_fire.py` | Stage 6: manual driving + dashboard |
 | `arguments.py` | all CLI flags |
 | `docs/main_usage.md` | flag + keyboard reference |

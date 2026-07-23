@@ -94,3 +94,25 @@ Output Example:
 }
 
 Please give the output based on the following input:\n"""
+
+
+_RISK_SAFETY_GUIDANCE = """
+
+### Dynamic hazard context
+- A structured hazard report accompanies the maps. It gives every frontier's mean/p95/max risk, route risk, confidence, severity, and `hard_blocked` flag.
+- Never select a frontier with `hard_blocked=true`.
+- Among feasible frontiers, prefer lower route/p95 risk and higher confidence while still considering distance, information gain, semantic relevance, and team redundancy.
+- A deterministic safety controller validates and may replace your selection after the response.
+"""
+
+
+def _risk_prompt(base_prompt):
+    marker = "Please give the output based on the following input:"
+    return base_prompt.replace(marker, _RISK_SAFETY_GUIDANCE + "\n" + marker)
+
+
+# Separate prompts preserve byte-for-byte risk-off behavior for existing GPT
+# experiments.  main.py selects these variants only when risk planning is on.
+risk_system_prompt = _risk_prompt(system_prompt)
+risk_obs_system_prompt = _risk_prompt(obs_system_prompt)
+risk_full_system_prompt = _risk_prompt(full_system_prompt)

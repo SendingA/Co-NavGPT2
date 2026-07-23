@@ -74,6 +74,8 @@ from .hm3d_semantic import (
 MATERIAL_TABLE: Dict[str, Tuple[float, float]] = {
     # furniture (cloth / wood / foam)
     "bed":         (0.75, 0.80),
+    "bed small":   (0.75, 0.80),
+    "bedframe":    (0.60, 0.55),
     "couch":       (0.80, 0.85),
     "sofa":        (0.80, 0.85),
     "armchair":    (0.75, 0.75),
@@ -91,33 +93,65 @@ MATERIAL_TABLE: Dict[str, Tuple[float, float]] = {
     "side table":  (0.55, 0.45),
     "coffee table": (0.55, 0.45),
     "drawer":      (0.55, 0.45),
+    "kitchen cabinet": (0.55, 0.50),
+    "kitchen lower cabinet": (0.55, 0.50),
+    "kitchen counter": (0.40, 0.35),
+    "media console": (0.55, 0.50),
     # textiles
     "curtain":     (0.85, 0.75),
+    "window curtain": (0.85, 0.75),
     "blanket":     (0.80, 0.60),
+    "throw blanket": (0.80, 0.60),
+    "bed sheet":   (0.85, 0.65),
     "pillow":      (0.80, 0.55),
     "rug":         (0.65, 0.55),
     "carpet":      (0.65, 0.55),
     "towel":       (0.75, 0.55),
     "clothes":     (0.75, 0.55),
+    "cloth":       (0.75, 0.55),
     "plush toy":   (0.70, 0.55),
     # paper / books
     "book":        (0.75, 0.50),
     "stack of papers": (0.85, 0.55),
     "magazine":    (0.85, 0.55),
+    "paper towel": (0.85, 0.60),
     # plants
     "potted plant": (0.50, 0.45),
     "plant":        (0.50, 0.45),
     # appliances / electronics
     "tv":          (0.40, 0.55),
-    "tv_monitor":  (0.40, 0.55),
+    "led tv":      (0.40, 0.55),
+    "wall tv":     (0.40, 0.55),
     "monitor":     (0.40, 0.55),
     "computer":    (0.50, 0.55),
+    "computer tower": (0.50, 0.55),
+    "pc tower":    (0.50, 0.55),
+    "laptop":      (0.50, 0.55),
+    "speaker":     (0.40, 0.50),
+    "stereo":      (0.40, 0.50),
+    "amplifier":   (0.40, 0.50),
+    "dvd player":  (0.40, 0.50),
+    "record player": (0.40, 0.50),
+    "radio":       (0.40, 0.50),
     "table lamp":  (0.40, 0.40),
     "lamp":        (0.40, 0.40),
     "chandelier":  (0.30, 0.30),
     "stove":       (0.85, 0.70),
+    "stovetop":    (0.85, 0.70),
+    "oven and stove": (0.85, 0.70),
+    "oven":        (0.70, 0.55),
+    "cooker":      (0.80, 0.65),
+    "microwave":   (0.40, 0.50),
+    "toaster":     (0.45, 0.50),
+    "kitchen appliance": (0.40, 0.50),
     "ventilation hood": (0.20, 0.30),
+    "range hood":  (0.20, 0.30),
+    "kitchen extractor": (0.20, 0.30),
+    "oven vent":   (0.20, 0.30),
     "refrigerator": (0.30, 0.40),
+    # combustible waste containers commonly found near cooking areas
+    "trashcan":    (0.45, 0.60),
+    "trash can":   (0.45, 0.60),
     # bathroom / utilities (porcelain / metal / water)
     "toilet":      (0.05, 0.05),
     "bathtub":     (0.05, 0.05),
@@ -129,10 +163,9 @@ MATERIAL_TABLE: Dict[str, Tuple[float, float]] = {
 }
 
 STRUCTURAL_CATEGORIES = {
-    "wall", "floor", "ceiling", "door", "door frame", "window",
-    "window frame", "stairs", "staircase", "balustrade", "handrail",
-    "handle", "column", "beam", "wall hanging decoration", "picture",
-    "moulding",
+    "wall", "floor", "ceiling",  "window"
+    , "stairs", "staircase", "balustrade", "handrail",
+    "handle", "column", "beam",  "moulding"
 }
 
 

@@ -1326,8 +1326,8 @@
       "structural": false,
       "is_goal": false,
       "goal_object_id": null,
-      "flammability": 0.3,
-      "smoke_yield": 0.3,
+      "flammability": 0.4,
+      "smoke_yield": 0.5,
       "floor_id": 0
     },
     {
@@ -1413,8 +1413,8 @@
       "structural": false,
       "is_goal": false,
       "goal_object_id": null,
-      "flammability": 0.3,
-      "smoke_yield": 0.3,
+      "flammability": 0.85,
+      "smoke_yield": 0.7,
       "floor_id": 0
     },
     {
@@ -1500,8 +1500,8 @@
       "structural": false,
       "is_goal": false,
       "goal_object_id": null,
-      "flammability": 0.3,
-      "smoke_yield": 0.3,
+      "flammability": 0.45,
+      "smoke_yield": 0.6,
       "floor_id": 0
     },
     {
@@ -6169,8 +6169,8 @@
       "structural": false,
       "is_goal": false,
       "goal_object_id": null,
-      "flammability": 0.3,
-      "smoke_yield": 0.3,
+      "flammability": 0.5,
+      "smoke_yield": 0.55,
       "floor_id": 0
     },
     {
@@ -6198,8 +6198,8 @@
       "structural": false,
       "is_goal": false,
       "goal_object_id": null,
-      "flammability": 0.3,
-      "smoke_yield": 0.3,
+      "flammability": 0.5,
+      "smoke_yield": 0.55,
       "floor_id": 0
     },
     {
@@ -9968,8 +9968,8 @@
       "structural": false,
       "is_goal": false,
       "goal_object_id": null,
-      "flammability": 0.3,
-      "smoke_yield": 0.3,
+      "flammability": 0.75,
+      "smoke_yield": 0.55,
       "floor_id": 0
     },
     {

@@ -17,14 +17,22 @@ Visual target navigation is a critical capability for autonomous robots operatin
 
 ## Installation
 
+For a complete, branch-specific setup covering the patched Habitat runtime,
+datasets, model assets, FireWorld generation, risk benchmarks, teleoperation,
+all configuration files, and all scripts, see
+[`docs/vulcan_reproduction.md`](docs/vulcan_reproduction.md).
+
 The project now targets **Habitat-Lab 0.3.3 + Habitat-Sim 0.3.3**.
-Multi-agent support and humanoid pedestrians are provided by upstream
-habitat-lab, so we no longer ship a patched fork of `habitat-lab`.
+Humanoid pedestrians are provided by Habitat 3. The classic `Sim-v0`
+multi-agent navigation contract and direct camera tilt actions require the
+small patch stored at `ref/habitat_lab_0.3.3_vulcan.patch`; stock Habitat-Lab
+0.3.3 alone is not sufficient. Follow the reproduction guide above when
+creating a new environment.
 
 - Set up the conda environment (Python 3.9 + CUDA 11.8 + PyTorch 2.0.1):
     ```
-    conda create -n co-nav python=3.9 cmake=3.14.0
-    conda activate co-nav
+    conda create -n co-nav3 python=3.9 cmake=3.14.0
+    conda activate co-nav3
     conda install pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 pytorch-cuda=11.8 -c pytorch -c nvidia
     ```
 
@@ -33,18 +41,21 @@ habitat-lab, so we no longer ship a patched fork of `habitat-lab`.
     conda install habitat-sim=0.3.3 withbullet -c conda-forge -c aihabitat
     ```
 
-- Install habitat-lab 0.3.3:
-    ```
-    git clone https://github.com/facebookresearch/habitat-lab.git
-    cd habitat-lab; git checkout tags/v0.3.3
-    pip install -e habitat-lab
-    ```
-
 - Clone this repository and install the remaining Python requirements:
     ```
-    git clone https://github.com/ybgdgh/Co-NavGPT2
+    git clone --branch vulcan https://github.com/SendingA/Co-NavGPT2.git
     cd Co-NavGPT2/
     pip install -r requirements.txt
+    ```
+
+- Install the patched Habitat-Lab 0.3.3 runtime from the repository root:
+    ```
+    PROJECT_ROOT="$PWD"
+    HABITAT_LAB_ROOT="/path/to/habitat-lab-0.3.3"
+    git clone https://github.com/facebookresearch/habitat-lab.git "$HABITAT_LAB_ROOT"
+    git -C "$HABITAT_LAB_ROOT" checkout 094d6be2f9d057e4781a68ae792132895fd4d3d0
+    git -C "$HABITAT_LAB_ROOT" apply "$PROJECT_ROOT/ref/habitat_lab_0.3.3_vulcan.patch"
+    pip install -e "$HABITAT_LAB_ROOT/habitat-lab"
     ```
 
 - (Optional) Download Habitat 3 humanoid assets so `--num_humans > 0`
@@ -130,7 +141,7 @@ You can find the code that how to use two Unitree Go2 robots to run the multi-ro
 
 1. Install [ROS2 foxy](https://docs.ros.org/en/foxy/Installation.html) environment in Python 3.8 (ROS2 humble should also work well).
 
-2. Install related dependencies in the same conda environment as simulation (**conda activate co-nav**):
+2. Install related dependencies in the same conda environment as simulation (**conda activate co-nav3**):
     ```
     sudo apt-get install ros-<ros_distro>-tf-transformations
     sudo pip3 install transforms3d
@@ -139,7 +150,7 @@ You can find the code that how to use two Unitree Go2 robots to run the multi-ro
 3. Config your real robots and sensors following this [instruction](https://github.com/ASIG-X/Go2Go). Each robot has its namespace with robot ID, such as `robot_0`, `robot_1`, ....
 4. Enable the conda environemnt
    ```
-   conda activate co-nav
+   conda activate co-nav3
    ```
 5. Start all your robots and sensros. Let two robots stand side by side, facing forword together, with an initial distance of approximately 1.5 meters between them. Then calculate the registration between two robots using G-ICP by running:
    ```
@@ -161,6 +172,3 @@ You can find the code that how to use two Unitree Go2 robots to run the multi-ro
    ```
 
    You can also add `-v 1` to enable the Open3D visualization UI to check the map.
-
-
-

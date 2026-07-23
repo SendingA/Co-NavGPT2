@@ -74,6 +74,7 @@ def step_fire_observation(
     args,
     walker: Optional[Any] = None,
     humans: Optional[Any] = None,
+    t_sim_s: Optional[float] = None,
 ) -> Optional[Dict[str, np.ndarray]]:
     """Run the sensor suite on one frame and patch ``observations`` in place.
 
@@ -104,9 +105,25 @@ def step_fire_observation(
     # into observations by default (opt out with --use_thermal_perception 0).
     use_thermal = bool(int(getattr(args, "use_thermal_perception", 1)))
 
-    rgb_clean = np.asarray(observations["rgb"])[..., :3]
-    if rgb_clean.dtype != np.uint8:
-        rgb_clean = np.clip(rgb_clean, 0, 255).astype(np.uint8)
+    # Keep the original Habitat frame alongside the smoke-patched RGB.  The
+    # teleop redraw loop may process the same observation dict many times while
+    # no movement key is pressed.  Without this cache, the first redraw writes
+    # ``rgb_smoke`` into observations["rgb"] and every later redraw mistakes
+    # that already-smoky image for a new clean camera frame.
+    #
+    # A real env.step()/sim.step() returns a fresh observation dict, so each
+    # simulator frame naturally captures a new clean RGB image.
+    if "_fire_clean_rgb" in observations:
+        rgb_clean = np.asarray(observations["_fire_clean_rgb"])
+    else:
+        rgb_clean = np.asarray(observations["rgb"])[..., :3]
+        if rgb_clean.dtype != np.uint8:
+            rgb_clean = np.clip(rgb_clean, 0, 255).astype(np.uint8)
+        else:
+            # Detach from the simulator-owned array before observations["rgb"]
+            # is patched below.
+            rgb_clean = rgb_clean.copy()
+        observations["_fire_clean_rgb"] = rgb_clean
 
     # ---- Pristine clean depth for the RGB/thermal ray-march -------------
     # The volumetric renderer terminates every camera ray at the depth
@@ -134,12 +151,17 @@ def step_fire_observation(
         observations["_fire_clean_depth_raw"] = depth_raw
     depth_m = _depth_to_metric(depth_raw, normalize, max_d)
 
-    sensors = suite.process(
-        rgb_clean, depth_m,
-        obs=observations,
-        agent_state=agent_state,
-        robot_step=int(robot_step),
-    )
+    process_kwargs = {
+        "obs": observations,
+        "agent_state": agent_state,
+        "robot_step": int(robot_step),
+    }
+    # Risk-enabled multi-agent runs sample one shared FireClock value per
+    # outer navigation step.  Omitting this argument preserves the historical
+    # per-call clock behavior for all existing callers and test doubles.
+    if t_sim_s is not None:
+        process_kwargs["t_sim_s"] = float(t_sim_s)
+    sensors = suite.process(rgb_clean, depth_m, **process_kwargs)
 
     # ---- Add humanoid thermal signatures ---------------------------------
     if humans is None and walker is not None:

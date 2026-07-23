@@ -1,0 +1,701 @@
+diff --git a/habitat-lab/habitat/config/benchmark/nav/objectnav/objectnav_hm3d.yaml b/habitat-lab/habitat/config/benchmark/nav/objectnav/objectnav_hm3d.yaml
+index de74b73..5a5b218 100644
+--- a/habitat-lab/habitat/config/benchmark/nav/objectnav/objectnav_hm3d.yaml
++++ b/habitat-lab/habitat/config/benchmark/nav/objectnav/objectnav_hm3d.yaml
+@@ -12,6 +12,9 @@ habitat:
+     max_episode_steps: 500
+   simulator:
+     turn_angle: 30
++    # Keep direct Habitat-Sim look actions aligned with the ObjectNav task
++    # action configuration and legacy Co-Nav camera-angle bookkeeping.
++    tilt_angle: 30
+     agents:
+       main_agent:
+         sim_sensors:
+diff --git a/habitat-lab/habitat/config/default_structured_configs.py b/habitat-lab/habitat/config/default_structured_configs.py
+index d462a71..562eb77 100644
+--- a/habitat-lab/habitat/config/default_structured_configs.py
++++ b/habitat-lab/habitat/config/default_structured_configs.py
+@@ -1728,6 +1728,9 @@ class SimulatorConfig(HabitatBaseConfig):
+     type: str = "Sim-v0"
+     forward_step_size: float = 0.25  # in metres
+     turn_angle: int = 10  # angle to rotate left or right in degrees
++    # Kept at simulator level for Habitat v2-style joint list actions, which
++    # dispatch look_up/look_down directly to Habitat-Sim.
++    tilt_angle: int = 15
+     create_renderer: bool = False
+     requires_textures: bool = True
+     # Sleep options
+@@ -1768,7 +1771,10 @@ class SimulatorConfig(HabitatBaseConfig):
+     # Rearrange agent grasping
+     hold_thresh: float = 0.15
+     grasp_impulse: float = 10000.0
+-    # we assume agent(s) to be set explicitly
++    # We assume agent(s) to be set explicitly.  For classic navigation with
++    # type="Sim-v0", multiple entries create multiple Habitat-Sim agents and
++    # use the v2-compatible list observation/joint-action API.  RearrangeSim
++    # keeps its native articulated-agent behavior.
+     agents: Dict[str, AgentConfig] = MISSING
+     # agents_order specifies the order in which the agents
+     # are stored on the habitat-sim side.
+diff --git a/habitat-lab/habitat/core/embodied_task.py b/habitat-lab/habitat/core/embodied_task.py
+index db399e4..e77d65b 100644
+--- a/habitat-lab/habitat/core/embodied_task.py
++++ b/habitat-lab/habitat/core/embodied_task.py
+@@ -293,14 +293,26 @@ class EmbodiedTask:
+ 
+     def reset(self, episode: Episode):
+         observations = self._sim.reset()
+-        observations.update(
+-            self.sensor_suite.get_observations(
+-                observations=observations,
+-                episode=episode,
+-                task=self,
+-                should_time=True,
++        if isinstance(observations, list):
++            for agent_id, agent_observations in enumerate(observations):
++                agent_observations.update(
++                    self.sensor_suite.get_observations(
++                        observations=agent_observations,
++                        episode=episode,
++                        task=self,
++                        agent_id=agent_id,
++                        should_time=True,
++                    )
++                )
++        else:
++            observations.update(
++                self.sensor_suite.get_observations(
++                    observations=observations,
++                    episode=episode,
++                    task=self,
++                    should_time=True,
++                )
+             )
+-        )
+ 
+         for action_instance in self.actions.values():
+             action_instance.reset(episode=episode, task=self)
+@@ -330,6 +342,74 @@ class EmbodiedTask:
+         action_name = action["action"]
+         if "action_args" not in action or action["action_args"] is None:
+             action["action_args"] = {}
++
++        # Habitat v2 compatibility: a list of discrete actions means "apply
++        # one classic navigation action per simulator agent".  A tuple keeps
++        # Habitat 3.3's existing sequential task-action semantics below.
++        if isinstance(action_name, list):
++            expected_agents = getattr(
++                getattr(self._sim, "habitat_config", None),
++                "agents_order",
++                None,
++            )
++            if (
++                expected_agents is not None
++                and len(action_name) != len(expected_agents)
++            ):
++                raise ValueError(
++                    "Expected one action per navigation agent: "
++                    f"received {len(action_name)}, "
++                    f"expected {len(expected_agents)}."
++                )
++            if any(
++                not isinstance(agent_action, (int, np.integer))
++                or int(agent_action) < 0
++                for agent_action in action_name
++            ):
++                raise TypeError(
++                    "Multi-agent navigation actions must be non-negative "
++                    "integer action ids."
++                )
++
++            if (
++                any(int(a) == 0 for a in action_name)
++                and "stop" in self.actions
++            ):
++                self.actions["stop"].step(
++                    **action["action_args"], task=self
++                )
++                observations = self._sim.step(None)
++            else:
++                observations = self._sim.step(action_name)
++
++            # A single-agent simulator returns a bare dict.  Normalize it to
++            # a list so the loop below iterates per agent.
++            if not isinstance(observations, list):
++                observations = [observations]
++            if len(observations) != len(action_name):
++                raise ValueError(
++                    "Simulator returned observations for "
++                    f"{len(observations)} agents after "
++                    f"{len(action_name)} actions."
++                )
++
++            for agent_id, agent_observations in enumerate(observations):
++                agent_observations.update(
++                    self.sensor_suite.get_observations(
++                        observations=agent_observations,
++                        episode=episode,
++                        action=action,
++                        task=self,
++                        agent_id=agent_id,
++                        should_time=True,
++                    )
++                )
++
++            self._is_episode_active = self._check_episode_is_active(
++                observations=observations[0], action=action, episode=episode
++            )
++            return observations
++
+         observations: Optional[Any] = None
+         if isinstance(action_name, tuple):  # there are multiple actions
+             for a_name in action_name:
+diff --git a/habitat-lab/habitat/core/env.py b/habitat-lab/habitat/core/env.py
+index 77c54df..e4fa5f3 100644
+--- a/habitat-lab/habitat/core/env.py
++++ b/habitat-lab/habitat/core/env.py
+@@ -281,7 +281,7 @@ class Env:
+             self.episode_iterator.step_taken()
+ 
+     def step(
+-        self, action: Union[int, str, Dict[str, Any]], **kwargs
++        self, action: Union[int, str, List[int], Dict[str, Any]], **kwargs
+     ) -> Observations:
+         r"""Perform an action in the environment and return observations.
+ 
+@@ -304,7 +304,7 @@ class Env:
+         ), "Episode was changed either by setting current_episode or changing the episodes list. Call reset before stepping the environment again."
+ 
+         # Support simpler interface as well
+-        if isinstance(action, (str, int, np.integer)):
++        if isinstance(action, (str, int, np.integer, list)):
+             action = {"action": action}
+ 
+         observations = self.task.step(
+diff --git a/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py b/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
+index 1421615..ebfbec6 100644
+--- a/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
++++ b/habitat-lab/habitat/sims/habitat_simulator/habitat_simulator.py
+@@ -4,6 +4,7 @@
+ # This source code is licensed under the MIT license found in the
+ # LICENSE file in the root directory of this source tree.
+ 
++from collections.abc import Mapping
+ from typing import (
+     TYPE_CHECKING,
+     Any,
+@@ -279,9 +280,46 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+ 
+     def __init__(self, config: "SimulatorConfig") -> None:
+         self.habitat_config = config
++        # RearrangeSim also uses multiple entries in ``agents``, but those
++        # entries describe articulated agents that share one Habitat-Sim
++        # camera agent.  The v2 list-of-observations contract applies only to
++        # classic navigation through Sim-v0.
++        self._is_multi_agent_navigation = (
++            config.type == "Sim-v0" and len(config.agents_order) > 1
++        )
++        if (
++            self._is_multi_agent_navigation
++            and config.renderer.enable_batch_renderer
++        ):
++            raise ValueError(
++                "Sim-v0 multi-agent navigation does not support the batch "
++                "renderer."
++            )
+ 
+         sim_sensors = []
+-        for agent_config in self.habitat_config.agents.values():
++        if self._is_multi_agent_navigation:
++            # Match the v2 API: every classic navigation agent has the same
++            # unprefixed sensor keys and reset/step returns one dict per agent.
++            reference_sensors = get_agent_config(
++                self.habitat_config
++            ).sim_sensors
++            for agent_name in self.habitat_config.agents_order:
++                if (
++                    self.habitat_config.agents[agent_name].sim_sensors
++                    != reference_sensors
++                ):
++                    raise ValueError(
++                        "Sim-v0 multi-agent navigation requires identical "
++                        "sim_sensors for every agent because observations "
++                        "use shared, unprefixed sensor keys."
++                    )
++            agent_configs = [get_agent_config(self.habitat_config)]
++        else:
++            # Preserve Habitat 3.3 behavior, including RearrangeSim's
++            # prefixed sensors from all articulated-agent configs.
++            agent_configs = self.habitat_config.agents.values()
++
++        for agent_config in agent_configs:
+             for sensor_cfg in agent_config.sim_sensors.values():
+                 sensor_type = registry.get_sensor(sensor_cfg.type)
+ 
+@@ -306,7 +344,7 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+                 ].action_space
+             )
+         )
+-        self._prev_sim_obs: Optional[Observations] = None
++        self._prev_sim_obs: Optional[Any] = None
+ 
+     def create_sim_config(
+         self, _sensor_suite: SensorSuite
+@@ -328,38 +366,13 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+         )
+         sim_config.scene_id = self.habitat_config.scene
+         lab_agent_config = get_agent_config(self.habitat_config)
+-        agent_config = habitat_sim.AgentConfiguration()
+-        overwrite_config(
+-            config_from=lab_agent_config,
+-            config_to=agent_config,
+-            # These keys are only used by Hab-Lab
+-            ignore_keys={
+-                "is_set_start_state",
+-                # This is the Sensor Config. Unpacked below
+-                "sensors",
+-                "sim_sensors",
+-                "start_position",
+-                "start_rotation",
+-                "articulated_agent_urdf",
+-                "articulated_agent_type",
+-                "joint_start_noise",
+-                "joint_that_can_control",
+-                "motion_data_path",
+-                "ik_arm_urdf",
+-                "grasp_managers",
+-                "max_climb",
+-                "max_slope",
+-                "joint_start_override",
+-                "auto_update_sensor_transform",
+-            },
+-        )
+ 
+         # configure default navmesh parameters to match the configured agent
+         if self.habitat_config.default_agent_navmesh:
+             sim_config.navmesh_settings = habitat_sim.nav.NavMeshSettings()
+             sim_config.navmesh_settings.set_defaults()
+-            sim_config.navmesh_settings.agent_radius = agent_config.radius
+-            sim_config.navmesh_settings.agent_height = agent_config.height
++            sim_config.navmesh_settings.agent_radius = lab_agent_config.radius
++            sim_config.navmesh_settings.agent_height = lab_agent_config.height
+             sim_config.navmesh_settings.agent_max_climb = (
+                 lab_agent_config.max_climb
+             )
+@@ -404,9 +417,7 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+             )
+             sensor_specifications.append(sim_sensor_cfg)
+ 
+-        agent_config.sensor_specifications = sensor_specifications
+-
+-        agent_config.action_space = {
++        action_space = {
+             0: habitat_sim.ActionSpec("stop"),
+             1: habitat_sim.ActionSpec(
+                 "move_forward",
+@@ -427,8 +438,69 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+                 ),
+             ),
+         }
++        if self.habitat_config.type == "Sim-v0":
++            # Joint list actions bypass NavigationTask's LookUp/LookDown
++            # actions, so matching Habitat-Sim controls must be registered on
++            # every classic cylinder agent.
++            action_space.update(
++                {
++                    4: habitat_sim.ActionSpec(
++                        "look_up",
++                        habitat_sim.ActuationSpec(
++                            amount=self.habitat_config.tilt_angle
++                        ),
++                    ),
++                    5: habitat_sim.ActionSpec(
++                        "look_down",
++                        habitat_sim.ActuationSpec(
++                            amount=self.habitat_config.tilt_angle
++                        ),
++                    ),
++                }
++            )
++
++        agents_config = []
++        if self._is_multi_agent_navigation:
++            agent_names = self.habitat_config.agents_order
++        else:
++            agent_names = [
++                self.habitat_config.agents_order[
++                    self.habitat_config.default_agent_id
++                ]
++            ]
++
++        for agent_name in agent_names:
++            lab_agent_config = self.habitat_config.agents[agent_name]
++            agent_config = habitat_sim.AgentConfiguration()
++            overwrite_config(
++                config_from=lab_agent_config,
++                config_to=agent_config,
++                # These keys are only used by Hab-Lab
++                ignore_keys={
++                    "is_set_start_state",
++                    # This is the Sensor Config. Unpacked below
++                    "sensors",
++                    "sim_sensors",
++                    "start_position",
++                    "start_rotation",
++                    "articulated_agent_urdf",
++                    "articulated_agent_type",
++                    "joint_start_noise",
++                    "joint_that_can_control",
++                    "motion_data_path",
++                    "ik_arm_urdf",
++                    "grasp_managers",
++                    "max_climb",
++                    "max_slope",
++                    "joint_start_override",
++                    "auto_update_sensor_transform",
++                },
++            )
++            agent_config.sensor_specifications = sensor_specifications
++            agent_config.action_space = action_space
++            agents_config.append(agent_config)
+ 
+-        output = habitat_sim.Configuration(sim_config, [agent_config])
++        output = habitat_sim.Configuration(sim_config, agents_config)
+         output.enable_batch_renderer = (
+             self.habitat_config.renderer.enable_batch_renderer
+         )
+@@ -459,6 +531,13 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+         return is_updated
+ 
+     def reset(self) -> Observations:
++        if self._is_multi_agent_navigation:
++            agent_ids = list(range(len(self.habitat_config.agents_order)))
++            sim_obs = super().reset(agent_ids=agent_ids)
++            if self._update_agents_state():
++                sim_obs = self.get_sensor_observations(agent_ids=agent_ids)
++            return self._multi_agent_observations(sim_obs)
++
+         sim_obs = super().reset()
+         if self._update_agents_state():
+             sim_obs = self.get_sensor_observations()
+@@ -470,13 +549,94 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+         else:
+             return self._sensor_suite.get_observations(sim_obs)
+ 
++    def _multi_agent_observations(self, sim_obs: Any) -> List[Observations]:
++        """Normalize Habitat-Sim's id-keyed observations to v2 list order."""
++        agent_ids = list(range(len(self.habitat_config.agents_order)))
++        raw_observations: Dict[int, Any]
++
++        if isinstance(sim_obs, Mapping) and all(
++            agent_id in sim_obs for agent_id in agent_ids
++        ):
++            raw_observations = {
++                agent_id: sim_obs[agent_id] for agent_id in agent_ids
++            }
++        elif isinstance(sim_obs, list):
++            if len(sim_obs) != len(agent_ids):
++                raise ValueError(
++                    "Habitat-Sim returned observations for "
++                    f"{len(sim_obs)} agents, expected {len(agent_ids)}."
++                )
++            raw_observations = dict(enumerate(sim_obs))
++        else:
++            fetched = self.get_sensor_observations(agent_ids=agent_ids)
++            assert isinstance(fetched, Mapping)
++            raw_observations = {
++                agent_id: fetched[agent_id] for agent_id in agent_ids
++            }
++            if isinstance(sim_obs, Mapping) and all(
++                isinstance(agent_id, int) and agent_id in agent_ids
++                for agent_id in sim_obs
++            ):
++                for agent_id, agent_observations in sim_obs.items():
++                    if not isinstance(agent_observations, Mapping):
++                        raise TypeError(
++                            "Agent-id observation mappings must contain "
++                            "observation dictionaries."
++                        )
++                    raw_observations[agent_id].update(agent_observations)
++            # A scalar Habitat-Sim action returns only the default agent's
++            # dict.  Retain its collision flag while filling other agents.
++            elif isinstance(sim_obs, Mapping):
++                raw_observations[
++                    self.habitat_config.default_agent_id
++                ].update(sim_obs)
++
++        self._prev_sim_obs = raw_observations
++        return [
++            self._sensor_suite.get_observations(raw_observations[agent_id])
++            for agent_id in agent_ids
++        ]
++
+     def step(
+-        self, action: Optional[Union[str, np.ndarray, int]]
++        self,
++        action: Optional[
++            Union[str, np.ndarray, int, List[int], Dict[int, int]]
++        ],
+     ) -> Observations:
+         if action is None:
+-            sim_obs = self.get_sensor_observations()
++            if self._is_multi_agent_navigation:
++                agent_ids = list(
++                    range(len(self.habitat_config.agents_order))
++                )
++                sim_obs = self.get_sensor_observations(agent_ids=agent_ids)
++            else:
++                sim_obs = self.get_sensor_observations()
++        elif self._is_multi_agent_navigation:
++            if isinstance(action, list):
++                num_agents = len(self.habitat_config.agents_order)
++                if len(action) != num_agents:
++                    raise ValueError(
++                        "Expected one action per navigation agent: "
++                        f"received {len(action)}, expected {num_agents}."
++                    )
++                action = {
++                    agent_id: int(agent_action)
++                    for agent_id, agent_action in enumerate(action)
++                }
++            sim_obs = super().step(action)
+         else:
++            # The v2 caller always passes a list, including with one agent.
++            if isinstance(action, list):
++                if len(action) != 1:
++                    raise ValueError(
++                        "A single-agent simulator expects exactly one action."
++                    )
++                action = int(action[0])
+             sim_obs = super().step(action)
++
++        if self._is_multi_agent_navigation:
++            return self._multi_agent_observations(sim_obs)
++
+         self._prev_sim_obs = sim_obs
+         if self.config.enable_batch_renderer:
+             self.add_keyframe_to_observations(sim_obs)
+@@ -721,7 +881,21 @@ class HabitatSim(habitat_sim.Simulator, Simulator):
+             will _always_ be false after :meth:`reset` or :meth:`get_observations_at` as neither of those
+             result in an action (step) being taken.
+         """
+-        return self._prev_sim_obs.get("collided", False)
++        if isinstance(self._prev_sim_obs, Mapping):
++            if "collided" in self._prev_sim_obs:
++                return bool(self._prev_sim_obs["collided"])
++            return any(
++                bool(agent_obs.get("collided", False))
++                for agent_obs in self._prev_sim_obs.values()
++                if isinstance(agent_obs, Mapping)
++            )
++        if isinstance(self._prev_sim_obs, list):
++            return any(
++                bool(agent_obs.get("collided", False))
++                for agent_obs in self._prev_sim_obs
++                if isinstance(agent_obs, Mapping)
++            )
++        return False
+ 
+     def add_keyframe_to_observations(self, observations):
+         r"""Adds an item to observations that contains the latest gfx-replay keyframe.
+diff --git a/habitat-lab/habitat/tasks/nav/nav.py b/habitat-lab/habitat/tasks/nav/nav.py
+index d953d77..98b5e3e 100644
+--- a/habitat-lab/habitat/tasks/nav/nav.py
++++ b/habitat-lab/habitat/tasks/nav/nav.py
+@@ -61,6 +61,19 @@ if TYPE_CHECKING:
+ MAP_THICKNESS_SCALAR: int = 128
+ 
+ 
++def _rotation_with_yaw_offset(
++    rotation: Sequence[float], yaw_offset: float
++) -> List[float]:
++    """Apply a world-space yaw offset to an ``[x, y, z, w]`` quaternion."""
++    base_rotation = quaternion_from_coeff([float(value) for value in rotation])
++    half_angle = yaw_offset / 2.0
++    yaw_rotation = quaternion.quaternion(
++        np.cos(half_angle), 0.0, np.sin(half_angle), 0.0
++    )
++    result = yaw_rotation * base_rotation
++    return [float(value) for value in result.imag] + [float(result.real)]
++
++
+ @attr.s(auto_attribs=True, kw_only=True)
+ class NavigationGoal:
+     r"""Base class for a goal specification hierarchy."""
+@@ -314,7 +327,9 @@ class IntegratedPointGoalGPSAndCompassSensor(PointGoalSensor):
+     def get_observation(
+         self, observations, episode, *args: Any, **kwargs: Any
+     ):
+-        agent_state = self._sim.get_agent_state()
++        agent_state = self._sim.get_agent_state(
++            agent_id=kwargs.get("agent_id", 0)
++        )
+         agent_position = agent_state.position
+         rotation_world_agent = agent_state.rotation
+         goal_position = np.array(episode.goals[0].position, dtype=np.float32)
+@@ -361,7 +376,9 @@ class HeadingSensor(Sensor):
+     def get_observation(
+         self, observations, episode, *args: Any, **kwargs: Any
+     ):
+-        agent_state = self._sim.get_agent_state()
++        agent_state = self._sim.get_agent_state(
++            agent_id=kwargs.get("agent_id", 0)
++        )
+         rotation_world_agent = agent_state.rotation
+ 
+         if isinstance(rotation_world_agent, quaternion.quaternion):
+@@ -383,7 +400,9 @@ class EpisodicCompassSensor(HeadingSensor):
+     def get_observation(
+         self, observations, episode, *args: Any, **kwargs: Any
+     ):
+-        agent_state = self._sim.get_agent_state()
++        agent_state = self._sim.get_agent_state(
++            agent_id=kwargs.get("agent_id", 0)
++        )
+         rotation_world_agent = agent_state.rotation
+         rotation_world_start = quaternion_from_coeff(episode.start_rotation)
+ 
+@@ -435,7 +454,9 @@ class EpisodicGPSSensor(Sensor):
+     def get_observation(
+         self, observations, episode, *args: Any, **kwargs: Any
+     ):
+-        agent_state = self._sim.get_agent_state()
++        agent_state = self._sim.get_agent_state(
++            agent_id=kwargs.get("agent_id", 0)
++        )
+ 
+         origin = np.array(episode.start_position, dtype=np.float32)
+         rotation_world_start = quaternion_from_coeff(episode.start_rotation)
+@@ -944,21 +965,37 @@ class DistanceToGoal(Measure):
+     def __init__(
+         self, sim: Simulator, config: "DictConfig", *args: Any, **kwargs: Any
+     ):
+-        self._previous_position: Optional[Tuple[float, float, float]] = None
+         self._sim = sim
+         self._config = config
+         self._episode_view_points: Optional[
+             List[Tuple[float, float, float]]
+         ] = None
+         self._distance_to = self._config.distance_to
++        self._previous_positions: List[
++            Optional[Tuple[float, float, float]]
++        ] = []
++        self._agent_distances: List[Optional[float]] = []
++        self._reset_agent_cache()
+ 
+         super().__init__(**kwargs)
+ 
++    def _distance_agent_count(self) -> int:
++        sim_config = self._sim.habitat_config
++        if getattr(sim_config, "type", None) == "Sim-v0":
++            return max(1, len(sim_config.agents_order))
++        # Keep Habitat 3.3's articulated-agent measurements unchanged.
++        return 1
++
++    def _reset_agent_cache(self) -> None:
++        agent_count = self._distance_agent_count()
++        self._previous_positions = [None] * agent_count
++        self._agent_distances = [None] * agent_count
++
+     def _get_uuid(self, *args: Any, **kwargs: Any) -> str:
+         return self.cls_uuid
+ 
+     def reset_metric(self, episode, *args: Any, **kwargs: Any):
+-        self._previous_position = None
++        self._reset_agent_cache()
+         if self._distance_to == "VIEW_POINTS":
+             self._episode_view_points = [
+                 view_point.agent_state.position
+@@ -970,11 +1007,17 @@ class DistanceToGoal(Measure):
+     def update_metric(
+         self, episode: NavigationEpisode, *args: Any, **kwargs: Any
+     ):
+-        current_position = self._sim.get_agent_state().position
++        for agent_id in range(len(self._previous_positions)):
++            current_position = self._sim.get_agent_state(
++                agent_id=agent_id
++            ).position
++            if self._previous_positions[agent_id] is not None and np.allclose(
++                self._previous_positions[agent_id],
++                current_position,
++                atol=1e-4,
++            ):
++                continue
+ 
+-        if self._previous_position is None or not np.allclose(
+-            self._previous_position, current_position, atol=1e-4
+-        ):
+             if self._distance_to == "POINT":
+                 distance_to_target = self._sim.geodesic_distance(
+                     current_position,
+@@ -987,15 +1030,21 @@ class DistanceToGoal(Measure):
+                 )
+             else:
+                 logger.error(
+-                    f"Non valid distance_to parameter was provided: {self._distance_to }"
++                    "Non valid distance_to parameter was provided: "
++                    f"{self._distance_to}"
+                 )
++                continue
+ 
+-            self._previous_position = (
+-                current_position[0],
+-                current_position[1],
+-                current_position[2],
+-            )
+-            self._metric = distance_to_target
++            self._previous_positions[agent_id] = tuple(current_position)
++            self._agent_distances[agent_id] = distance_to_target
++
++        valid_distances = [
++            distance
++            for distance in self._agent_distances
++            if distance is not None
++        ]
++        if valid_distances:
++            self._metric = min(valid_distances)
+ 
+ 
+ @registry.register_measure
+@@ -1329,12 +1378,33 @@ class NavigationTask(EmbodiedTask):
+                 episode.start_position is not None
+                 and episode.start_rotation is not None
+             ):
+-                agent_config = get_agent_config(config.simulator)
+-                agent_config.start_position = episode.start_position
+-                agent_config.start_rotation = [
+-                    float(k) for k in episode.start_rotation
+-                ]
+-                agent_config.is_set_start_state = True
++                sim_config = config.simulator
++                if (
++                    sim_config.type == "Sim-v0"
++                    and len(sim_config.agents_order) > 1
++                ):
++                    for agent_id, agent_name in enumerate(
++                        sim_config.agents_order
++                    ):
++                        agent_config = sim_config.agents[agent_name]
++                        agent_config.start_position = [
++                            float(value)
++                            for value in episode.start_position
++                        ]
++                        agent_config.start_rotation = (
++                            _rotation_with_yaw_offset(
++                                episode.start_rotation,
++                                np.pi * agent_id,
++                            )
++                        )
++                        agent_config.is_set_start_state = True
++                else:
++                    agent_config = get_agent_config(sim_config)
++                    agent_config.start_position = episode.start_position
++                    agent_config.start_rotation = [
++                        float(k) for k in episode.start_rotation
++                    ]
++                    agent_config.is_set_start_state = True
+         return config
+ 
+     def _check_episode_is_active(self, *args: Any, **kwargs: Any) -> bool:
+

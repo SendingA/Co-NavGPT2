@@ -138,6 +138,7 @@ class FireSensorSuite:
         *,
         agent_state=None,
         robot_step: int = 0,
+        t_sim_s: Optional[float] = None,
     ) -> Dict[str, np.ndarray]:
         # ---- Voxel RGB + Thermal (single ray-march produces both) ----
         # A bound FireScene is the normal path. With no scene the voxel
@@ -147,6 +148,7 @@ class FireSensorSuite:
             self.voxel_sensor.process(
                 rgb, depth_m,
                 agent_state=agent_state, robot_step=int(robot_step),
+                t_sim_s=t_sim_s,
             )
             if self.voxel_sensor is not None
             else self._passthrough_rgb_thermal(rgb, depth_m, robot_step)
@@ -204,6 +206,7 @@ class FireSensorSuite:
             # raw inputs
             "rgb": rgb,
             "depth_clean": depth_m.astype(np.float32),
+            "sensor_max_depth_m": float(self.cfg.max_depth_m),
             # smoke-affected
             "rgb_smoke": rgb_out["image"],
             "depth_smoke": d_smoke.astype(np.float32),

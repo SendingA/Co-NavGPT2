@@ -1,5 +1,11 @@
 # Habitat 0.2.1 → 0.3.3 Migration
 
+> Historical migration note. For a clean installation, use
+> [`vulcan_reproduction.md`](vulcan_reproduction.md). The final VULCAN runtime
+> requires `ref/habitat_lab_0.3.3_vulcan.patch`; stock Habitat-Lab 0.3.3 does
+> not provide the exact classic `Sim-v0` multi-agent and LOOK action contract
+> used by this repository.
+
 > Date: 2026-07-04
 > Scope: whole repository
 > Target: **habitat-sim 0.3.3 + habitat-lab 0.3.3**, Python 3.9

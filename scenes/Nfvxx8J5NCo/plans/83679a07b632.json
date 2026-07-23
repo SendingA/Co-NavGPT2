@@ -60,18 +60,18 @@
       "smoke_yield": 0.75
     },
     {
-      "object_id": 50,
-      "category": "kitchen_grease",
+      "object_id": 48,
+      "category": "oven and stove",
       "position": [
-        -9.556696891784668,
-        0.9045398235321045,
-        1.3791985511779785
+        -9.112802505493164,
+        0.6304082274436951,
+        2.9618029594421387
       ],
       "ignite_time_s": 120.0,
-      "source_radius_m": 0.4,
+      "source_radius_m": 0.535,
       "source_temp_c": 870.0,
-      "fuel_kg": 8.0,
-      "smoke_yield": 0.85
+      "fuel_kg": 12.8,
+      "smoke_yield": 0.7
     },
     {
       "object_id": 340,

@@ -64,13 +64,10 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 
 | 参数 | 类型/默认 | 说明 |
 | --- | --- | --- |
-| `--num_humans` | int, 配置值 | 普通配置中覆盖随机行人数量；启用 `static_person_goal` 后，静态人物数量由当前 episode 的 person ObjectGoals 决定 |
+| `--num_humans` | int, 配置值 | 覆盖 `conav.num_humans`；普通配置默认 0，静态 person benchmark 默认 1 |
 | `--robot_models_enabled` | int, `0` | `1` 在 nav agent 上叠一层可见的 Habitat 3 机器人 URDF |
 | `--robot_profiles` | str | 逗号分隔的机器人 profile：`fetch,fetch_no_wheels,fetch_suction,spot,stretch`；多机器人按顺序循环 |
 | `--robot_urdfs` | str | 可选：直接指定 URDF 路径覆盖 profile 默认路径 |
-
-固定人物作为原生 ObjectNav category 的数据生成、viewpoint 覆盖约束与运行方式见
-[`docs/static_person_objectnav.md`](static_person_objectnav.md)。
 | `--dataset_path` | str | 覆盖 `habitat.dataset.data_path`（比如切到 `objectnav_hm3d_v2`） |
 | `--scenes_dir` | str | 覆盖 `habitat.dataset.scenes_dir` |
 | `--scene_dataset` | str | 覆盖 `habitat.simulator.scene_dataset` 指向的 `scene_dataset_config.json` |
@@ -244,10 +241,10 @@ python main.py --num_agents 2 --nav_mode co_ut \
 
 
 python main.py \
-    --num_agents 2 --nav_mode co_ut \
+    --num_agents 2 \
     --fire_world 1 --fire_world_plan_id 83679a07b632 \
     --fire_speedup 2.0 \
-    --fire_show_window 1
+    --print_images 1
 
 
 
@@ -302,9 +299,34 @@ python main.py --num_agents 2 --num_humans 2 \
     --fire_show_window 1
 
 
-python main.py --num_agents 2 --num_humans 2 \
+python main.py --task_config person_objectnav_hm3d.yaml \
     --fire_world 1 --fire_world_plan_id 83679a07b632 \
     --print_images 1
 
 
+python main.py \
+  --task_config person_objectnav_hm3d.yaml \
+  --num_agents 2
+
 ```
+
+### 风险评估 benchmark
+
+推荐使用 sensed 风险图和 step clock：
+
+```bash
+python main.py --num_agents 2 --nav_mode co_ut \
+    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_clock_mode step \
+    --risk_enabled 1 --risk_source sensed \
+    --risk_smoke_source appearance_depth
+```
+
+连续风险只融合温度与烟雾，默认
+`H_phys = 0.60 * temperature_risk + 0.40 * smoke_risk`。火焰不再使用连续
+权重，但仍作为硬不可通行区域，并向外膨胀 `0.45m`，因此不要再传
+`--risk_weight_flame`。
+
+主 benchmark 只报告 Habitat `Success`、Habitat `SPL`、`risk/safe_success`
+和 `risk/che`。完整定义、实验边界和 Habitat 原生 metric 的迁移说明见
+[Dynamic Risk Assessment](risk_assessment.md)。

@@ -1,5 +1,5 @@
 from collections import defaultdict
-from typing import Dict
+from typing import Dict, List, Optional
 import os
 import logging
 import time
@@ -44,6 +44,124 @@ def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
 
 
+def _grid_line_cells(start, goal, shape) -> List[List[int]]:
+    """Return a clipped one-cell-wide route between two grid positions."""
+    canvas = np.zeros(shape, dtype=np.uint8)
+    start_row = int(np.clip(round(float(start[0])), 0, shape[0] - 1))
+    start_col = int(np.clip(round(float(start[1])), 0, shape[1] - 1))
+    goal_row = int(np.clip(round(float(goal[0])), 0, shape[0] - 1))
+    goal_col = int(np.clip(round(float(goal[1])), 0, shape[1] - 1))
+    cv2.line(
+        canvas,
+        (start_col, start_row),
+        (goal_col, goal_row),
+        color=1,
+        thickness=1,
+    )
+    return np.argwhere(canvas > 0).astype(int).tolist()
+
+
+def _low_risk_fallback_goal(
+    agent_cell,
+    obstacle_map,
+    explored_map,
+    planning_risk,
+    hard_unsafe,
+) -> List[int]:
+    """Select a nearby explored, navigable low-risk safety waypoint."""
+    shape = np.asarray(planning_risk).shape
+    obstacle = cv2.dilate(
+        (np.asarray(obstacle_map) > 0.5).astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+    ).astype(bool)
+    explored = np.asarray(explored_map) > 0.0
+    hard = np.asarray(hard_unsafe, dtype=bool)
+    start = np.asarray(agent_cell[:2], dtype=np.float64)
+    start_cell = (
+        int(np.clip(round(start[0]), 0, shape[0] - 1)),
+        int(np.clip(round(start[1]), 0, shape[1] - 1)),
+    )
+    free = ~obstacle & ~hard
+    if not free.any():
+        return [
+            start_cell[0],
+            start_cell[1],
+        ]
+
+    seed = start_cell
+    if not free[seed]:
+        free_cells = np.argwhere(free)
+        seed = tuple(free_cells[int(np.argmin(
+            np.linalg.norm(free_cells - start[None, :], axis=1)
+        ))])
+    _, labels = cv2.connectedComponents(free.astype(np.uint8), connectivity=8)
+    reachable = labels == labels[seed]
+    candidates = explored & reachable
+    if not candidates.any():
+        candidates = reachable
+
+    cells = np.argwhere(candidates)
+    distances = np.linalg.norm(cells - start[None, :], axis=1)
+    # Prefer an actual waypoint over the current cell when one is available.
+    nontrivial = distances >= 4.0
+    if nontrivial.any():
+        cells = cells[nontrivial]
+        distances = distances[nontrivial]
+    risk = np.asarray(planning_risk, dtype=np.float32)[cells[:, 0], cells[:, 1]]
+    distance_scale = max(float(distances.max()), 1.0)
+    score = risk + 0.08 * distances / distance_scale
+    best = cells[int(np.argmin(score))]
+    return [int(best[0]), int(best[1])]
+
+
+def _risk_utility_weights(nav_mode: str, args):
+    """Map legacy frontier policies onto a common safety-aware utility."""
+    from utils.risk.frontier import UtilityWeights
+
+    risk_weight = float(getattr(args, "risk_frontier_weight", 2.0))
+    if nav_mode == "nearest":
+        return UtilityWeights(
+            information_gain=0.0,
+            distance=1.0,
+            risk=risk_weight,
+            uncertainty=0.5,
+            redundancy=0.0,
+        )
+    if nav_mode == "co_ut":
+        return UtilityWeights(
+            information_gain=0.15,
+            distance=0.8,
+            risk=risk_weight,
+            uncertainty=0.5,
+            redundancy=1.0,
+        )
+    if nav_mode == "fill":
+        return UtilityWeights(
+            information_gain=1.0,
+            distance=0.25,
+            risk=risk_weight,
+            uncertainty=0.5,
+            redundancy=0.75,
+        )
+    return UtilityWeights(
+        information_gain=1.0,
+        distance=0.35,
+        risk=risk_weight,
+        uncertainty=0.5,
+        redundancy=0.75,
+    )
+
+
+def _flatten_risk_metrics(summary: Dict) -> Dict[str, float]:
+    """Expose only the two primary risk benchmark metrics."""
+    flat: Dict[str, float] = {
+        "risk/che": float(summary.get("team", {}).get("CHE", 0.0)),
+    }
+    if "safe_success" in summary:
+        flat["risk/safe_success"] = float(summary["safe_success"])
+    return flat
+
+
 def _find_scene_for_fire_plan(args):
     """Return the scene short-id that owns args.fire_world_plan_id.
 
@@ -85,6 +203,27 @@ def main(args, send_queue, receive_queue):
     config = load_config(args)
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
+
+    from utils.risk.config import RiskConfig
+    risk_config = RiskConfig.from_namespace(args)
+    if risk_config.enabled and not int(getattr(args, "fire_world", 0)):
+        raise ValueError(
+            "--risk_enabled=1 requires --fire_world=1 and a valid "
+            "--fire_world_plan_id"
+        )
+    if risk_config.enabled:
+        print(
+            "[risk] enabled "
+            f"planner_source={risk_config.effective_source} "
+            f"clock={args.fire_clock_mode} "
+            f"weights=(T={risk_config.weights.temperature:.2f}, "
+            f"S={risk_config.weights.smoke:.2f})"
+        )
+        if str(args.fire_clock_mode) != "step":
+            print(
+                "[risk] wallclock mode is a latency stress test; use "
+                "--fire_clock_mode step for reproducible benchmark tables"
+            )
 
     # Optional 360° LIDAR — installs 4 yaw-rotated depth sensors on every
     # navigation agent so utils.fire_sensors can stitch a 360° cloud.
@@ -149,6 +288,7 @@ def main(args, send_queue, receive_queue):
     fire_scene = None
     fire_suites = None
     fire_viewers = None
+    risk_runtime = None
     from utils.fire_pipeline import step_fire_observation  # noqa: E402
 
     def _build_fire_scene_and_suites():
@@ -256,6 +396,32 @@ def main(args, send_queue, receive_queue):
         for i in range(num_agents):
             agent[i].reset(observations[i], agent_state)
             actions.append(0)
+        # A detected object makes the frontier branch intentionally skip on
+        # the first frame.  Keep a valid placeholder so act() never indexes an
+        # empty/stale list; object-goal navigation replaces it internally.
+        goal_points = [
+            [int(a.map_size // 2), int(a.map_size // 2)] for a in agent
+        ]
+
+        risk_runtime = None
+        risk_frontier_reports = []
+        risk_frontier_computed_step = None
+        if risk_config.enabled:
+            from utils.risk.runtime import RiskRuntime
+            risk_runtime = RiskRuntime(
+                fire_scene=fire_scene,
+                reference_agent=agent[0],
+                args=args,
+                episode_id=count_episodes,
+            )
+            initial_risk_t = risk_runtime.shared_time(agent[0].l_step)
+            initial_agent_states = [
+                env.sim.get_agent_state(i) for i in range(num_agents)
+            ]
+            risk_runtime.prime_exposure(
+                initial_risk_t,
+                initial_agent_states,
+            )
 
         count_step = 0
         point_sum = o3d.geometry.PointCloud()
@@ -266,15 +432,26 @@ def main(args, send_queue, receive_queue):
             pose_pred = []
             point_sum.clear()
             found_goal = False
+            agent_states = [
+                env.sim.get_agent_state(i) for i in range(num_agents)
+            ]
+            fire_sensor_outputs: List[Optional[dict]] = [None] * num_agents
+            shared_risk_t = (
+                risk_runtime.shared_time(agent[0].l_step)
+                if risk_runtime is not None
+                else None
+            )
+            navigation_step = int(agent[0].l_step)
+            risk_layers = None
+            planning_risk = None
 
             # ---------- Fire-scene perception ----------
             if fire_suites is not None:
                 for i in range(num_agents):
-                    a_state = env.sim.get_agent_state(i)
                     sensors = step_fire_observation(
                         observations=observations[i],
                         suite=fire_suites[i],
-                        agent_state=a_state,
+                        agent_state=agent_states[i],
                         robot_step=int(getattr(agent[i], "l_step", 0)),
                         config=config,
                         args=args,
@@ -283,7 +460,9 @@ def main(args, send_queue, receive_queue):
                         # known goal position into thermal created an oracle
                         # person:0.95 box even when a wall occluded the model.
                         walker=(None if static_person_goal else walker),
+                        t_sim_s=shared_risk_t,
                     )
+                    fire_sensor_outputs[i] = sensors
                     if sensors is not None:
                         fire_suites[i].save_step(
                             sensors,
@@ -296,8 +475,7 @@ def main(args, send_queue, receive_queue):
 
             # ---------- Per-agent mapping ----------
             for i in range(num_agents):
-                agent_state = env.sim.get_agent_state(i)
-                agent[i].mapping(observations[i], agent_state)
+                agent[i].mapping(observations[i], agent_states[i])
                 point_sum += agent[i].point_sum
                 visited_vis.append(agent[i].visited_vis)
                 pose_pred.append([
@@ -312,6 +490,26 @@ def main(args, send_queue, receive_queue):
                 point_sum, agent[0].camera_position[1]
             )
 
+            # ---------- Dynamic shared risk assessment ----------
+            if risk_runtime is not None:
+                if risk_runtime.source == "sensed":
+                    risk_runtime.update_sensed(
+                        timestamp_s=shared_risk_t,
+                        sensor_outputs=fire_sensor_outputs,
+                        agent_states=agent_states,
+                        camera_k=agent[0].camera_K,
+                    )
+                risk_layers, planning_risk = risk_runtime.planner_state(
+                    shared_risk_t
+                )
+                for i in range(num_agents):
+                    agent[i].set_risk_map(
+                        planning_risk,
+                        risk_layers.hard_unsafe,
+                        risk_alpha=float(args.risk_alpha),
+                        enabled=risk_runtime.planning_enabled,
+                    )
+
             # ---------- Global planner (frontier assignment) ----------
             if (agent[0].l_step % args.num_local_steps == args.num_local_steps - 1
                     or agent[0].l_step == 0) and not found_goal:
@@ -320,7 +518,132 @@ def main(args, send_queue, receive_queue):
                     map_process.Frontier_Det(threshold_point=8)
                 )
 
-                if args.nav_mode == "gpt":
+                if (
+                    risk_runtime is not None
+                    and risk_runtime.planning_enabled
+                    and risk_layers is not None
+                    and planning_risk is not None
+                ):
+                    from utils.risk.frontier import (
+                        SeverityThresholds,
+                        assign_frontiers,
+                        build_frontier_risk_reports,
+                        guard_frontier_assignments,
+                        risk_context_payload,
+                    )
+
+                    risk_agent_cells = [
+                        [int(a.current_grid_pose[0]), int(a.current_grid_pose[1])]
+                        for a in agent
+                    ]
+                    route_cells = []
+                    for frontier in target_point_list:
+                        nearest_cell = min(
+                            risk_agent_cells,
+                            key=lambda cell: np.linalg.norm(
+                                np.asarray(cell) - np.asarray(frontier)
+                            ),
+                        )
+                        route_cells.append(
+                            _grid_line_cells(
+                                nearest_cell, frontier, planning_risk.shape
+                            )
+                        )
+
+                    danger_threshold = float(risk_config.danger_threshold)
+                    safe_threshold = min(0.25, danger_threshold)
+                    moderate_threshold = max(
+                        safe_threshold, danger_threshold
+                    )
+                    hard_threshold = float(np.clip(
+                        args.risk_hard_frontier_threshold,
+                        moderate_threshold,
+                        1.0,
+                    ))
+                    thresholds = SeverityThresholds(
+                        safe_max=safe_threshold,
+                        moderate_max=moderate_threshold,
+                        hard_max=hard_threshold,
+                    )
+                    risk_frontier_reports = build_frontier_risk_reports(
+                        target_edge_map,
+                        planning_risk,
+                        risk_layers.confidence,
+                        hard_unsafe_map=risk_layers.hard_unsafe,
+                        frontier_points=target_point_list,
+                        route_cells=route_cells,
+                        route_is_proxy=True,
+                        thresholds=thresholds,
+                    )
+                    risk_frontier_computed_step = navigation_step
+                    deterministic_assignments = assign_frontiers(
+                        risk_agent_cells,
+                        risk_frontier_reports,
+                        information_gain=target_score,
+                        weights=_risk_utility_weights(args.nav_mode, args),
+                        hard_risk_threshold=hard_threshold,
+                        allow_shared=(
+                            args.nav_mode != "co_ut"
+                            or len(risk_frontier_reports) < num_agents
+                        ),
+                        redundancy_radius_cells=(
+                            1.0 / (float(args.map_resolution) / 100.0)
+                        ),
+                    )
+
+                    final_assignments = deterministic_assignments
+                    if (
+                        args.nav_mode == "gpt"
+                        and len(target_point_list) > 0
+                        and agent[0].l_step > 0
+                    ):
+                        candidate_map_list = chat_utils.get_all_candidate_maps(
+                            target_edge_map, top_view_map, pose_pred
+                        )
+                        message = chat_utils.message_prepare(
+                            system_prompt.risk_system_prompt,
+                            candidate_map_list,
+                            agent[0].goal_name,
+                            risk_context=risk_context_payload(
+                                risk_frontier_reports
+                            ),
+                        )
+                        raw_assignments = chat_utils.chat_with_gpt4v(message)
+                        guarded = guard_frontier_assignments(
+                            raw_assignments,
+                            risk_frontier_reports,
+                            fallback_assignments=deterministic_assignments,
+                            expected_robot_ids=range(num_agents),
+                            hard_risk_threshold=hard_threshold,
+                        )
+                        final_assignments = guarded.assignments
+                        if guarded.rejected:
+                            logging.warning(
+                                "risk guard replaced VLM frontier choices: %s",
+                                guarded.rejected,
+                            )
+
+                    for i in range(num_agents):
+                        frontier_id = final_assignments.get(i)
+                        if (
+                            frontier_id is not None
+                            and 0 <= int(frontier_id) < len(target_point_list)
+                        ):
+                            goal_points.append(
+                                target_point_list[int(frontier_id)]
+                            )
+                        else:
+                            goal_points.append(
+                                _low_risk_fallback_goal(
+                                    risk_agent_cells[i],
+                                    obstacle_map,
+                                    explored_map,
+                                    planning_risk,
+                                    risk_layers.hard_unsafe,
+                                )
+                            )
+
+                elif args.nav_mode == "gpt":
                     if len(target_point_list) > 0 and agent[0].l_step > 0:
                         candidate_map_list = chat_utils.get_all_candidate_maps(
                             target_edge_map, top_view_map, pose_pred
@@ -437,6 +760,23 @@ def main(args, send_queue, receive_queue):
                             )
                             goal_points.append([int(act_rand[0]), int(act_rand[1])])
 
+            if risk_runtime is not None:
+                risk_runtime.save_step(
+                    step=navigation_step,
+                    timestamp_s=shared_risk_t,
+                    layers=risk_layers,
+                    planning_risk=planning_risk,
+                    obstacle_map=obstacle_map,
+                    agent_cells=[a.current_grid_pose for a in agent],
+                    frontier_points=[
+                        report.point for report in risk_frontier_reports
+                    ],
+                    frontier_reports=[
+                        report.to_dict() for report in risk_frontier_reports
+                    ],
+                    frontier_computed_step=risk_frontier_computed_step,
+                )
+
             # ---------- Per-agent policy step ----------
             goal_map = []
             for i in range(num_agents):
@@ -466,6 +806,20 @@ def main(args, send_queue, receive_queue):
             if not isinstance(observations, list):
                 observations = [observations]
 
+            if risk_runtime is not None:
+                post_step_states = [
+                    env.sim.get_agent_state(i) for i in range(num_agents)
+                ]
+                post_step_t = risk_runtime.shared_time(agent[0].l_step)
+                risk_runtime.record_exposure(
+                    post_step_t,
+                    post_step_states,
+                    step=navigation_step,
+                    planner_statuses=[
+                        getattr(a, "_risk_escape_reason", None) for a in agent
+                    ],
+                )
+
             step_end = time.time()
 
         count_episodes += 1
@@ -481,7 +835,23 @@ def main(args, send_queue, receive_queue):
             "FPS {},".format(int(count_step / max(1.0, log_end - log_start))),
         ]) + "\n"
 
-        metrics = env.get_metrics()
+        metrics = dict(env.get_metrics())
+        if risk_runtime is not None:
+            risk_summary = risk_runtime.summary(
+                habitat_success=float(metrics.get("success", 0.0))
+            )
+            risk_runtime.save_summary(risk_summary)
+            metrics.update(_flatten_risk_metrics(risk_summary))
+            risk_team = risk_summary["team"]
+            log += (
+                "[risk] "
+                f"source={risk_summary['planner_source']}  "
+                f"CHE={risk_team['CHE']:.3f}  "
+                f"critical={risk_team['critical_violations']}  "
+                f"safe_refusal={risk_team['safe_refusal_steps']}  "
+                f"escape={risk_team['emergency_escape_steps']}  "
+                f"safe_success={risk_summary['safe_success']:.0f}\n"
+            )
 
         # --- Debug: show why an episode was marked failed.
         try:

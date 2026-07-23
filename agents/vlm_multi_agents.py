@@ -159,6 +159,12 @@ class VLM_Agent():
         self.similarity_obj_map = pu.roll_array(self.similarity_obj_map, shift, axis)
         self.similarity_img_map = pu.roll_array(self.similarity_img_map, shift, axis)
         self.collision_map = pu.roll_array(self.collision_map, shift, axis)
+        if getattr(self, 'risk_map', None) is not None:
+            self.risk_map = pu.roll_array(self.risk_map, shift, axis)
+        if getattr(self, 'hard_unsafe_mask', None) is not None:
+            self.hard_unsafe_mask = pu.roll_array(
+                self.hard_unsafe_mask, shift, axis
+            ).astype(bool)
         
         self.last_grid_pose = pu.roll_pose(self.last_grid_pose, shift, axis)
         self.origins_grid = pu.roll_pose(self.origins_grid, shift, axis)
@@ -194,13 +200,78 @@ class VLM_Agent():
         self.found_goal = False
         self.last_action = 0
         self.last_goal = None
+
+        # The shared risk map is supplied by the orchestration layer after
+        # every dynamic fire-field update.  Keeping this state on the agent
+        # makes replanning explicit while leaving legacy runs unchanged.
+        self.risk_map = None
+        self.hard_unsafe_mask = None
+        self.risk_alpha = max(
+            0.0, float(getattr(self.args, 'risk_alpha', 0.0))
+        )
+        # The CLI gate alone must never switch planners: only an orchestrator
+        # that has supplied a synchronized, map-aligned risk state may enable
+        # this path through set_risk_map(..., enabled=True).
+        self.risk_navigation_enabled = False
+        self._risk_escape_active = False
+        self._risk_escape_reason = None
         
         self.upstair_flag = False
         self.downstair_flag = False
         self.another_floor = False
         self.clean_diff = True
 
-     
+    def set_risk_map(self, risk_map=None, hard_unsafe_mask=None,
+                     risk_alpha=None, enabled=None):
+        """Set the latest map-aligned risk state used by ``act``.
+
+        Arrays must use the same grid frame as ``obstacle_map``.  They are
+        copied because the shared mapper can update its buffers concurrently
+        with agent planning.
+        """
+        expected_shape = (self.local_w, self.local_h)
+        if risk_map is not None:
+            risk_map = np.asarray(risk_map, dtype=np.float32)
+            if risk_map.shape != expected_shape:
+                raise ValueError(
+                    "risk_map shape {} does not match agent map {}".format(
+                        risk_map.shape, expected_shape
+                    )
+                )
+            risk_map = np.nan_to_num(
+                risk_map, nan=0.0, posinf=1.0, neginf=0.0
+            )
+            self.risk_map = np.clip(risk_map, 0.0, 1.0).copy()
+        else:
+            self.risk_map = None
+
+        if hard_unsafe_mask is not None:
+            hard_unsafe_mask = np.asarray(hard_unsafe_mask, dtype=bool)
+            if hard_unsafe_mask.shape != expected_shape:
+                raise ValueError(
+                    "hard_unsafe_mask shape {} does not match agent map {}".format(
+                        hard_unsafe_mask.shape, expected_shape
+                    )
+                )
+            self.hard_unsafe_mask = hard_unsafe_mask.copy()
+        else:
+            self.hard_unsafe_mask = None
+
+        if risk_alpha is not None:
+            self.risk_alpha = max(0.0, float(risk_alpha))
+        if enabled is not None:
+            self.risk_navigation_enabled = bool(enabled)
+        elif not hasattr(self.args, 'risk_enabled'):
+            self.risk_navigation_enabled = (
+                self.risk_map is not None or self.hard_unsafe_mask is not None
+            )
+
+        self._risk_escape_active = False
+        self._risk_escape_reason = None
+
+    def clear_risk_map(self):
+        """Disable risk navigation and restore the historical planner path."""
+        self.set_risk_map(enabled=False)
 
 
     def mapping(self, observations, agent_state):
@@ -364,15 +435,19 @@ class VLM_Agent():
         habitat_final_pose = self.habitat_goal_pose.astype(np.float32)
 
         plan_path = []
-        plan_path = self.search_navigable_path(
-            habitat_final_pose
-        )
+        if not getattr(self, 'risk_navigation_enabled', False):
+            # Preserve the historical Habitat shortest-path-first behavior
+            # exactly when risk assessment is disabled.
+            plan_path = self.search_navigable_path(
+                habitat_final_pose
+            )
   
         if len(plan_path) > 1:
             plan_path = np.dot(R_habitat2open3d.T, (np.array(plan_path) - self.init_agent_position).T).T
             action = self.greedy_follower_act(plan_path)
         else:
-            # plan a path by fmm
+            # Risk-enabled runs always enter FMM here, so a Habitat navmesh
+            # shortest path cannot silently bypass the dynamic risk field.
             self.stg, self.stop, plan_path = self._get_stg(self.obstacle_map, self.current_grid_pose, np.copy(self.goal_map))
             plan_path = np.array(plan_path) 
             plan_path_x = (plan_path[:, 0] - int(self.origins_grid[0])) * self.args.map_resolution / 100.0
@@ -521,7 +596,12 @@ class VLM_Agent():
         if self.is_running == False:
             return None
         
-        if self.stop and self.found_goal:
+        if self.stop and getattr(self, '_risk_escape_active', False):
+            # Reaching an emergency waypoint is not task completion. Rotate
+            # once so the next observation/act cycle can restore the original
+            # goal without emitting Habitat STOP inside a hazard episode.
+            action = 2
+        elif self.stop and self.found_goal:
             action = 0
         else:
             (stg_x, stg_y) = self.stg
@@ -569,6 +649,10 @@ class VLM_Agent():
     def _get_stg(self, grid, start, goal):
         """Get short-term goal"""
 
+        risk_navigation_enabled = bool(
+            getattr(self, 'risk_navigation_enabled', False)
+        )
+
         [gx1, gx2, gy1, gy2] = [0, self.local_w, 0, self.local_h] 
 
         x1, y1, = 0, 0
@@ -597,7 +681,33 @@ class VLM_Agent():
         traversible = add_boundary(traversible)
         goal = add_boundary(goal, value=0)
         traversible[goal==1] = 1
-        planner = FMMPlanner(traversible)
+        if risk_navigation_enabled:
+            # The padding exists for local-window arithmetic only; it is not
+            # a navigable corridor around the outside of the scene map.
+            traversible[[0, -1], :] = 0
+            traversible[:, [0, -1]] = 0
+
+        risk_map = None
+        hard_unsafe_mask = None
+        if risk_navigation_enabled:
+            if getattr(self, 'risk_map', None) is not None:
+                risk_map = add_boundary(
+                    self.risk_map[x1:x2, y1:y2], value=0
+                )
+            if getattr(self, 'hard_unsafe_mask', None) is not None:
+                hard_unsafe_mask = add_boundary(
+                    self.hard_unsafe_mask[x1:x2, y1:y2], value=0
+                ).astype(bool)
+
+        planner = FMMPlanner(
+            traversible,
+            risk_map=risk_map,
+            risk_alpha=(
+                getattr(self, 'risk_alpha', 0.0)
+                if risk_navigation_enabled else 0.0
+            ),
+            hard_unsafe_mask=hard_unsafe_mask,
+        )
         if ("plant" in self.goal_name or "tv" in self.goal_name) and \
             np.sum(self.goal_map) > 1:
             selem = skimage.morphology.disk(15)
@@ -606,18 +716,99 @@ class VLM_Agent():
         goal = skimage.morphology.binary_dilation(
             goal, selem) != True
         goal = 1 - goal * 1.
+
+        self._risk_escape_active = False
+        self._risk_escape_reason = None
+        coordinate_offset = 0
+        if risk_navigation_enabled:
+            # Risk arrays follow the padded map exactly. The legacy branch
+            # historically omitted this +1 offset, so correct it only for the
+            # new planner to avoid changing risk-disabled trajectories.
+            coordinate_offset = 1
+
+            safe_goal = (
+                (goal == 1)
+                & (planner.traversible > 0)
+                & ~planner.hard_unsafe_mask
+            )
+            if np.any(safe_goal):
+                goal = safe_goal.astype(np.float32)
+            else:
+                # If every dilated goal cell is unsafe, stop at the closest
+                # safe navigable cell instead of opening a path through fire.
+                # It is a safety waypoint, not permission to emit task STOP.
+                self._risk_escape_active = True
+                self._risk_escape_reason = 'unsafe_goal'
+                candidates = (
+                    (planner.traversible > 0)
+                    & ~planner.hard_unsafe_mask
+                )
+                if np.any(candidates):
+                    distance_to_goal = cv2.distanceTransform(
+                        (goal != 1).astype(np.uint8),
+                        cv2.DIST_L2,
+                        3,
+                    )
+                    candidate_cost = np.where(
+                        candidates, distance_to_goal, np.inf
+                    )
+                    nearest_safe = np.unravel_index(
+                        np.argmin(candidate_cost), candidate_cost.shape
+                    )
+                    goal = np.zeros_like(goal)
+                    goal[nearest_safe] = 1
+                else:
+                    # No safe traversible cell exists. Hold the current cell
+                    # as a non-terminal safety waypoint; ffm_act rotates and
+                    # requests another observation instead of crossing the
+                    # forbidden target or emitting Habitat STOP.
+                    held = (
+                        int(np.clip(start[0] + 1, 0, goal.shape[0] - 1)),
+                        int(np.clip(start[1] + 1, 0, goal.shape[1] - 1)),
+                    )
+                    goal = np.zeros_like(goal)
+                    goal[held] = 1
+                    self._risk_escape_reason = 'trapped'
+
+            padded_start = [
+                start[0] - x1 + coordinate_offset,
+                start[1] - y1 + coordinate_offset,
+            ]
+            escape_goal = planner.prepare_emergency_escape(padded_start)
+            if escape_goal is not None:
+                self._risk_escape_active = True
+                if np.any(escape_goal):
+                    goal = escape_goal
+                    self._risk_escape_reason = 'emergency_escape'
+                else:
+                    goal = np.zeros_like(goal)
+                    goal[tuple(map(int, padded_start))] = 1
+                    self._risk_escape_reason = 'trapped'
+
         planner.set_multi_goal(goal)
 
         path = []
         path.append(start)
 
-        state = [start[0] - x1, start[1] - y1]
+        state = [
+            start[0] - x1 + coordinate_offset,
+            start[1] - y1 + coordinate_offset,
+        ]
         stg_x, stg_y, replan, stop_f = planner.get_short_term_goal(state)
-        stg_x, stg_y = stg_x + x1 , stg_y + y1 
+        stg_x, stg_y = (
+            stg_x + x1 - coordinate_offset,
+            stg_y + y1 - coordinate_offset,
+        )
         for i in range(10):
-            state = [stg_x - x1 , stg_y - y1 ]
+            state = [
+                stg_x - x1 + coordinate_offset,
+                stg_y - y1 + coordinate_offset,
+            ]
             stg_x, stg_y, replan, stop = planner.get_short_term_goal(state)
-            stg_x, stg_y = stg_x + x1 , stg_y + y1 
+            stg_x, stg_y = (
+                stg_x + x1 - coordinate_offset,
+                stg_y + y1 - coordinate_offset,
+            )
             
             path.append([stg_x, stg_y])
             if stop:

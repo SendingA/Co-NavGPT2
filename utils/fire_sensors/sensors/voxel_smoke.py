@@ -66,6 +66,8 @@ class VoxelSmokeSensor(BaseSensor):
             flame_glow_gain=float(v.flame_glow_gain),
             flame_smoke_passthrough=float(v.flame_smoke_passthrough),
             thermal_color_blend=float(v.thermal_color_blend),
+            thermal_surface_start=float(v.thermal_surface_start),
+            thermal_air_coupling=float(v.thermal_air_coupling),
             render_scale=float(v.render_scale),
             flame_noise_strength=float(getattr(v, "flame_noise_strength", 0.55)),
             flame_edge_break=float(getattr(v, "flame_edge_break", 0.8)),
@@ -82,6 +84,7 @@ class VoxelSmokeSensor(BaseSensor):
         *,
         agent_state=None,
         robot_step: int = 0,
+        t_sim_s: Optional[float] = None,
     ) -> Dict[str, np.ndarray]:
         """Render the current fire scene from the agent's camera pose.
 
@@ -109,7 +112,11 @@ class VoxelSmokeSensor(BaseSensor):
         # Use the unified ``t_sim()`` API so the renderer reads the
         # wallclock when the scene was built with mode="wallclock"
         # (default). Step mode falls back to the legacy mapping.
-        t_sim = scene.t_sim(int(robot_step))
+        t_sim = (
+            scene.t_sim(int(robot_step))
+            if t_sim_s is None
+            else float(t_sim_s)
+        )
         flame_field, smoke_field, temp_field = scene.query(t_sim)
 
         out = volumetric_composite(

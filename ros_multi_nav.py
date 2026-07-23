@@ -96,6 +96,11 @@ def remove_robot_points_cell(point_sum, robot_position, radius = 0.5):
 
 class FspNode(Node):
     def __init__(self, args, send_queue, receive_queue):
+        if int(getattr(args, "risk_enabled", 0)):
+            raise RuntimeError(
+                "ROS risk mode requires a real-sensor risk provider and is "
+                "not implemented by this FireWorld benchmark runtime"
+            )
         super().__init__('fsp_node')
 
         self.args = args
@@ -377,6 +382,12 @@ def main():
 
     # 2. 获取用户自定义参数
     args = get_args()
+    if int(getattr(args, "risk_enabled", 0)):
+        raise RuntimeError(
+            "ros_multi_nav.py has no FireWorld ground-truth evaluator or "
+            "synchronized shared RiskRuntime; --risk_enabled=1 is refused "
+            "instead of silently changing the local planner"
+        )
     args.map_height_cm = 30
 
     # 3. 建立进程 / 线程间通信队列

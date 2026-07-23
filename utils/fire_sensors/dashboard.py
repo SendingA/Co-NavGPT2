@@ -9,14 +9,14 @@ Layout (2 rows x 4 cols)::
     +-----------+-----------+-----------+-----------+
 
 There is also an optional auxiliary panel for the radar range-elevation
-heatmap that gets stacked under the grid when ``include_aux`` is True.
+heatmap below the grid and an optional multi-line status HUD above it.
 
 Returns a single uint8 BGR image suitable for ``cv2.imwrite`` or
 ``cv2.imshow``.
 """
 from __future__ import annotations
 
-from typing import Dict, Tuple
+from typing import Dict, Optional, Sequence, Tuple
 
 import cv2
 import numpy as np
@@ -77,10 +77,18 @@ def render_dashboard(
     panels: Dict[str, np.ndarray],
     size: Tuple[int, int] = (2000, 900),
     title: str = "",
-    extra_panel: np.ndarray = None,
+    extra_panel: Optional[np.ndarray] = None,
     extra_label: str = "Radar Range-Elev",
+    header_lines: Optional[Sequence[str]] = None,
 ) -> np.ndarray:
-    """Render a 2x4 grid + optional auxiliary panel below."""
+    """Render a 2x4 grid, optional range-elevation panel, and top HUD.
+
+    ``header_lines`` is intentionally separate from ``title``: the title
+    identifies the viewer, while callers such as keyboard teleoperation can
+    put dynamic robot/clock state above the sensor images without consuming a
+    sensor tile.  Existing callers that only pass ``title`` keep the original
+    one-line header.
+    """
     W, H = size
     cols = 4
     rows = 2
@@ -107,19 +115,32 @@ def render_dashboard(
         aux = _put_label(aux, extra_label)
         grid = np.vstack([grid, aux])
 
-    if title:
-        title_h = 30
-        bar = np.zeros((title_h, grid.shape[1], 3), dtype=np.uint8)
-        cv2.putText(
-            bar,
-            title,
-            (10, 22),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            1,
-            cv2.LINE_AA,
-        )
+    lines = ([title] if title else []) + [
+        str(line) for line in (header_lines or []) if str(line).strip()
+    ]
+    if lines:
+        line_h = 30
+        bar = np.zeros((line_h * len(lines), grid.shape[1], 3), dtype=np.uint8)
+        for i, line in enumerate(lines):
+            preferred_scale = 0.7 if i == 0 and title else 0.55
+            (text_w, _), _ = cv2.getTextSize(
+                line, cv2.FONT_HERSHEY_SIMPLEX, preferred_scale, 1
+            )
+            available_w = max(1, grid.shape[1] - 20)
+            scale = max(
+                0.35,
+                min(preferred_scale, preferred_scale * available_w / max(text_w, 1)),
+            )
+            cv2.putText(
+                bar,
+                line,
+                (10, i * line_h + 22),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                scale,
+                (255, 255, 255),
+                1,
+                cv2.LINE_AA,
+            )
         grid = np.vstack([bar, grid])
 
     return grid

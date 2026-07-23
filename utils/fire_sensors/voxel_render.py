@@ -256,19 +256,19 @@ def compose_thermal(
 
     Returns ``(image_bgr, temperature_c)`` where:
 
-    * ``temperature_c`` is a physical temperature map in deg C built from
-      ambient + voxel/flame heat only. RGB luma is NOT folded in, so the
-      array is meaningful for a temperature threshold (person ~ ambient+25,
-      flame pushing toward ~600). This is what downstream detection reads.
-    * ``image_bgr`` is the 8-bit display, produced with a FLIR-style
-      adaptive gain (AGC): a fixed lower anchor a few degrees below ambient
-      and an upper anchor that grows with the hottest pixel (min ambient+40)
-      so warm bodies stay visible without a fire, and a real fire saturates
-      the top of the range. A faint luma texture is added to the *display
-      only* (fading out on hot pixels) so scene structure stays legible.
+    * ``temperature_c`` is a physical apparent-temperature map in deg C
+      built from the ray-marched surface/hot-air estimate plus flame heat.
+      RGB is never folded into this array, so downstream temperature
+      thresholds remain meaningful.
+    * ``image_bgr`` keeps cold scene structure as a dark, low-saturation RGB
+      image. Temperature excess progressively replaces that background with
+      a grayscale/INFERNO heat palette. A fixed logarithmic response keeps
+      ambient, warm objects, and flames comparable between frames instead
+      of letting a per-frame maximum wash out the whole image.
 
-    Optionally blended with INFERNO (``color_blend``) so flame regions look
-    unmistakably hot.
+    ``temp_max`` retains its historical parameter name for call-site
+    compatibility; callers now pass the localized apparent voxel
+    temperature, not the maximum sample along the full ray.
     """
     try:
         import cv2
@@ -287,40 +287,49 @@ def compose_thermal(
     # the "thermal" map was really just a recoloured RGB and the returned
     # ``thermal_temperature`` was unusable for a temperature threshold.
     #
-    # ``temp_max`` is the per-ray maximum voxel temperature (deg C) from the
-    # ray-march; ``flame_along`` is the per-ray flame intensity accumulator.
-    # We take the max of the voxel excess and a flame-driven excess so a
-    # flame pixel never gets dimmed by a cold sample in front of it.
+    # ``temp_max`` is the localized apparent voxel temperature produced by
+    # the ray-march; ``flame_along`` is the per-ray flame intensity. Take
+    # their maximum so a visible flame cannot be dimmed by a cold surface
+    # just behind it.
     voxel_excess = np.maximum(temp_max - float(ambient_c), 0.0)
     flame_excess = np.clip(flame_along, 0.0, 1.0) * 600.0
     excess = np.maximum(voxel_excess, flame_excess)
     temperature = float(ambient_c) + excess
 
-    # ---- Display image (8-bit) with adaptive gain (FLIR-style AGC) -------
-    # Map the physical temperature to gray with a sensible minimum span so
-    # an ambient-only scene is mid-gray (not crushed to black) and a warm
-    # body at ~ambient+25 C is clearly visible, while a real fire pushes the
-    # top of the range up to near-saturation. The lower anchor sits a few
-    # degrees below ambient; the upper anchor is at least ambient+40 C.
-    t_lo = float(ambient_c) - 10.0
-    t_hi = float(max(np.percentile(temperature, 99.5), float(ambient_c) + 40.0))
-    norm = np.clip((temperature - t_lo) / max(t_hi - t_lo, 1e-3), 0.0, 1.0)
-    # Faint structural texture (VISUAL ONLY): add a small luma-driven bias so
-    # walls / doors / furniture stay legible the way a real thermal AGC keeps
-    # scene structure visible. It fades out where the scene is hot (weighted
-    # by 1-norm) so it never pollutes the flame band, and it does not touch
-    # the returned ``temperature`` array.
-    norm = np.clip(norm + (luma - 0.5) * 0.16 * (1.0 - norm), 0.0, 1.0)
-    norm = np.power(norm, 0.7)
-    gray_u8 = (norm * 255).astype(np.uint8)
+    # ---- Display image: dark structure + localized heat -----------------
+    # Fixed logarithmic response in excess-Celsius. Unlike percentile AGC,
+    # a remote flame cannot redefine the whole frame's black/white anchors.
+    # Representative mapping: +5 C -> 0.15, +25 C -> 0.37,
+    # +100 C -> 0.64, +600 C -> 1.0.
+    excess_display = np.maximum(temperature - float(ambient_c), 0.0)
+    norm = np.log1p(excess_display / 5.0) / np.log1p(600.0 / 5.0)
+    norm = np.clip(norm, 0.0, 1.0).astype(np.float32)
+    gray_u8 = (np.power(norm, 0.82) * 255.0).astype(np.uint8)
+
+    # Cold context is intentionally a dark version of the clean RGB frame,
+    # not a fabricated physical temperature. Keeping its weak chroma makes
+    # doors, furniture, and people readable without turning ambient walls
+    # into hot yellow surfaces.
+    rgb_bgr = rgb_clean[..., ::-1].astype(np.float32)
+    dark_gain = 0.12 + 0.10 * luma[..., None]
+    dark_context = rgb_bgr * dark_gain
+
     if cv2 is not None:
-        image_bgr = cv2.cvtColor(gray_u8, cv2.COLOR_GRAY2BGR)
-        if color_blend > 0.0:
-            ir = cv2.applyColorMap(gray_u8, cv2.COLORMAP_INFERNO)
-            a = float(np.clip(color_blend, 0.0, 1.0))
-            image_bgr = cv2.addWeighted(image_bgr, 1 - a, ir, a, 0)
+        heat_gray = cv2.cvtColor(gray_u8, cv2.COLOR_GRAY2BGR).astype(np.float32)
+        ir = cv2.applyColorMap(gray_u8, cv2.COLORMAP_INFERNO).astype(np.float32)
+        palette_mix = float(np.clip(color_blend, 0.0, 1.0))
+        heat_color = heat_gray * (1.0 - palette_mix) + ir * palette_mix
     else:
-        image_bgr = np.stack([gray_u8] * 3, axis=-1)
+        heat_color = np.stack([gray_u8] * 3, axis=-1).astype(np.float32)
+
+    # Temperature controls how much of the palette replaces the structural
+    # context. Ambient stays dark; warm bodies and heated objects become
+    # increasingly vivid; flames dominate completely.
+    heat_alpha = np.clip(norm * 1.55, 0.0, 1.0)[..., None]
+    image_bgr = (
+        dark_context * (1.0 - heat_alpha) + heat_color * heat_alpha
+    )
+    image_bgr = np.clip(image_bgr, 0.0, 255.0).astype(np.uint8)
     return image_bgr, temperature.astype(np.float32)
 
 
@@ -344,7 +353,9 @@ class VoxelRenderParams:
     flame_k_ext: float = 0.8
     flame_glow_ksize: int = 41
     flame_glow_gain: float = 0.55
-    thermal_color_blend: float = 0.0
+    thermal_color_blend: float = 0.85
+    thermal_surface_start: float = 0.72
+    thermal_air_coupling: float = 0.025
     render_scale: float = 0.5
     # Fraction of the smoke extinction the flame emission ignores while
     # ray-marching. 0 = flame is attenuated by smoke just like the scene
@@ -505,7 +516,7 @@ def volumetric_composite(
     color_acc = np.zeros((H, W, 3), dtype=np.float32)
     T_acc = np.ones((H, W), dtype=np.float32)
     flame_seen = np.zeros((H, W), dtype=np.float32)
-    temp_max = np.full((H, W), float(ambient_c), dtype=np.float32)
+    temp_apparent = np.full((H, W), float(ambient_c), dtype=np.float32)
 
     if ray_hits.any():
         start_h = start[ray_hits]
@@ -515,7 +526,11 @@ def volumetric_composite(
         T_acc_flame_h = np.ones(start_h.shape[0], dtype=np.float32)  # for flame emission
         color_acc_h = np.zeros((start_h.shape[0], 3), dtype=np.float32)
         flame_seen_h = np.zeros(start_h.shape[0], dtype=np.float32)
-        temp_max_h = np.full(start_h.shape[0], float(ambient_c), dtype=np.float32)
+        temp_surface_num_h = np.zeros(start_h.shape[0], dtype=np.float32)
+        temp_surface_den_h = np.zeros(start_h.shape[0], dtype=np.float32)
+        temp_path_excess_h = np.zeros(start_h.shape[0], dtype=np.float32)
+        surface_start = float(np.clip(params.thermal_surface_start, 0.0, 0.95))
+        air_coupling = float(np.clip(params.thermal_air_coupling, 0.0, 1.0))
 
         for i in range(N):
             t = np.float32(ts[i])
@@ -524,6 +539,9 @@ def volumetric_composite(
                 [smoke_field, flame_field, temp_field],
                 pts, origin, voxel_m,
             )
+            # The sampler returns zero outside the voxel AABB. Thermal
+            # aggregation treats that as ambient rather than freezing air.
+            te = np.where(te > 0.0, te, float(ambient_c)).astype(np.float32)
             # Smoke texture: mild noise so the plume has wisps and
             # bands instead of being a uniform grey wall. Modulation
             # is multiplicative so dense smoke stays dense.
@@ -593,18 +611,44 @@ def volumetric_composite(
             T_acc_h = T_acc_h * T_step_scene
             T_acc_flame_h = T_acc_flame_h * T_step_flame
             np.maximum(flame_seen_h, fl_used, out=flame_seen_h)
-            np.maximum(temp_max_h, te, out=temp_max_h)
+
+            # Apparent thermal sensing is surface-dominant. The last part of
+            # the depth ray estimates the visible object's temperature;
+            # mean hot air along the path contributes only weakly. This
+            # prevents one hot plume voxel anywhere on a long ray from
+            # saturating the background wall.
+            te_excess = np.maximum(te - float(ambient_c), 0.0)
+            temp_path_excess_h += te_excess / np.float32(N)
+            surface_phase = max(
+                0.0,
+                (float(t) - surface_start) / max(1.0 - surface_start, 1e-6),
+            )
+            surface_weight = np.float32(surface_phase * surface_phase)
+            if surface_weight > 0.0:
+                temp_surface_num_h += te_excess * surface_weight
+                temp_surface_den_h += surface_weight
+
+        surface_excess_h = temp_surface_num_h / np.maximum(
+            temp_surface_den_h, np.float32(1e-6)
+        )
+        apparent_excess_h = np.maximum(
+            surface_excess_h,
+            temp_path_excess_h * np.float32(air_coupling),
+        )
+        temp_apparent_h = float(ambient_c) + apparent_excess_h
 
         color_acc[ray_hits] = color_acc_h
         T_acc[ray_hits] = T_acc_h
         flame_seen[ray_hits] = flame_seen_h
-        temp_max[ray_hits] = temp_max_h
+        temp_apparent[ray_hits] = temp_apparent_h
 
     if scale < 1.0 and (Hd != H_full or Wd != W_full) and cv2 is not None:
         T_acc = cv2.resize(T_acc, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
         color_acc = cv2.resize(color_acc, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
         flame_seen = cv2.resize(flame_seen, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
-        temp_max = cv2.resize(temp_max, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
+        temp_apparent = cv2.resize(
+            temp_apparent, (W_full, H_full), interpolation=cv2.INTER_LINEAR
+        )
 
     scene = rgb_clean.astype(np.float32) / 255.0
     out = scene * T_acc[..., None] + color_acc
@@ -627,7 +671,7 @@ def volumetric_composite(
         ).astype(np.uint8)
 
     thermal_image, thermal_temp = compose_thermal(
-        rgb_clean, temp_max, flame_seen,
+        rgb_clean, temp_apparent, flame_seen,
         ambient_c=ambient_c,
         color_blend=params.thermal_color_blend,
     )

@@ -10,6 +10,7 @@ from openai import OpenAI
 from io import BytesIO
 import ast
 import cv2
+from dataclasses import asdict, is_dataclass
 
 import utils.visualization as vu
 import os
@@ -134,7 +135,45 @@ def get_all_candidate_full_maps(image_id, target_edge_map, top_view_map, pose):
         
     return candidate_map_list
 
-def message_prepare(prompt, candidate_map_list, navigation_instruct):
+def _risk_context_to_json(risk_context):
+    """Serialise risk reports without coupling chat code to ``utils.risk``."""
+
+    def _jsonable(value):
+        if hasattr(value, "to_dict"):
+            return _jsonable(value.to_dict())
+        if is_dataclass(value):
+            return _jsonable(asdict(value))
+        if isinstance(value, dict):
+            return {str(key): _jsonable(item) for key, item in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_jsonable(item) for item in value]
+        if isinstance(value, np.generic):
+            return value.item()
+        return value
+
+    if isinstance(risk_context, str):
+        return risk_context
+    return json.dumps(
+        _jsonable(risk_context),
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    )
+
+
+def message_prepare(
+    prompt,
+    candidate_map_list,
+    navigation_instruct,
+    risk_context=None,
+):
+    """Build the VLM request, optionally appending structured hazard context.
+
+    The context is appended to the existing first text item rather than added
+    as another content item.  Consequently legacy calls are byte-for-byte
+    compatible and ``chat_with_gpt4v`` can keep using ``len(content) - 1`` as
+    its frontier count.
+    """
     base64_image_list = []
     for image_candidate in candidate_map_list:
         base64_image_list.append(base64.b64encode(image_candidate.getvalue()).decode("utf-8"))
@@ -144,9 +183,17 @@ def message_prepare(prompt, candidate_map_list, navigation_instruct):
     message.append({"role": "system", "content": prompt})
 
     image_contents = []
+    task_text = "two robots need to find a " + navigation_instruct
+    if risk_context is not None:
+        task_text += (
+            "\n\nStructured hazard context (JSON). Frontiers with "
+            "hard_blocked=true are forbidden and will also be rejected by "
+            "the deterministic safety guard:\n"
+            + _risk_context_to_json(risk_context)
+        )
     image_contents.append({
         "type": "text",
-        "text": "two robots need to find a " + navigation_instruct,
+        "text": task_text,
     })
     for base64_image in base64_image_list:
         image_contents.append({

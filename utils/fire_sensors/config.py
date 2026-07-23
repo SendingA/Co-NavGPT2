@@ -129,7 +129,18 @@ class VoxelSmokeConfig:
     # ~0.95: visible-band flame leaks through medium-thick smoke
     # (Starr & Lattimer 2014, Fig. 7).
     flame_smoke_passthrough: float = 0.95
-    thermal_color_blend: float = 0.0   # 0=grayscale, 1=full INFERNO
+    # Thermal display palette. Cold pixels always retain a darkened RGB
+    # structure; this value only blends grayscale heat toward INFERNO as
+    # apparent temperature rises.
+    thermal_color_blend: float = 0.85
+    # A thermal camera primarily measures the visible surface at the depth
+    # endpoint. Only the final part of each ray contributes to that surface
+    # estimate; hot air along the full ray is included separately below.
+    thermal_surface_start: float = 0.72
+    # Fraction of mean line-of-sight hot-air excess folded into apparent
+    # temperature. Keep this small: long rays through a hot room must not
+    # inherit the single hottest voxel and become uniformly saturated.
+    thermal_air_coupling: float = 0.025
     render_scale: float = 0.5          # fraction of camera resolution
 
     # --- Procedural flame texturing (pure eye-candy) --------------------

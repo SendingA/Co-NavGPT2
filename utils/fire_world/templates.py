@@ -18,7 +18,121 @@ from typing import Callable, Dict, List, Optional, Tuple
 import numpy as np
 
 
-TEMPLATE_VERSION = 1
+TEMPLATE_VERSION = 2
+
+
+# Exact HM3D semantic.txt category spellings.  Keep these as raw lowercase
+# annotation values: no detector aliases (for example ``tv_monitor``) belong
+# here.  Tests cross-check every entry against all installed semantic.txt
+# files and against scene_scan.MATERIAL_TABLE.
+KITCHEN_PRIMARY_CATEGORIES = (
+    "stove",
+    "stovetop",
+    "oven and stove",
+    "oven",
+    "cooker",
+)
+KITCHEN_FALLBACK_CATEGORIES = (
+    "microwave",
+    "toaster",
+    "kitchen appliance",
+    "ventilation hood",
+    "range hood",
+    "kitchen extractor",
+    "oven vent",
+)
+KITCHEN_SECONDARY_CATEGORIES = (
+    *KITCHEN_PRIMARY_CATEGORIES,
+    *KITCHEN_FALLBACK_CATEGORIES,
+    "kitchen cabinet",
+    "kitchen lower cabinet",
+    "cabinet",
+    "table",
+    "kitchen counter",
+    "curtain",
+    "towel",
+    "paper towel",
+    "trashcan",
+    "trash can",
+)
+
+BEDROOM_PRIMARY_CATEGORIES = (
+    "bed",
+    "bed small",
+    "bedframe",
+    "pillow",
+    "blanket",
+    "bed sheet",
+)
+BEDROOM_FALLBACK_CATEGORIES = (
+    "curtain",
+    "window curtain",
+    "rug",
+    "carpet",
+    "clothes",
+    "sofa",
+    "couch",
+    "armchair",
+    "chair",
+)
+BEDROOM_SECONDARY_CATEGORIES = (
+    *BEDROOM_PRIMARY_CATEGORIES,
+    *BEDROOM_FALLBACK_CATEGORIES,
+    "nightstand",
+    "wardrobe",
+    "cloth",
+    "throw blanket",
+)
+
+LIVING_ELECTRIC_PRIMARY_CATEGORIES = (
+    "tv",
+    "led tv",
+    "wall tv",
+    "monitor",
+    "computer",
+    "computer tower",
+    "pc tower",
+    "laptop",
+)
+LIVING_ELECTRIC_FALLBACK_CATEGORIES = (
+    "speaker",
+    "stereo",
+    "amplifier",
+    "dvd player",
+    "record player",
+    "radio",
+)
+LIVING_ELECTRIC_SECONDARY_CATEGORIES = (
+    *LIVING_ELECTRIC_PRIMARY_CATEGORIES,
+    *LIVING_ELECTRIC_FALLBACK_CATEGORIES,
+    "media console",
+    "sofa",
+    "couch",
+    "armchair",
+    "chair",
+    "cabinet",
+    "curtain",
+    "rug",
+    "carpet",
+)
+
+TEMPLATE_CATEGORY_GROUPS = {
+    "kitchen_grease_fire": {
+        "primary": KITCHEN_PRIMARY_CATEGORIES,
+        "fallback": KITCHEN_FALLBACK_CATEGORIES,
+        "secondary": KITCHEN_SECONDARY_CATEGORIES,
+    },
+    "bedroom_textile": {
+        "primary": BEDROOM_PRIMARY_CATEGORIES,
+        "fallback": BEDROOM_FALLBACK_CATEGORIES,
+        "secondary": BEDROOM_SECONDARY_CATEGORIES,
+    },
+    "living_room_electric": {
+        "primary": LIVING_ELECTRIC_PRIMARY_CATEGORIES,
+        "fallback": LIVING_ELECTRIC_FALLBACK_CATEGORIES,
+        "secondary": LIVING_ELECTRIC_SECONDARY_CATEGORIES,
+    },
+}
 
 
 # ---------------------------------------------------------------------------
@@ -57,7 +171,11 @@ INTENSITIES: Dict[str, IntensityPreset] = {
 # Template helpers
 # ---------------------------------------------------------------------------
 def _object_center(obj: Dict) -> np.ndarray:
-    return np.asarray(obj.get("position", obj["aabb_min"]), dtype=np.float64)
+    position = obj.get("position")
+    return np.asarray(
+        position if position is not None else obj["aabb_min"],
+        dtype=np.float64,
+    )
 
 
 def _filter_by_category(objects: List[Dict], cats: List[str]) -> List[Dict]:
@@ -108,9 +226,10 @@ def _pick_primary(
     fallback_cats: List[str],
 ) -> Optional[Dict]:
     """Pick a primary ignition object weighted by flammability."""
-    pool = _filter_by_category(objects, preferred_cats) or \
-           _filter_by_category(objects, fallback_cats) or \
-           [o for o in objects if o.get("flammability", 0) > 0.3]
+    pool = (
+        _filter_by_category(objects, preferred_cats)
+        or _filter_by_category(objects, fallback_cats)
+    )
     if not pool:
         return None
     weights = np.array([max(0.05, o.get("flammability", 0.3)) for o in pool])
@@ -125,6 +244,7 @@ def _pick_secondary(
     rng: np.random.Generator,
     radius_m: float,
     n: int,
+    allowed_cats: Tuple[str, ...],
     avoid_cats: Tuple[str, ...] = ("toilet", "bathtub", "sink"),
     same_floor_y_tol: float = 1.5,
 ) -> List[Dict]:
@@ -136,9 +256,12 @@ def _pick_secondary(
         return []
     p_center = _object_center(primary)
     avoid = {c.lower() for c in avoid_cats}
+    allowed = {c.lower() for c in allowed_cats}
     pool = []
     for o in objects:
         if o["object_id"] == primary["object_id"]:
+            continue
+        if o["category"].lower() not in allowed:
             continue
         if o["category"].lower() in avoid:
             continue
@@ -240,6 +363,12 @@ def _default_propagation_rules(intensity: str) -> Dict:
         # spike gets averaged out before reaction sees it.
         "floor_ignite_radius_cells": 2,
         "floor_flame_contact_thresh": 0.2,
+        # The combustible floor grows outward from each actual ignition
+        # source at 1.5 cm/s and stops at a 2 m radius.  This prevents the
+        # old recursive floor-cell dilation from carpeting the whole room
+        # with flame while keeping a visibly evolving local hazard patch.
+        "floor_spread_speed_m_per_s": 0.015,
+        "floor_max_spread_radius_m": 2.0,
         # Sustained point sources never expire when 1, ensuring the
         # initial ignitions don't burn themselves out before they have
         # a chance to set the rest of the room alight.
@@ -270,16 +399,24 @@ def _default_propagation_rules(intensity: str) -> Dict:
 def _template_kitchen_grease_fire(inv: Dict, rng: np.random.Generator,
                                   preset: IntensityPreset) -> List[Dict]:
     objs = _inventory_pool(inv)
-    # v2 inventory finally exposes `stove`; older v1 fixtures only have
-    # goal categories so we keep TV / chair / plant as stand-ins.
-    primary = _pick_primary(objs, rng,
-                            preferred_cats=["stove", "ventilation hood"],
-                            fallback_cats=["tv_monitor", "chair", "plant", "sofa"])
+    primary = _pick_primary(
+        objs,
+        rng,
+        preferred_cats=list(KITCHEN_PRIMARY_CATEGORIES),
+        fallback_cats=list(KITCHEN_FALLBACK_CATEGORIES),
+    )
     if primary is None:
         return []
     n_extra = rng.integers(preset.n_ignitions_min - 1,
                            preset.n_ignitions_max) if preset.n_ignitions_max > 1 else 0
-    secondaries = _pick_secondary(objs, primary, rng, radius_m=3.5, n=int(n_extra))
+    secondaries = _pick_secondary(
+        objs,
+        primary,
+        rng,
+        radius_m=3.5,
+        n=int(n_extra),
+        allowed_cats=KITCHEN_SECONDARY_CATEGORIES,
+    )
     igns = [_make_ignition(primary, 0.0, preset, rng)]
     for k, s in enumerate(secondaries):
         t = float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k
@@ -290,14 +427,24 @@ def _template_kitchen_grease_fire(inv: Dict, rng: np.random.Generator,
 def _template_bedroom_textile(inv: Dict, rng: np.random.Generator,
                               preset: IntensityPreset) -> List[Dict]:
     objs = _inventory_pool(inv)
-    primary = _pick_primary(objs, rng,
-                            preferred_cats=["bed", "sofa", "couch"],
-                            fallback_cats=["chair", "armchair", "plant"])
+    primary = _pick_primary(
+        objs,
+        rng,
+        preferred_cats=list(BEDROOM_PRIMARY_CATEGORIES),
+        fallback_cats=list(BEDROOM_FALLBACK_CATEGORIES),
+    )
     if primary is None:
         return []
     n_extra = rng.integers(preset.n_ignitions_min - 1,
                            preset.n_ignitions_max) if preset.n_ignitions_max > 1 else 0
-    secondaries = _pick_secondary(objs, primary, rng, radius_m=4.0, n=int(n_extra))
+    secondaries = _pick_secondary(
+        objs,
+        primary,
+        rng,
+        radius_m=4.0,
+        n=int(n_extra),
+        allowed_cats=BEDROOM_SECONDARY_CATEGORIES,
+    )
     igns = [_make_ignition(primary, 0.0, preset, rng)]
     for k, s in enumerate(secondaries):
         t = float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k
@@ -308,14 +455,24 @@ def _template_bedroom_textile(inv: Dict, rng: np.random.Generator,
 def _template_living_room_electric(inv: Dict, rng: np.random.Generator,
                                    preset: IntensityPreset) -> List[Dict]:
     objs = _inventory_pool(inv)
-    primary = _pick_primary(objs, rng,
-                            preferred_cats=["tv_monitor", "tv", "monitor", "computer"],
-                            fallback_cats=["sofa", "couch", "armchair", "chair"])
+    primary = _pick_primary(
+        objs,
+        rng,
+        preferred_cats=list(LIVING_ELECTRIC_PRIMARY_CATEGORIES),
+        fallback_cats=list(LIVING_ELECTRIC_FALLBACK_CATEGORIES),
+    )
     if primary is None:
         return []
     n_extra = rng.integers(preset.n_ignitions_min - 1,
                            preset.n_ignitions_max) if preset.n_ignitions_max > 1 else 0
-    secondaries = _pick_secondary(objs, primary, rng, radius_m=3.0, n=int(n_extra))
+    secondaries = _pick_secondary(
+        objs,
+        primary,
+        rng,
+        radius_m=3.0,
+        n=int(n_extra),
+        allowed_cats=LIVING_ELECTRIC_SECONDARY_CATEGORIES,
+    )
     igns = [_make_ignition(primary, 0.0, preset, rng)]
     for k, s in enumerate(secondaries):
         t = float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k

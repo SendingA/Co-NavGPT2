@@ -291,6 +291,21 @@ class FirePropagation:
         self.floor_flame_contact_thresh = float(
             rules.get("floor_flame_contact_thresh", 0.2)
         )
+        # Source-centred floor spread envelope.  Contact ignition used to
+        # dilate every burning floor cell on every solver step, which made
+        # the carpet behave like a fuse and cover an entire room in a few
+        # seconds.  Floor fire may now grow only inside
+        #
+        #   min(max_radius, source_radius + speed * source_age)
+        #
+        # of an actual ignition source.  The speed is intentionally much
+        # slower than the generic furniture-surface spread coefficient.
+        self.floor_spread_speed_m_per_s = max(
+            0.0, float(rules.get("floor_spread_speed_m_per_s", 0.015))
+        )
+        self.floor_max_spread_radius_m = max(
+            0.0, float(rules.get("floor_max_spread_radius_m", 2.0))
+        )
         # Range of per-voxel seed flame magnitudes used to break the
         # flat-sheet look on the ignited floor. Each new floor voxel
         # gets a uniform draw in this range, scaled by floor_fuel_value.
@@ -350,6 +365,11 @@ class FirePropagation:
         # t_end, smoke_yield). We carry smoke_yield through so the plan
         # value really controls how dense the room ends up.
         self._sources: List[Tuple[Tuple[slice, slice, slice], np.ndarray, float, float, float]] = []
+        # (source_x_m, source_z_m, source_radius_m, ignition_time_s).
+        # Kept separately from _sources because a finite source may expire
+        # while the already-lit floor patch remains spatially bounded by
+        # the place where that source originally ignited.
+        self._floor_sources: List[Tuple[float, float, float, float]] = []
 
     # ------------------------------------------------------------------
     def add_source(
@@ -360,6 +380,8 @@ class FirePropagation:
         sustain_s: float,
         t_now: float,
         smoke_yield: float = 0.5,
+        position: Optional[np.ndarray] = None,
+        source_radius_m: Optional[float] = None,
     ) -> None:
         """Register a sustained heat source.
 
@@ -375,12 +397,65 @@ class FirePropagation:
             float(source_temp_c), t_now + float(sustain_s),
             float(np.clip(smoke_yield, 0.0, 1.0)),
         ))
+        # Prefer the plan's exact source geometry.  The slice-based fallback
+        # preserves compatibility for external callers using the old method
+        # signature.
+        if position is None:
+            centre_idx = np.array([
+                0.5 * (float(axis.start) + float(axis.stop) - 1.0)
+                for axis in sl
+            ], dtype=np.float64)
+            source_position = self.world.grid_to_world(centre_idx)
+        else:
+            source_position = np.asarray(position, dtype=np.float64)
+        if source_radius_m is None:
+            source_radius_m = 0.5 * max(
+                float(axis.stop - axis.start) for axis in (sl[0], sl[2])
+            ) * self.world.voxel
+        self._floor_sources.append((
+            float(source_position[0]),
+            float(source_position[2]),
+            max(0.0, float(source_radius_m)),
+            float(t_now),
+        ))
+
+    def _floor_spread_allowed_xz(self, t_now: float) -> np.ndarray:
+        """Return the XZ cells inside any source's current floor envelope."""
+        nx, _, nz = self.world.shape
+        allowed = np.zeros((nx, nz), dtype=bool)
+        if not self._floor_sources or self.floor_max_spread_radius_m <= 0.0:
+            return allowed
+
+        voxel = float(self.world.voxel)
+        xs = self.world.origin[0] + (np.arange(nx, dtype=np.float32) + 0.5) * voxel
+        zs = self.world.origin[2] + (np.arange(nz, dtype=np.float32) + 0.5) * voxel
+        for source_x, source_z, source_radius, t_start in self._floor_sources:
+            source_age = max(0.0, float(t_now) - t_start)
+            radius = min(
+                self.floor_max_spread_radius_m,
+                source_radius + self.floor_spread_speed_m_per_s * source_age,
+            )
+            distance_sq = (
+                (xs[:, None] - source_x) ** 2
+                + (zs[None, :] - source_z) ** 2
+            )
+            allowed |= distance_sq <= radius * radius
+        return allowed
 
     # ------------------------------------------------------------------
     def step(self, dt: float, t_now: float = 0.0) -> None:
         """One forward step. ``dt`` in seconds, ``t_now`` end-of-step time."""
         w = self.world
         v = w.voxel
+
+        floor_allowed_xz: Optional[np.ndarray] = None
+        floor_blocked: Optional[np.ndarray] = None
+        if w.floors is not None:
+            floor_allowed_xz = self._floor_spread_allowed_xz(t_now)
+            floor_blocked = w.floors & ~floor_allowed_xz[:, None, :]
+            # Remove any renderer-only flame column that landed on a floor
+            # beyond the source envelope during the previous step.
+            w.flame[floor_blocked] = 0.0
 
         # Solid (impermeable to heat/smoke). Wall + ceiling block the
         # plume from leaking through; floors are handled separately
@@ -496,6 +571,8 @@ class FirePropagation:
         # (default [0.5, 2.5]) - 0.5 means very sparse fuel, 2.5 means
         # the burn voxel is surrounded by fuel on every side.
         ignitable = (w.fuel > self.flammable_threshold) & (w.temp > self.t_ignite)
+        if floor_blocked is not None:
+            ignitable &= ~floor_blocked
         if ignitable.any():
             k_neigh = max(1, int(self.fuel_neighborhood_cells))
             fuel_avg = _box_blur_3d(w.fuel, k_neigh)
@@ -546,6 +623,8 @@ class FirePropagation:
             # (b) sustained autoignition
             hot_ignite = w.floors & (w.temp > self.floor_ignite_temp_c)
             ignite = contact_ignite | hot_ignite
+            if floor_allowed_xz is not None:
+                ignite &= floor_allowed_xz[:, None, :]
             if ignite.any():
                 w.fuel[ignite] = np.maximum(
                     w.fuel[ignite], float(self.floor_fuel_value)
@@ -587,6 +666,8 @@ class FirePropagation:
                 spread_mask = (
                     (w.fuel > 0) | (w.temp > self.t_ignite)
                 ).astype(np.float32)
+                if floor_blocked is not None:
+                    spread_mask[floor_blocked] = 0.0
                 if self.spread_kernel == "gaussian":
                     # Gaussian transport: sigma = spread * dt / v
                     # voxels per step. We blend the original flame with
@@ -612,6 +693,8 @@ class FirePropagation:
                     and w.floors is not None
                 ):
                     w.flame[w.floors] = 0.0
+                elif floor_blocked is not None:
+                    w.flame[floor_blocked] = 0.0
 
         # Conduction: dump heat from flame voxels into the 6 face
         # neighbours so adjacent fuel can cross the ignition_temp
@@ -760,10 +843,17 @@ class FirePropagation:
             # existing flame value so the reaction step's fuel-anchored
             # peaks aren't smeared.
             w.flame = np.maximum(w.flame, col_acc).astype(np.float32)
+            if floor_blocked is not None:
+                w.flame[floor_blocked] = 0.0
             # Top of the column also produces a little smoke. Linear
             # in column height so a tall plume = darker smoke head.
             extra_smoke = col_acc * 0.05 * dt
             w.smoke = np.clip(w.smoke + extra_smoke, 0.0, 1.0)
+
+        # Keep the spatial contract true even when flame columns are
+        # disabled and after sustained-source pinning has run.
+        if floor_blocked is not None:
+            w.flame[floor_blocked] = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -841,7 +931,9 @@ def run_propagation(
         sustain = float(ig.get("sustain_s", duration - 0.0))
         sim.add_source(sl, fall, float(ig["source_temp_c"]), sustain,
                        t_now=0.0,
-                       smoke_yield=float(ig.get("smoke_yield", 0.5)))
+                       smoke_yield=float(ig.get("smoke_yield", 0.5)),
+                       position=np.asarray(ig["position"]),
+                       source_radius_m=float(ig["source_radius_m"]))
         next_ig += 1
     snapshot(0, 0.0)
 
@@ -861,7 +953,9 @@ def run_propagation(
             sustain = float(ig.get("sustain_s", duration - t_now))
             sim.add_source(sl, fall, float(ig["source_temp_c"]), sustain,
                            t_now=t_now,
-                           smoke_yield=float(ig.get("smoke_yield", 0.5)))
+                           smoke_yield=float(ig.get("smoke_yield", 0.5)),
+                           position=np.asarray(ig["position"]),
+                           source_radius_m=float(ig["source_radius_m"]))
             next_ig += 1
 
         sim.step(dt, t_now=t_now)
@@ -895,6 +989,8 @@ def run_propagation(
         "duration_s": float(duration),
         "ambient_c": float(world.ambient_c),
         "ceiling_y_idx": int(sim.ceiling_y),
+        "floor_spread_speed_m_per_s": float(sim.floor_spread_speed_m_per_s),
+        "floor_max_spread_radius_m": float(sim.floor_max_spread_radius_m),
     }
 
     if out_dir is not None:

@@ -200,6 +200,88 @@ def get_args() -> argparse.Namespace:
                              "[0..1.5]. None = decided by --fire_fast "
                              "(0 when fast, 0.55 otherwise).")
 
+    # ------------------------------------------------------------------
+    # Dynamic risk assessment.  Thresholds below define a normalized
+    # simulator hazard index for navigation experiments; they are not a
+    # physiological survival model.  ``risk_enabled=0`` is intentionally the
+    # default so existing ObjectNav runs keep their original behavior.
+    # ------------------------------------------------------------------
+    parser.add_argument("--risk_enabled", type=int, default=0,
+                        help="1: enable dynamic fire/smoke/temperature risk "
+                             "assessment and hazard-aware planning")
+    parser.add_argument("--risk_source", type=str, default="sensed",
+                        choices=["none", "oracle", "sensed"],
+                        help="planner risk source. sensed is the benchmark "
+                             "setting; oracle is a privileged upper bound")
+    parser.add_argument("--risk_weight_temperature", type=float, default=0.60)
+    parser.add_argument("--risk_weight_smoke", type=float, default=0.40)
+    parser.add_argument("--risk_temperature_ambient_c", type=float,
+                        default=25.0,
+                        help="ambient temperature retained in physical "
+                             "sensor/evaluator outputs (deg C)")
+    parser.add_argument("--risk_temperature_reference_c", type=float,
+                        default=35.0,
+                        help="temperature at which normalized heat risk "
+                             "starts to rise (deg C)")
+    parser.add_argument("--risk_temperature_hazard_c", type=float,
+                        default=150.0,
+                        help="temperature mapped to normalized heat risk 1 "
+                             "(deg C; benchmark calibration, not a medical "
+                             "survival threshold)")
+    parser.add_argument("--risk_temperature_hard_c", type=float,
+                        default=250.0,
+                        help="temperature that makes a planner cell hard "
+                             "unsafe (deg C)")
+    parser.add_argument("--risk_flame_hard_threshold", type=float,
+                        default=0.20)
+    parser.add_argument("--risk_flame_safety_distance_m", type=float,
+                        default=0.45,
+                        help="hard-unsafe dilation around flame cells (m)")
+    parser.add_argument("--risk_danger_threshold", type=float, default=0.55)
+    parser.add_argument("--risk_critical_threshold", type=float, default=0.80)
+    parser.add_argument("--risk_decay_tau_s", type=float, default=20.0,
+                        help="time constant for stale sensed hazard evidence")
+    parser.add_argument("--risk_confidence_decay_tau_s", type=float,
+                        default=30.0)
+    parser.add_argument("--risk_unknown_risk_prior", type=float, default=0.25,
+                        help="planner cost assigned to unobserved cells")
+    parser.add_argument("--risk_uncertainty_weight", type=float, default=0.25)
+    parser.add_argument("--risk_sensor_stride", type=int, default=4,
+                        help="pixel stride for sensed risk back-projection")
+    parser.add_argument("--risk_floor_min_offset_m", type=float, default=0.0)
+    parser.add_argument("--risk_floor_max_offset_m", type=float, default=1.50)
+    parser.add_argument("--risk_smoke_source", type=str,
+                        default="appearance_depth",
+                        choices=["appearance_depth", "privileged_transmittance"],
+                        help="smoke evidence source; transmittance is an "
+                             "explicit privileged ablation")
+    parser.add_argument("--risk_geometry_depth_source", type=str,
+                        default="clean",
+                        choices=["clean", "smoke"],
+                        help="depth used to place thermal/smoke evidence: "
+                             "clean is the smoke-robust radar/depth geometry "
+                             "surrogate used by main; smoke is the degraded "
+                             "vision-depth ablation")
+    parser.add_argument("--risk_alpha", type=float, default=4.0,
+                        help="hazard strength in FMM speed=1/(1+alpha*risk)")
+    parser.add_argument("--risk_frontier_weight", type=float, default=2.0)
+    parser.add_argument("--risk_hard_frontier_threshold", type=float,
+                        default=0.80)
+    parser.add_argument("--risk_dump_dir", type=str,
+                        default="./outputs/risk_assessment")
+    parser.add_argument("--risk_save_every", type=int, default=10,
+                        help="save one risk-map snapshot every N navigation "
+                             "steps; 0 disables step images")
+    parser.add_argument("--risk_max_floor_deviation_m", type=float,
+                        default=0.75,
+                        help="fail fast if any robot leaves the current-floor "
+                             "risk-map band; multi-floor risk maps are not "
+                             "silently collapsed")
+    parser.add_argument("--risk_run_id", type=str, default="default",
+                        help="subdirectory used to isolate risk artifacts")
+    parser.add_argument("--risk_rank", type=int, default=0,
+                        help="artifact rank id for parallel launchers")
+
     args = parser.parse_args()
     args.cuda = torch.cuda.is_available()
 
@@ -302,7 +384,7 @@ def voxel_smoke_kwargs(args) -> dict:
         "n_steps": n_steps,
         "smoke_k_ext": float(args.fire_world_smoke_k_ext),
         "render_scale": render_scale,
-        "thermal_color_blend": 1.0,
+        "thermal_color_blend": 0.85,
         "flame_noise_strength": flame_noise,
         "flame_edge_break": edge_break,
         "flame_color_jitter": color_jitter,
