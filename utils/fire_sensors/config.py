@@ -143,6 +143,16 @@ class VoxelSmokeConfig:
     thermal_air_coupling: float = 0.025
     render_scale: float = 0.5          # fraction of camera resolution
 
+    # --- Compute backend ------------------------------------------------
+    # ``auto`` selects Torch when CUDA is visible and otherwise keeps the
+    # NumPy reference path. The render device is deliberately independent
+    # from Habitat-Sim's --gpu_id so FireWorld can use another GPU.
+    render_backend: str = "auto"       # auto | numpy | torch
+    render_device: str = "auto"        # auto | cpu | cuda[:N]
+    render_dtype: str = "float16"      # FP16 volume on CUDA; CPU uses FP32
+    # Bound peak memory by tiling rays when H*W*n_steps exceeds this value.
+    max_sample_points: int = 2_000_000
+
     # --- Procedural flame texturing (pure eye-candy) --------------------
     # These drive the fractal value-noise that makes the flame flicker
     # and wisp. Each non-zero term costs ~3 trilinear noise gathers per

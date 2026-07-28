@@ -227,7 +227,21 @@ class FireSensorSuite:
             "radar_points_3d": radar_out["points_3d"],
             # composite
             "dashboard": dashboard,
+            # renderer diagnostics (useful for benchmark manifests)
+            "fire_render_backend": voxel_out.get(
+                "render_backend", "passthrough"
+            ),
+            "fire_render_device": voxel_out.get(
+                "render_device", "cpu"
+            ),
         }
+        for source_key, output_key in (
+            ("render_frame_index", "fire_render_frame_index"),
+            ("render_cache_hits", "fire_render_cache_hits"),
+            ("render_cache_uploads", "fire_render_cache_uploads"),
+        ):
+            if source_key in voxel_out:
+                out[output_key] = int(voxel_out[source_key])
         if voxel_out is not None and "t_sim_s" in voxel_out:
             out["t_sim_s"] = float(voxel_out["t_sim_s"])
             out["robot_step"] = int(voxel_out["robot_step"])

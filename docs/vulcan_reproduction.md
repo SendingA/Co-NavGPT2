@@ -266,6 +266,7 @@ All first-party task configurations under `configs/` are listed below.
 | --- | --- | --- |
 | `configs/multi_objectnav_hm3d.yaml` | Current, required | Habitat 0.3.3 Hydra configuration for multi-agent HM3D ObjectNav. Defines RGB-D sensors, `Sim-v0`, 0.25 m forward steps, 30-degree turns, 0.2 m Success distance, and the `conav` humanoid/robot settings. |
 | `configs/person_objectnav_hm3d.yaml` | Current, optional | Extends the multi-agent config with the generated static-person dataset and `static_person_goal=True`. |
+| `configs/rl_local_planner_ppo.yaml` | Current, optional | PPO training defaults for separate risk-blind and risk-aware map-based RL local-planner checkpoints. |
 | `configs/objectnav_hm3d.yaml` | Legacy reference | Habitat 0.2.1 YACS syntax. Do not pass it to the current Hydra `load_config()` path. |
 | `configs/objectnav_gibson.yaml` | Legacy reference | Old Gibson/YACS configuration; not validated with the Habitat 0.3.3 VULCAN runtime. |
 | `configs/human.yaml` | Legacy reference | Old two-agent YACS configuration; superseded by `multi_objectnav_hm3d.yaml` plus `--num_humans`. |
@@ -643,6 +644,7 @@ Every file directly under `scripts/` is included here.
 | `scripts/keyboard_teleop_fire.py` | Keyboard teleoperation with a precomputed FireWorld timeline and optional dashboard. |
 | `scripts/keyboard_teleop_full.py` | Unified multi-agent, humanoid, robot-model, FireWorld, thermal, radar, and LIDAR teleoperation dashboard. |
 | `scripts/render_thermal_validation.py` | Writes a deterministic thermal validation montage and JSON statistics under `outputs/thermal_validation/`. Run `python scripts/render_thermal_validation.py`. |
+| `scripts/train_rl_local_planner.py` | Trains the checkpointed map-based PPO local planner on randomized connected occupancy/risk grids. See `docs/local_planner_baselines.md`; one-update smoke runs are not benchmark checkpoints. |
 | `scripts/test_detect_with_thermal.py` | Stubs YOLO/SAM and verifies thermal-only fire detection. Run `python scripts/test_detect_with_thermal.py`. |
 | `scripts/test_fire_planner.py` | Smoke-tests deterministic FireWorld plan creation against the committed TEEsav fixture. Run `python scripts/test_fire_planner.py`. |
 | `scripts/test_fire_propagation.py` | Runs deterministic propagation and physical-range checks on the TEEsav fixture. Run `python scripts/test_fire_propagation.py`. |

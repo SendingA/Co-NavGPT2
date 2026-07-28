@@ -1,0 +1,24 @@
+# PPO training defaults for the map-based RL local-planner baseline.
+# Set risk_aware: 0 and 1 in separate runs; checkpoint metadata prevents
+# accidentally evaluating the wrong policy variant.
+output: outputs/local_planner_rl/policy.pth
+risk_aware: 0
+device: cpu
+seed: 1
+grid_size: 41
+crop_size: 31
+hidden_size: 128
+num_envs: 32
+updates: 2000
+rollout_steps: 64
+max_episode_steps: 160
+ppo_epochs: 4
+mini_batch_size: 512
+learning_rate: 0.00025
+gamma: 0.99
+gae_lambda: 0.95
+clip_param: 0.2
+value_loss_coef: 0.5
+entropy_coef: 0.01
+max_grad_norm: 0.5
+log_interval: 10

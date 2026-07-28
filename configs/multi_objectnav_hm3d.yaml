@@ -17,6 +17,8 @@
 
 defaults:
   - /benchmark/nav/objectnav/objectnav_hm3d
+  - /habitat/task/measurements:
+      - num_steps
   - _self_
 
 habitat:

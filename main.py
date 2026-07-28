@@ -205,7 +205,10 @@ def main(args, send_queue, receive_queue):
     torch.manual_seed(args.seed)
 
     from utils.risk.config import RiskConfig
+    from utils.local_planners import validate_local_planner_config
+
     risk_config = RiskConfig.from_namespace(args)
+    local_risk_awareness = validate_local_planner_config(args)
     if risk_config.enabled and not int(getattr(args, "fire_world", 0)):
         raise ValueError(
             "--risk_enabled=1 requires --fire_world=1 and a valid "
@@ -224,6 +227,10 @@ def main(args, send_queue, receive_queue):
                 "[risk] wallclock mode is a latency stress test; use "
                 "--fire_clock_mode step for reproducible benchmark tables"
             )
+    print(
+        "[local_planner] "
+        f"name={args.local_planner} risk_aware={local_risk_awareness}"
+    )
 
     # Optional 360° LIDAR — installs 4 yaw-rotated depth sensors on every
     # navigation agent so utils.fire_sensors can stitch a 360° cloud.
@@ -507,7 +514,7 @@ def main(args, send_queue, receive_queue):
                         planning_risk,
                         risk_layers.hard_unsafe,
                         risk_alpha=float(args.risk_alpha),
-                        enabled=risk_runtime.planning_enabled,
+                        enabled=local_risk_awareness,
                     )
 
             # ---------- Global planner (frontier assignment) ----------
@@ -600,13 +607,14 @@ def main(args, send_queue, receive_queue):
                         candidate_map_list = chat_utils.get_all_candidate_maps(
                             target_edge_map, top_view_map, pose_pred
                         )
-                        message = chat_utils.message_prepare(
-                            system_prompt.risk_system_prompt,
+                        message = chat_utils.risk_message_prepare(
+                            system_prompt.risk_prompt,
                             candidate_map_list,
                             agent[0].goal_name,
                             risk_context=risk_context_payload(
                                 risk_frontier_reports
                             ),
+                            num_agents=num_agents,
                         )
                         raw_assignments = chat_utils.chat_with_gpt4v(message)
                         guarded = guard_frontier_assignments(
@@ -652,6 +660,7 @@ def main(args, send_queue, receive_queue):
                             system_prompt.system_prompt,
                             candidate_map_list,
                             agent[i].goal_name,
+                            num_agents=num_agents,
                         )
                         goal_frontiers = chat_utils.chat_with_gpt4v(message)
                         for i in range(num_agents):

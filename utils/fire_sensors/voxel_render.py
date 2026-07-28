@@ -10,9 +10,9 @@ voxel size; the camera is described by intrinsics ``K``, world position,
 and rotation. The function returns a dict of smoky-RGB / thermal
 arrays that slots straight into the rest of the sensor suite.
 
-Everything is pure-numpy and stateless — :class:`VoxelSmokeSensor` is
-the BaseSensor wrapper that owns the configuration and the camera
-intrinsics.
+The reference implementation in this module is pure NumPy and stateless.
+An optional Torch implementation lives in :mod:`voxel_render_torch`; both
+backends share the final NumPy/OpenCV display composition below.
 """
 from __future__ import annotations
 
@@ -397,6 +397,88 @@ class VoxelRenderParams:
     smoke_noise_strength: float = 0.30
 
 
+def finalize_volumetric_outputs(
+    *,
+    rgb_clean: np.ndarray,
+    transmittance: np.ndarray,
+    color_acc: np.ndarray,
+    flame_seen: np.ndarray,
+    temp_apparent: np.ndarray,
+    output_hw: Tuple[int, int],
+    ambient_c: float,
+    params: VoxelRenderParams,
+) -> Dict[str, np.ndarray]:
+    """Finish a ray-marched frame using the shared CPU display pipeline.
+
+    The NumPy and Torch backends both call this function after their
+    volumetric integration. Keeping resize, glow and thermal palette handling
+    here guarantees that changing the compute backend does not change the
+    downstream sensor contract.
+    """
+    try:
+        import cv2
+    except Exception:  # pragma: no cover
+        cv2 = None  # type: ignore
+
+    h_full, w_full = int(output_hw[0]), int(output_hw[1])
+    if (
+        transmittance.shape != (h_full, w_full)
+        and cv2 is not None
+    ):
+        transmittance = cv2.resize(
+            transmittance, (w_full, h_full), interpolation=cv2.INTER_LINEAR
+        )
+        color_acc = cv2.resize(
+            color_acc, (w_full, h_full), interpolation=cv2.INTER_LINEAR
+        )
+        flame_seen = cv2.resize(
+            flame_seen, (w_full, h_full), interpolation=cv2.INTER_LINEAR
+        )
+        temp_apparent = cv2.resize(
+            temp_apparent, (w_full, h_full), interpolation=cv2.INTER_LINEAR
+        )
+
+    scene = rgb_clean.astype(np.float32) / 255.0
+    out = scene * transmittance[..., None] + color_acc
+    out_u8 = np.clip(out * 255.0, 0, 255).astype(np.uint8)
+
+    # Optional flame glow halo.
+    if (
+        params.flame_glow_gain > 0.0
+        and flame_seen.max() > 1e-3
+        and cv2 is not None
+    ):
+        k = max(3, int(params.flame_glow_ksize) | 1)
+        glow = cv2.GaussianBlur(flame_seen, (k, k), 0)
+        m = float(glow.max())
+        if m > 1e-6:
+            glow = glow / m
+        glow = np.clip(glow * float(params.flame_glow_gain), 0.0, 1.0)
+        halo_col = np.array([1.00, 0.55, 0.10], dtype=np.float32) * 255.0
+        halo = halo_col.reshape(1, 1, 3) * glow[..., None]
+        out_u8 = np.clip(
+            out_u8.astype(np.float32) * (1.0 - 0.35 * glow[..., None])
+            + 0.35 * halo,
+            0, 255,
+        ).astype(np.uint8)
+
+    thermal_image, thermal_temp = compose_thermal(
+        rgb_clean, temp_apparent, flame_seen,
+        ambient_c=ambient_c,
+        color_blend=params.thermal_color_blend,
+    )
+
+    return {
+        "image": out_u8,
+        "transmittance": transmittance.astype(np.float32, copy=False),
+        "flame_mask": (
+            flame_seen > params.flame_threshold
+        ).astype(np.float32),
+        "thermal_image": thermal_image,
+        "thermal_temperature": thermal_temp,
+    }
+
+
 def volumetric_composite(
     *,
     rgb_clean: np.ndarray,
@@ -642,44 +724,13 @@ def volumetric_composite(
         flame_seen[ray_hits] = flame_seen_h
         temp_apparent[ray_hits] = temp_apparent_h
 
-    if scale < 1.0 and (Hd != H_full or Wd != W_full) and cv2 is not None:
-        T_acc = cv2.resize(T_acc, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
-        color_acc = cv2.resize(color_acc, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
-        flame_seen = cv2.resize(flame_seen, (W_full, H_full), interpolation=cv2.INTER_LINEAR)
-        temp_apparent = cv2.resize(
-            temp_apparent, (W_full, H_full), interpolation=cv2.INTER_LINEAR
-        )
-
-    scene = rgb_clean.astype(np.float32) / 255.0
-    out = scene * T_acc[..., None] + color_acc
-    out_u8 = np.clip(out * 255.0, 0, 255).astype(np.uint8)
-
-    # Optional flame glow halo.
-    if params.flame_glow_gain > 0.0 and flame_seen.max() > 1e-3 and cv2 is not None:
-        k = max(3, int(params.flame_glow_ksize) | 1)
-        glow = cv2.GaussianBlur(flame_seen, (k, k), 0)
-        m = float(glow.max())
-        if m > 1e-6:
-            glow = glow / m
-        glow = np.clip(glow * float(params.flame_glow_gain), 0.0, 1.0)
-        halo_col = np.array([1.00, 0.55, 0.10], dtype=np.float32) * 255.0
-        halo = halo_col.reshape(1, 1, 3) * glow[..., None]
-        out_u8 = np.clip(
-            out_u8.astype(np.float32) * (1.0 - 0.35 * glow[..., None])
-            + 0.35 * halo,
-            0, 255,
-        ).astype(np.uint8)
-
-    thermal_image, thermal_temp = compose_thermal(
-        rgb_clean, temp_apparent, flame_seen,
+    return finalize_volumetric_outputs(
+        rgb_clean=rgb_clean,
+        transmittance=T_acc,
+        color_acc=color_acc,
+        flame_seen=flame_seen,
+        temp_apparent=temp_apparent,
+        output_hw=(H_full, W_full),
         ambient_c=ambient_c,
-        color_blend=params.thermal_color_blend,
+        params=params,
     )
-
-    return {
-        "image": out_u8,
-        "transmittance": T_acc,
-        "flame_mask": (flame_seen > params.flame_threshold).astype(np.float32),
-        "thermal_image": thermal_image,
-        "thermal_temperature": thermal_temp,
-    }

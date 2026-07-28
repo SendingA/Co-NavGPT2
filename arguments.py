@@ -135,6 +135,47 @@ def get_args() -> argparse.Namespace:
                         help="global frontier policy. nearest=closest, "
                              "co_ut=cooperative assignment, fill=highest "
                              "frontier score, gpt=GPT-4o decision.")
+    parser.add_argument(
+        "--local_planner",
+        type=str,
+        default="fmm",
+        choices=["fmm", "astar", "rl"],
+        help=(
+            "local navigation baseline. fmm preserves the current "
+            "navmesh-first/FMM-fallback implementation exactly; astar and rl "
+            "select the added grid-planner backends"
+        ),
+    )
+    parser.add_argument(
+        "--rl_local_checkpoint",
+        type=str,
+        default=None,
+        help="metadata-bearing PPO checkpoint required by --local_planner=rl",
+    )
+    parser.add_argument(
+        "--rl_local_device",
+        type=str,
+        default="cpu",
+        help="PyTorch device for RL local-planner inference",
+    )
+    parser.add_argument(
+        "--rl_local_deterministic",
+        type=int,
+        default=1,
+        help="1 uses argmax actions for reproducible RL evaluation",
+    )
+    parser.add_argument(
+        "--rl_local_crop_size",
+        type=int,
+        default=31,
+        help="odd egocentric grid crop size encoded by the RL checkpoint",
+    )
+    parser.add_argument(
+        "--rl_local_rollout_steps",
+        type=int,
+        default=5,
+        help="learned grid moves rolled out to form one short-term goal",
+    )
     parser.add_argument("--fill_mode", type=int, default=0,
                         help="1: when an agent revisits the same frontier, "
                              "mark its area as obstacle and re-detect")
@@ -199,6 +240,37 @@ def get_args() -> argparse.Namespace:
                         help="Override flame procedural-noise strength "
                              "[0..1.5]. None = decided by --fire_fast "
                              "(0 when fast, 0.55 otherwise).")
+    parser.add_argument(
+        "--fire_render_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "numpy", "torch"],
+        help="FireWorld voxel renderer: auto uses Torch on CUDA when "
+             "available and otherwise falls back to NumPy.",
+    )
+    parser.add_argument(
+        "--fire_render_device",
+        type=str,
+        default="auto",
+        help="Torch FireWorld render device (auto, cpu, cuda, cuda:N). "
+             "Independent from Habitat-Sim --gpu_id.",
+    )
+    parser.add_argument(
+        "--fire_render_dtype",
+        type=str,
+        default="float16",
+        choices=["float16", "float32"],
+        help="FireWorld device-volume dtype; CPU Torch rendering always "
+             "uses float32 because 3D grid sampling does not support "
+             "float16 on CPU.",
+    )
+    parser.add_argument(
+        "--fire_render_max_sample_points",
+        type=int,
+        default=2_000_000,
+        help="Maximum ray sample points per Torch render tile; lower this "
+             "to reduce peak GPU memory.",
+    )
 
     # ------------------------------------------------------------------
     # Dynamic risk assessment.  Thresholds below define a normalized
@@ -384,6 +456,19 @@ def voxel_smoke_kwargs(args) -> dict:
         "n_steps": n_steps,
         "smoke_k_ext": float(args.fire_world_smoke_k_ext),
         "render_scale": render_scale,
+        "render_backend": str(
+            getattr(args, "fire_render_backend", "auto")
+        ),
+        "render_device": str(
+            getattr(args, "fire_render_device", "auto")
+        ),
+        "render_dtype": str(
+            getattr(args, "fire_render_dtype", "float16")
+        ),
+        "max_sample_points": max(
+            1,
+            int(getattr(args, "fire_render_max_sample_points", 2_000_000)),
+        ),
         "thermal_color_blend": 0.85,
         "flame_noise_strength": flame_noise,
         "flame_edge_break": edge_break,

@@ -116,8 +116,15 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 | `--fire_world_smoke_k_ext` | float, `4.0` | 烟雾体素的消光系数倍率（每米），越大越不透明 |
 | `--fire_world_n_steps` | int, `24` | ray-march 每像素采样数 |
 | `--fire_world_render_scale` | float, `0.5` | 体积积分渲染相对相机分辨率的比例，`0.5` 约 4× 加速，`1.0` 全分辨率 |
+| `--fire_fast` | int, `1` | benchmark 快速模式：关闭 procedural noise，并把采样数/渲染比例限制到 `10`/`0.35`；`0` 恢复高质量火焰 |
+| `--fire_render_backend` | `auto\|numpy\|torch`, `auto` | `auto` 在 CUDA 可见时使用 Torch GPU ray-march，否则沿用 NumPy；可显式固定后端 |
+| `--fire_render_device` | str, `auto` | FireWorld Torch 设备，如 `cuda:0`、`cuda:1` 或 `cpu`；与 Habitat-Sim 的 `--gpu_id` 独立 |
+| `--fire_render_dtype` | `float16\|float32`, `float16` | GPU 常驻体素精度；透射率/颜色积分仍为 FP32，Torch CPU 路径自动使用 FP32 |
+| `--fire_render_max_sample_points` | int, `2000000` | 每个 GPU tile 最多包含的射线采样点；显存不足时调低 |
 
-> 备注：`args.cuda` 由 `torch.cuda.is_available()` 自动推导，无需显式传参。
+Torch 后端只缓存当前 timeline frame，而不是把完整 `timeline.npz` 放入显存；同一场景、同一时间帧的多机器人共享该缓存。输出字典同时记录 `fire_render_backend`、`fire_render_device`、frame index 和 cache hit/upload 计数，便于确认 benchmark 实际使用的后端。若 CUDA 初始化或 kernel 执行失败，会发出一次警告并回退到 NumPy。
+
+> 备注：`--gpu_id` 只控制 Habitat-Sim。FireWorld 使用独立的 `--fire_render_device`；`args.cuda` 仍由 `torch.cuda.is_available()` 自动推导。
 
 ---
 
@@ -246,6 +253,23 @@ python main.py \
     --fire_speedup 2.0 \
     --print_images 1
 
+# FireWorld GPU ray-march（benchmark 快速视觉）
+python main.py --num_agents 2 --nav_mode co_ut \
+    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_render_backend torch --fire_render_device cuda:0 \
+    --fire_render_dtype float16 --fire_fast 1
+
+# 高质量 GPU 火焰；显存紧张时降低 max sample points
+python main.py --num_agents 1 --nav_mode nearest \
+    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_render_backend torch --fire_render_device cuda:0 \
+    --fire_fast 0 --fire_render_max_sample_points 1000000
+
+# 固定 NumPy 参考后端，用于 CPU/GPU benchmark 对照
+python main.py --num_agents 1 --nav_mode nearest \
+    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_render_backend numpy
+
 
 
 # # 自动评测，FireWorld 完整火灾感知
@@ -310,6 +334,22 @@ python main.py \
 
 ```
 
+### Navigation step metric
+
+当前 ObjectNav 配置启用了 Habitat-Lab 原生的 `NumStepsMeasure`。每个 episode
+的 `env.get_metrics()` 和最终平均指标中都会包含 `num_steps`：
+
+- episode reset 后从 `0` 开始；
+- 每次真正执行一次联合 `env.step(actions)` 增加 `1`，包括送入环境的终止
+  `STOP` action；
+- 多机器人在同一个 Habitat step 中同步执行，因此一次联合 step 仍然只计
+  `1`，不会乘以 `num_agents`。
+
+建议将 `num_steps` 与 `Success`、`SPL` 一起报告，作为与机器性能无关的导航
+时间/动作预算代理。它不是 wall-clock 时间：VLM API 延迟、渲染和硬件速度
+不会改变 `num_steps`。`main_vec.py` 中的 `episode_runtime`、`fps` 和
+`avg_step_time` 可用于分析实际运行耗时。
+
 ### 风险评估 benchmark
 
 推荐使用 sensed 风险图和 step clock：
@@ -327,6 +367,36 @@ python main.py --num_agents 2 --nav_mode co_ut \
 权重，但仍作为硬不可通行区域，并向外膨胀 `0.45m`，因此不要再传
 `--risk_weight_flame`。
 
-主 benchmark 只报告 Habitat `Success`、Habitat `SPL`、`risk/safe_success`
-和 `risk/che`。完整定义、实验边界和 Habitat 原生 metric 的迁移说明见
-[Dynamic Risk Assessment](risk_assessment.md)。
+主 benchmark 报告 Habitat `Success`、Habitat `SPL`、Habitat `num_steps`、
+`risk/safe_success` 和 `risk/che`。完整定义、实验边界和 Habitat 原生
+metric 的迁移说明见 [Dynamic Risk Assessment](risk_assessment.md)。
+
+### Local planner baselines
+
+默认 `--local_planner fmm` 保留当前实现：risk-off 时依旧优先 Habitat
+navmesh、失败后回退 FMM；risk-aware 时直接使用 risk-aware FMM。新增
+`astar` 和 `rl` 两个显式 baseline：
+
+```bash
+--local_planner fmm
+--local_planner astar
+--local_planner rl --rl_local_checkpoint <checkpoint.pth>
+```
+
+不再提供单独的 local-planner risk 开关。三种 planner 都直接跟随现有
+`risk_enabled` 和 `risk_source`：
+
+```bash
+# 自动 risk-aware：global/local planner 都使用 sensed risk/hard-unsafe
+--risk_enabled 1 --risk_source sensed
+
+# 自动 risk-blind：planner 不使用 risk，evaluator 继续计算 SafeSuccess/CHE
+--risk_enabled 1 --risk_source none
+
+# 完全关闭 risk runtime
+--risk_enabled 0
+```
+
+`sensed`/`oracle` 会自动选择 aware planner；`none` 和 risk-off 会自动选择
+blind planner。完整算法定义、RL 训练命令、checkpoint 约束及六组
+benchmark 矩阵见 [Local-planner baselines](local_planner_baselines.md)。

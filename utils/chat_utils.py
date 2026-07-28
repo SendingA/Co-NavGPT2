@@ -165,15 +165,9 @@ def message_prepare(
     prompt,
     candidate_map_list,
     navigation_instruct,
-    risk_context=None,
+    num_agents=None,
 ):
-    """Build the VLM request, optionally appending structured hazard context.
-
-    The context is appended to the existing first text item rather than added
-    as another content item.  Consequently legacy calls are byte-for-byte
-    compatible and ``chat_with_gpt4v`` can keep using ``len(content) - 1`` as
-    its frontier count.
-    """
+    """Build the normal, risk-free VLM frontier-assignment request."""
     base64_image_list = []
     for image_candidate in candidate_map_list:
         base64_image_list.append(base64.b64encode(image_candidate.getvalue()).decode("utf-8"))
@@ -181,16 +175,14 @@ def message_prepare(
 
     message = []
     message.append({"role": "system", "content": prompt})
-
     image_contents = []
-    task_text = "two robots need to find a " + navigation_instruct
-    if risk_context is not None:
-        task_text += (
-            "\n\nStructured hazard context (JSON). Frontiers with "
-            "hard_blocked=true are forbidden and will also be rejected by "
-            "the deterministic safety guard:\n"
-            + _risk_context_to_json(risk_context)
-        )
+    robot_count = int(args.num_agents if num_agents is None else num_agents)
+    if robot_count < 1:
+        raise ValueError("num_agents must be at least 1")
+    if robot_count == 1:
+        task_text = "1 robot needs to find a " + navigation_instruct
+    else:
+        task_text = f"{robot_count} robots need to find a " + navigation_instruct
     image_contents.append({
         "type": "text",
         "text": task_text,
@@ -205,6 +197,49 @@ def message_prepare(
     message.append({"role": "user", "content": image_contents})
     
     return message
+
+
+def risk_message_prepare(
+    prompt,
+    candidate_map_list,
+    navigation_instruct,
+    risk_context,
+    num_agents=None,
+):
+    """Build the dedicated risk-aware VLM frontier-assignment request."""
+    if risk_context is None:
+        raise ValueError("risk_context is required for a risk-aware VLM request")
+
+    base64_image_list = [
+        base64.b64encode(image_candidate.getvalue()).decode("utf-8")
+        for image_candidate in candidate_map_list
+    ]
+    robot_count = int(args.num_agents if num_agents is None else num_agents)
+    if robot_count < 1:
+        raise ValueError("num_agents must be at least 1")
+
+    robot_ids = ", ".join(f"robot_{index}" for index in range(robot_count))
+    task_text = (
+        "Risk-aware frontier assignment\n"
+        f"Robots ({robot_count}): {robot_ids}\n"
+        f"Target object: {navigation_instruct}\n"
+        f"Candidate frontiers: {len(base64_image_list)} images ordered from "
+        "frontier_0 upward\n\n"
+        "Hazard report (JSON; match entries to images by frontier_id):\n"
+        f"{_risk_context_to_json(risk_context)}"
+    )
+    image_contents = [{"type": "text", "text": task_text}]
+    for base64_image in base64_image_list:
+        image_contents.append({
+            "type": "image_url",
+            "image_url": {
+                "url": f"data:image/jpeg;base64,{base64_image}"
+            },
+        })
+    return [
+        {"role": "system", "content": prompt},
+        {"role": "user", "content": image_contents},
+    ]
 
 
 def chat_with_gpt4v(chat_history, gpt_type = args.gpt_type):

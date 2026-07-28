@@ -1,7 +1,7 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-07-23T10:16:28-04:00",
+    "updated_at": "2026-07-28T13:55:03-04:00",
     "owner": "copilot"
   },
   "items": [
@@ -1402,6 +1402,640 @@
         "summary": "All 76 tests pass. Habitat patch applicability, Hydra composition, five CLI parsers, documentation inventory, frozen/new plan boundaries, JSON parsing, and whitespace checks pass."
       },
       "last_updated": "2026-07-23T10:16:28-04:00"
+    },
+    {
+      "id": "T234",
+      "title": "Make the VLM task text reflect configured robot count",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "message_prepare describes exactly the runtime num_agents value with correct singular or plural grammar, and both risk-on and risk-off main call sites pass that value explicitly",
+      "notes": "message_prepare now renders singular/plural task text from num_agents. Both active main.py call sites pass the runtime value explicitly; callers outside main.py retain a default sourced from parsed arguments.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/chat_utils.py and both main.py message_prepare call sites"
+        ],
+        "summary": "The hard-coded task sentence was removed from the active runtime path and invalid counts below one are rejected."
+      },
+      "last_updated": "2026-07-25T22:08:20-04:00"
+    },
+    {
+      "id": "T235",
+      "title": "Validate dynamic VLM robot-count prompting",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T234"],
+      "acceptance": "focused tests cover singular and multi-robot task text plus risk context compatibility, and modified Python, TODO JSON, and whitespace checks pass",
+      "notes": "The prompt regression now exercises three robots in risk-off mode and one robot in risk-on mode, including the structured hazard context and unchanged content-item count.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_risk_integration -v",
+          "python -m py_compile main.py utils/chat_utils.py tests/test_risk_integration.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 6 risk integration tests pass. Singular and plural task text, risk-context compatibility, Python syntax, TODO JSON, and whitespace checks pass."
+      },
+      "last_updated": "2026-07-25T22:09:18-04:00"
+    },
+    {
+      "id": "T236",
+      "title": "Restore overwritten dynamic VLM robot-count prompt",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T234", "T235"],
+      "acceptance": "utils/chat_utils.py again accepts num_agents, contains no hard-coded two-robot task sentence, and produces runtime-count-aligned text from both main.py call sites",
+      "notes": "An IDE stale-buffer save restored the old message_prepare body after validation while main.py retained the new keyword calls. The dynamic signature and singular/plural implementation have been reapplied and verified on disk.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_risk_integration.RiskPromptRegressionTests -v",
+          "python -m py_compile main.py utils/chat_utils.py tests/test_risk_integration.py",
+          "! rg -n -F 'two robots need to find a' utils/chat_utils.py main.py tests",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "The prompt regression passes, modified Python compiles, no hard-coded two-robot task sentence remains, and JSON plus whitespace checks pass."
+      },
+      "last_updated": "2026-07-25T22:17:40-04:00"
+    },
+    {
+      "id": "T237",
+      "title": "Define explicit local-planner and risk-awareness contract",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "CLI exposes fmm, astar, and rl with fmm as the default, preserves the current fmm-labelled implementation byte-for-byte, and lets A star and RL independently run with or without local risk inputs",
+      "notes": "Per user clarification, fmm names the current implementation even though its risk-off branch remains Habitat-navmesh-first with FMM fallback. The default control flow is preserved. A star/RL are explicit alternatives, and auto/on/off local awareness is independent from risk evaluation.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile arguments.py main.py main_vec.py utils/local_planners/factory.py"
+        ],
+        "summary": "The CLI and runtime validation paths compile with fmm default, explicit astar/rl choices, and independent local awareness."
+      },
+      "last_updated": "2026-07-26T18:32:33-04:00"
+    },
+    {
+      "id": "T238",
+      "title": "Implement risk-aware and risk-blind A star planner",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T237"],
+      "acceptance": "A star supports multi-goal planning, eight-connected motion without diagonal corner cutting, continuous risk cost, hard-unsafe exclusion, emergency escape, STG generation, and unreachable replanning",
+      "notes": "Added a FMM-compatible eight-connected A star backend with admissible multi-goal distance heuristic, no diagonal corner cutting, FMM-aligned continuous risk cost, hard exclusions, shared emergency escape, STG selection, and explicit replan failure.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_local_planner_baselines -v"
+        ],
+        "summary": "A star unit tests pass for multi-goal reachability, STGs, corner blocking, risk detours, hard masks and emergency escape."
+      },
+      "last_updated": "2026-07-26T18:32:33-04:00"
+    },
+    {
+      "id": "T239",
+      "title": "Implement checkpointed RL grid local planner",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T237"],
+      "acceptance": "the RL planner loads a metadata-validated PyTorch policy, supports risk-aware and risk-blind observations, masks invalid moves, produces STGs through learned rollouts, and fails clearly when a compatible checkpoint is absent",
+      "notes": "Implemented a map-based PPO waypoint policy with 3-channel blind and 5-channel aware schemas, metadata/version/action-order validation, cached deterministic inference, invalid/visited move masks, learned short rollouts, and no random/FMM fallback.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_local_planner_baselines -v"
+        ],
+        "summary": "RL tests pass for deterministic waypoint inference, aware hard-mask intervention, observation schemas and incompatible-checkpoint rejection."
+      },
+      "last_updated": "2026-07-26T18:32:33-04:00"
+    },
+    {
+      "id": "T240",
+      "title": "Integrate planner selection into all VLM agent runtimes",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T238", "T239"],
+      "acceptance": "main.py and main_vec.py agents keep the current implementation unchanged under default fmm, enter new code only for explicit astar or rl selection, and maintain independent per-agent planning state",
+      "notes": "Both VLM agent variants preserve the nested historical FMM/navmesh condition under the default name and enter factory-created code only for astar/rl. New backends use corrected padded coordinates and closed map boundaries in aware and blind modes.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_local_planner_baselines.AgentPlannerIntegrationTests tests.test_risk_planner.AgentRiskAPIContractTests tests.test_person_objectnav.PersonObjectNavTests.test_person_and_chair_share_fmm_and_greedy_stop -v"
+        ],
+        "summary": "Single-process and vector agents run A star/RL in both awareness modes; source-contract and person/chair FMM regressions confirm the default implementation remains intact."
+      },
+      "last_updated": "2026-07-26T18:32:33-04:00"
+    },
+    {
+      "id": "T241",
+      "title": "Add PPO training workflow for RL local planner",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T239"],
+      "acceptance": "a reproducible script and config can train risk-aware or risk-blind grid policies, save compatible checkpoints and metadata, and complete a short CPU smoke run",
+      "notes": "Added a configurable PPO trainer over randomized connected occupancy/risk grids plus schema-bearing checkpoint serialization. Smoke-trained checkpoints validate mechanics only; benchmark claims require converged frozen policies without validation/test-scene leakage.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/train_rl_local_planner.py --output /tmp/conav-rl-blind-smoke.pth --risk-aware 0 --updates 1 --num-envs 2 --rollout-steps 4 --grid-size 15 --crop-size 15 --hidden-size 32 --max-episode-steps 12 --ppo-epochs 1 --mini-batch-size 8 --log-interval 1",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/train_rl_local_planner.py --output /tmp/conav-rl-aware-smoke.pth --risk-aware 1 --updates 1 --num-envs 2 --rollout-steps 4 --grid-size 15 --crop-size 15 --hidden-size 32 --max-episode-steps 12 --ppo-epochs 1 --mini-batch-size 8 --log-interval 1"
+        ],
+        "summary": "One-update CPU PPO runs for blind and aware schemas both save readable checkpoints; these artifacts remain temporary smoke outputs."
+      },
+      "last_updated": "2026-07-26T18:32:33-04:00"
+    },
+    {
+      "id": "T242",
+      "title": "Test all local-planner and awareness combinations",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T238", "T239", "T240", "T241"],
+      "acceptance": "focused tests cover FMM, A star, and RL in aware and blind modes, including detours, hard masks, checkpoint validation, action legality, STOP semantics, and legacy regression safety",
+      "notes": "Added 12 focused baseline tests and retained the existing FMM/risk/person regression contracts. The complete suite covers A star and RL in aware/blind agent paths, default-FMM selection, risk detours, hard masks, checkpoint compatibility, legal motion and shared STOP behavior.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_local_planner_baselines -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v"
+        ],
+        "summary": "All 12 focused local-planner tests pass, and the full repository suite passes 88/88 with no failures."
+      },
+      "last_updated": "2026-07-26T18:50:17-04:00"
+    },
+    {
+      "id": "T243",
+      "title": "Document and validate local-planner baselines",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T242"],
+      "acceptance": "documentation gives exact aware/blind commands and benchmark controls; focused/full tests, syntax, config, JSON, and whitespace validation results are recorded",
+      "notes": "Documented the six planner/awareness combinations, exact commands, the historical FMM naming contract, A star cost semantics, RL checkpoint/training workflow and benchmark caveats. A live Habitat benchmark was not run because a converged frozen RL checkpoint and the full runtime assets/API setup are experiment inputs rather than smoke-validation artifacts.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile arguments.py main.py main_vec.py agents/vlm_agents.py agents/vlm_multi_agents.py utils/local_planners/__init__.py utils/local_planners/base.py utils/local_planners/astar.py utils/local_planners/factory.py utils/local_planners/rl.py scripts/train_rl_local_planner.py tests/test_local_planner_baselines.py",
+          "MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --help",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/train_rl_local_planner.py --help",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -c \"import pathlib,yaml; data=yaml.safe_load(pathlib.Path('configs/rl_local_planner_ppo.yaml').read_text()); assert isinstance(data, dict) and data\"",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "Python compilation, both CLI help paths, YAML parsing, documented-file checks, TODO JSON parsing and whitespace validation all pass."
+      },
+      "last_updated": "2026-07-26T18:50:17-04:00"
+    },
+    {
+      "id": "T244",
+      "title": "Couple local-planner awareness directly to risk configuration",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T243"],
+      "acceptance": "the local_planner_risk_aware CLI option and override state are removed; sensed/oracle risk planning automatically selects aware local planning, while risk-off and evaluator-only source=none select blind planning",
+      "notes": "Removed the CLI option, resolver function and synthetic effective-state attribute. RiskConfig.effective_source is now the sole selector: sensed/oracle is aware; risk-off and source=none are blind. Preserving source=none as evaluator-only avoids forcing neutral-map FMM or changing the historical navmesh-first branch.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_local_planner_baselines -v",
+          "MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --help",
+          "! rg -q -e \"local_planner_risk_aware\" arguments.py main.py main_vec.py utils/local_planners docs/main_usage.md docs/local_planner_baselines.md utils/risk/runtime.py"
+        ],
+        "summary": "The focused suite passes 13/13, the removed flag is rejected by argparse, main help exposes no independent awareness option, and production/docs contain no stale reference."
+      },
+      "last_updated": "2026-07-26T21:37:45-04:00"
+    },
+    {
+      "id": "T245",
+      "title": "Update tests and documentation for automatic awareness",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T244"],
+      "acceptance": "tests prove the removed flag is rejected and effective risk availability selects compatible aware/blind planners; all commands and documentation use risk_enabled/risk_source only",
+      "notes": "Updated the usage guide and baseline specification with automatic aware/blind commands. The runtime manifest now records local_planner_uses_risk as derived metadata rather than persisting a nonexistent CLI override.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile arguments.py main.py main_vec.py utils/local_planners/__init__.py utils/local_planners/factory.py utils/risk/runtime.py tests/test_local_planner_baselines.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "The full repository suite passes 89/89; Python compilation, TODO JSON parsing and whitespace validation pass."
+      },
+      "last_updated": "2026-07-26T21:37:45-04:00"
+    },
+    {
+      "id": "T246",
+      "title": "Define a standalone risk VLM system prompt",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "system_prompt.py contains one explicit risk_prompt based on the full prompt structure, with complete hazard-field semantics, safety-first decision priorities and an exact dynamic multi-robot JSON contract; it is not generated from or aliased to a normal prompt",
+      "notes": "Kept all normal prompt strings unchanged. Replaced the insertion helper and three generated variants with one explicit risk_prompt whose structure follows the full prompt but accurately describes the actual candidate maps and structured hazard report. It defines field meanings, safety priority, uncertainty, proxy routes, team coverage and an exact JSON-only schema.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_risk_integration.RiskPromptRegressionTests -v",
+          "! rg -n \"risk_system_prompt|risk_obs_system_prompt|risk_full_system_prompt|def _risk_prompt|_RISK_SAFETY_GUIDANCE\" system_prompt.py main.py utils/chat_utils.py"
+        ],
+        "summary": "The dedicated prompt assertions pass and no generated risk-prompt machinery remains in production code."
+      },
+      "last_updated": "2026-07-26T22:55:08-04:00"
+    },
+    {
+      "id": "T247",
+      "title": "Separate risk and normal VLM message formatting",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T246"],
+      "acceptance": "normal message_prepare has no hazard branch; risk_message_prepare requires and serializes the hazard report in a dedicated task block, and main.py uses only the risk-specific prompt/message path when sensed or oracle risk planning is active",
+      "notes": "Normal message_prepare now has no hazard argument or conditional branch. The new risk_message_prepare requires a report and emits a dedicated text block with robot IDs, target, candidate count and stable hazard JSON. main.py selects risk_prompt plus risk_message_prepare only in the sensed/oracle risk frontier path.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile system_prompt.py utils/chat_utils.py main.py tests/test_risk_integration.py"
+        ],
+        "summary": "The separated message builders and runtime call path compile successfully."
+      },
+      "last_updated": "2026-07-26T22:55:08-04:00"
+    },
+    {
+      "id": "T248",
+      "title": "Validate isolated VLM prompt paths",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T246", "T247"],
+      "acceptance": "regression tests prove risk-off prompt/message stability, standalone risk content and hazard serialization, no pseudo-frontier image, dynamic robot counts, and removal of generated risk prompt symbols; focused and full test suites pass",
+      "notes": "Added three prompt-path regressions covering independent system prompts, separate normal/risk user content, dynamic robot IDs, required hazard context, image/frontier count stability and the exact main.py selection path.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_risk_integration.RiskPromptRegressionTests -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "Prompt regressions pass 3/3 and the complete repository suite passes 91/91; JSON and whitespace checks pass."
+      },
+      "last_updated": "2026-07-26T22:55:08-04:00"
+    },
+    {
+      "id": "T249",
+      "title": "Enable Habitat navigation step metric",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the active ObjectNav task includes Habitat-Lab's native NumStepsMeasure and env.get_metrics() returns one num_steps count per executed navigation env.step",
+      "notes": "Added Habitat's native navigation-compatible NumStepsMeasure to the shared ObjectNav config instead of introducing a second manual counter. Both main.py and main_vec.py now receive num_steps from env.get_metrics(); person ObjectNav inherits the same config.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_navigation_steps_metric -v"
+        ],
+        "summary": "Focused tests confirm Hydra composition selects NumStepsMeasure and the registered measure resets to zero and increments exactly once per task step."
+      },
+      "last_updated": "2026-07-27T12:02:51-04:00"
+    },
+    {
+      "id": "T250",
+      "title": "Document navigation-step benchmark semantics",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T249"],
+      "acceptance": "the usage guide identifies num_steps as the navigation-time proxy and distinguishes simulator action count from wall-clock runtime",
+      "notes": "Documented num_steps as the canonical simulator-step time/action-budget proxy, including STOP and multi-agent joint-step semantics, and separated it from wall-clock runtime telemetry.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "verify docs/main_usage.md metric name, entrypoint behavior, counting semantics, and runtime distinction against the active config and Habitat implementation"
+        ],
+        "summary": "The documented num_steps key and semantics match Habitat-Lab 0.3.3 NumStepsMeasure and the shared ObjectNav task config."
+      },
+      "last_updated": "2026-07-27T12:02:51-04:00"
+    },
+    {
+      "id": "T251",
+      "title": "Validate navigation step metric integration",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T249", "T250"],
+      "acceptance": "focused tests prove reset and per-step counting, config composition succeeds, and repository regression, JSON, syntax, and whitespace checks pass",
+      "notes": "A live one-step HM3D Env smoke was attempted but the current container could not create a Habitat-Sim WindowlessEGL CUDA context. Config composition and native measure behavior are covered without GPU. The full suite has one unrelated pre-existing risk-prompt wording failure, recorded as T252.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_navigation_steps_metric -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile tests/test_navigation_steps_metric.py",
+          "compose person_objectnav_hm3d.yaml and assert habitat.task.measurements.num_steps.type == NumStepsMeasure",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "The 2 focused tests, default/person config composition, Python syntax, JSON, and whitespace checks pass. The full suite passes 92/93; only RiskPromptRegressionTests.test_normal_and_risk_system_prompts_are_independent fails because risk_prompt lacks the unrelated literal 'global top-view'. The GPU Env smoke could not run because WindowlessEGL could not create a CUDA context."
+      },
+      "last_updated": "2026-07-27T12:03:47-04:00"
+    },
+    {
+      "id": "T252",
+      "title": "Reconcile risk prompt wording regression",
+      "status": "todo",
+      "priority": "P1",
+      "depends_on": ["T248"],
+      "acceptance": "the dedicated risk prompt and its regression test agree on the candidate-map wording without weakening hazard semantics, and the full repository suite passes",
+      "notes": "Discovered while validating T251. This is outside the navigation-step metric scope: the current test expects the literal 'global top-view', while system_prompt.risk_prompt says 'candidate top-view map'.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:03:47-04:00"
+    },
+    {
+      "id": "T253",
+      "title": "Audit benchmark dimensions and implementation gaps",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the active dataset sizes, global/local planner selectors, prompt paths, FireWorld coverage, risk/depth switches, metric semantics and output paths are verified from code and artifacts",
+      "notes": "Initial audit found 1000 ObjectNav and 662 person episodes over the same 36 val scenes; FireWorld has four plans over two scenes but only three baked timelines. The existing rl local planner is randomized-grid PPO, not Habitat PointNav DD-PPO. Current risk VLM input uses separate clean candidate maps plus a textual hazard report; no active hazard-map overlay is drawn into those images.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect arguments.py, main.py, main_vec.py, system_prompt.py, utils/chat_utils.py, utils/local_planners, configs and benchmark documentation",
+          "count episodes/scenes in both compressed validation datasets and inventory FireWorld plans/timelines"
+        ],
+        "summary": "Verified both dataset sizes, all active planner/risk/depth switches, the actual VLM input path, current fragmented outputs, four plan files and three available timelines."
+      },
+      "last_updated": "2026-07-27T12:45:43-04:00"
+    },
+    {
+      "id": "T254",
+      "title": "Write the benchmark experimental protocol",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T253"],
+      "acceptance": "one documentation file defines datasets, matched normal/fire cases, controlled global and local baselines, prompt study, MPAF/risk ablations, metrics, statistics, run naming, artifact retention and execution order",
+      "notes": "Added docs/benchmark_experiment_plan.md with controlled global/local blocks, matched normal/fire rules, PointNav adapter requirements, MPAF and risk ablations, prompt factorial, primary metrics, statistical reporting, unified artifact layout and phased execution.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "assert objectnav=(1000 episodes,36 scenes) and person=(662 episodes,36 scenes)",
+          "assert four FireWorld plans, three timelines, and primary matrix counts 40/30/60",
+          "verify referenced configs/scripts exist and CLI choices match arguments.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "Dataset, fire-plan and matrix-count assertions pass; CLI names, referenced paths, TODO JSON and whitespace validation pass."
+      },
+      "last_updated": "2026-07-27T12:45:43-04:00"
+    },
+    {
+      "id": "T255",
+      "title": "Freeze dataset and episode manifests",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T254"],
+      "acceptance": "versioned manifests identify every normal episode and every matched fire episode-plan pair by dataset, scene_id, episode_id, category and seed without relying on iterator order",
+      "notes": "Use scene_id plus episode_id as the episode key because episode_id values repeat across HM3D content shards. Normal full-val and matched hazard-subset results must remain separate.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T256",
+      "title": "Build a unified benchmark launcher and artifact layout",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T254", "T255"],
+      "acceptance": "a resumable launcher expands registered experiment cells, writes all navigation/fire/risk/VLM outputs below one run root, records command/config/code/checkpoint hashes and prevents accidental overwrite",
+      "notes": "The current dump_location, fire_dump_dir and risk_dump_dir are independent. The launcher must bind them to one outputs/benchmarks/<study>/runs/<run_id>/ tree and write running/completed/failed status.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T257",
+      "title": "Add machine-readable episode metrics",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T254"],
+      "acceptance": "every episode writes scene/category/episode identity, num_steps, distance_to_goal, success, the existing Habitat SPL, CHE and SafeSuccess to JSONL without changing metric computation",
+      "notes": "Current main.py only logs cumulative averages. Per user decision, preserve the repository's existing spl key and calculation exactly; do not add another path-efficiency metric or make SPL changes a benchmark blocker.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T14:51:58-04:00"
+    },
+    {
+      "id": "T258",
+      "title": "Complete and freeze FireWorld benchmark coverage",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T254"],
+      "acceptance": "all registered fire plans have validated timeline.npz files and the final hazard scene subset is predeclared with matched no-fire controls and medium/severe scenario labels",
+      "notes": "Immediately rebake Nfvxx8J5NCo plan b2fc76fae83d. Existing two-scene coverage is suitable for a pilot only; dataset-wide claims require a larger preregistered subset, ideally all 36 scenes.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T259",
+      "title": "Integrate a Habitat PointNav DD-PPO local-planner baseline",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T254"],
+      "acceptance": "a frozen pretrained PointNav policy consumes frontier-relative point goals with per-robot recurrent state, converts local STOP into frontier replanning rather than ObjectNav termination, and has clearly labeled blind and safety-shielded fire variants",
+      "notes": "Do not reuse the current --local_planner rl label as if it were PointNav: that backend is a map-based PPO policy trained on randomized grids. Record checkpoint source/hash and exact sensor/action schema; a pretrained policy is not intrinsically risk-aware.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T260",
+      "title": "Implement controlled VLM prompt and visual-input variants",
+      "status": "todo",
+      "priority": "P2",
+      "depends_on": ["T252", "T254", "T256"],
+      "acceptance": "the VLM experiment can independently select separate versus aggregated candidate images and a 2x2 hazard overlay/report design while logging exact requests, responses, model identifier and prompt hashes",
+      "notes": "Treat the duplicated user-listed condition as the missing report-only cell unless later revised: clean-map only, overlay only, report only, and overlay plus report. Current production is separate maps plus report only; get_all_candidate_full_maps is not the requested all-candidate aggregate.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T261",
+      "title": "Run the registered benchmark pilot",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T255", "T256", "T257", "T258", "T259"],
+      "acceptance": "a small fixed episode subset completes normal, fire-none, fire-sensed and fire-oracle runs for both datasets and representative planner combinations with no missing or overwritten artifacts",
+      "notes": "Use one seed and deterministic non-VLM methods first. Validate metric ranges, episode pairing, fire clock, resume behavior, disk growth and PointNav STOP handling before any full run.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T262",
+      "title": "Run controlled global and local planner baselines",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T261"],
+      "acceptance": "global planners are compared with one frozen local planner, local planners are compared with one frozen deterministic global planner, and every reported planner has matched normal and fire results on both datasets",
+      "notes": "Avoid an uncontrolled full Cartesian product in the primary table. Use FMM for the global-planner block and co_ut for the local-planner block; include the end-to-end VLM method as a separate registered row.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T263",
+      "title": "Run MPAF and dynamic risk-awareness ablations",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T261"],
+      "acceptance": "the clean-depth ablation and risk_source none/sensed/oracle ablation change only their preregistered factors while all datasets, episodes, fire plans, seeds, thresholds and planner settings remain paired",
+      "notes": "For the end-to-end no-clean-depth condition, set depth_use_clean=0 and risk_geometry_depth_source=smoke so clean geometry does not leak through the risk projector. Keep risk_enabled=1 for source=none so CHE is still evaluated.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T264",
+      "title": "Aggregate benchmark statistics and produce tables",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T262", "T263"],
+      "acceptance": "scripts validate completeness and paired episode keys, report per-dataset and per-fire-plan aggregates with uncertainty, and generate main, ablation and diagnostic tables without pooling normal full-val and hazard-subset episodes",
+      "notes": "Use scene-clustered or paired bootstrap on full-val results. With only two fire scenes, report each scene/plan explicitly rather than presenting a strong cross-scene confidence claim. CHE is N/A in normal runs, not zero.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T265",
+      "title": "Run the low-priority VLM prompt study",
+      "status": "todo",
+      "priority": "P2",
+      "depends_on": ["T260", "T261"],
+      "acceptance": "the layout comparison and hazard overlay/report factorial run on a frozen subset with identical VLM model settings, candidate frontiers and logged request/response artifacts",
+      "notes": "Run after the deterministic benchmark and risk ablations. The current API call hard-codes gpt-4o despite gpt_type, so model selection/version logging must be fixed before this study.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-07-27T12:40:19-04:00"
+    },
+    {
+      "id": "T266",
+      "title": "Audit FireWorld GPU acceleration boundaries",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the runtime ray-march, timeline query, multi-agent reuse path, CLI wiring and downstream NumPy output contract are traced before implementation",
+      "notes": "Confirmed the per-observation voxel ray-march is pure NumPy and is the highest-value GPU target. Offline propagation stays unchanged because benchmark runtime consumes baked timelines. The current shell has a CUDA PyTorch build but no visible NVIDIA driver, so CUDA performance validation must run on a GPU/EGL node.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/fire_sensors/voxel_render.py, sensors/voxel_smoke.py, utils/fire_world/runtime.py, arguments.py and FireSensorSuite call sites",
+          "query torch.cuda.is_available and nvidia-smi",
+          "inspect timeline shapes and decompressed sizes"
+        ],
+        "summary": "The renderer, frame allocation and configuration paths were traced. A one-frame device cache is appropriate; uploading the full 1.6 GiB Nfvxx8J5NCo timeline is not."
+      },
+      "last_updated": "2026-07-28T13:42:11-04:00"
+    },
+    {
+      "id": "T267",
+      "title": "Implement Torch voxel ray-march backend",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T266"],
+      "acceptance": "a Torch backend performs batched trilinear flame, smoke and temperature sampling and front-to-back compositing on the selected device while preserving the existing NumPy backend and output schema",
+      "notes": "Implemented batched Torch 3D grid sampling, vectorized front-to-back compositing, optional procedural noise, bounded ray tiling, FP16 CUDA volume storage with FP32 accumulation, and a shared NumPy/OpenCV final display stage.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_torch_render -v",
+          "compare NumPy and Torch CPU image, transmittance, flame mask and thermal temperature with max_sample_points=64"
+        ],
+        "summary": "Torch CPU matches the NumPy reference within 1e-5 relative tolerance for physical float maps and exactly for rendered image/flame mask, including a forced multi-tile render."
+      },
+      "last_updated": "2026-07-28T13:51:18-04:00"
+    },
+    {
+      "id": "T268",
+      "title": "Add FireWorld render backend configuration and frame cache",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T267"],
+      "acceptance": "CLI and VoxelSmokeConfig select auto, NumPy or Torch rendering; unavailable CUDA falls back safely; agents sharing a scene and timeline frame reuse one cached device volume",
+      "notes": "Added auto/numpy/torch backend selection, an independent render device and dtype, sample-point memory bound, one-frame-per-device cache attached to the shared FireScene, native FP16 timeline access, graceful NumPy fallback and per-step renderer diagnostics.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "test repeated frame cache hits and next-frame replacement",
+          "test two agent sensors receive the same scene cache",
+          "test invalid CUDA device warns once and falls back to NumPy",
+          "test voxel_smoke_kwargs propagates all render CLI values"
+        ],
+        "summary": "A repeated frame uploads once then hits the cache; a new frame replaces it. Explicit unavailable CUDA safely falls back, and CLI fields reach VoxelSmokeConfig."
+      },
+      "last_updated": "2026-07-28T13:51:18-04:00"
+    },
+    {
+      "id": "T269",
+      "title": "Validate FireWorld Torch rendering and fallback",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T267", "T268"],
+      "acceptance": "focused tests cover NumPy/Torch CPU parity, output shape and dtype, cache reuse, automatic device fallback, configuration parsing and the existing fire sensor regressions",
+      "notes": "Focused parity/cache/fallback, thermal and risk integration tests pass except the previously recorded unrelated T252 risk-prompt wording failure. CUDA timing and visual inspection remain external because this shell cannot access the NVIDIA driver.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_torch_render tests.test_thermal_sensor tests.test_risk_integration -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation tests.test_fire_template_semantics -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile arguments.py utils/fire_sensors/config.py utils/fire_sensors/suite.py utils/fire_sensors/sensors/voxel_smoke.py utils/fire_sensors/voxel_render.py utils/fire_sensors/voxel_render_torch.py tests/test_fire_torch_render.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --help",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 7 new Torch renderer tests pass, including physical-output parity, procedural noise, tiling, native-frame reuse, two-agent cache sharing, CLI wiring and CUDA fallback. Thermal, propagation, template and fire-sensor smoke tests pass. The full suite passes 98/99; only the pre-existing T252 risk-prompt wording regression fails. Syntax, CLI help, JSON and whitespace checks pass. Actual CUDA FPS/VRAM validation could not run because the current shell exposes no NVIDIA driver or CUDA device."
+      },
+      "last_updated": "2026-07-28T13:55:03-04:00"
     }
   ]
 }

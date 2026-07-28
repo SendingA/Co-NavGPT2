@@ -2,7 +2,10 @@
 from __future__ import annotations
 
 import importlib
+import inspect
+from io import BytesIO
 import json
+from pathlib import Path
 import sys
 import tempfile
 from types import SimpleNamespace
@@ -19,48 +22,107 @@ from utils.risk.runtime import RiskRuntime
 
 
 class RiskPromptRegressionTests(unittest.TestCase):
-    def test_risk_off_prompt_is_unchanged_and_risk_prompt_is_explicit(self) -> None:
+    @staticmethod
+    def _prompt_modules():
         # chat_utils has a legacy import-time argparse call.  Isolate it from
         # unittest's flags without changing production behaviour.
         with mock.patch.object(sys, "argv", ["test_risk_integration"]):
             prompts = importlib.import_module("system_prompt")
             chat_utils = importlib.import_module("utils.chat_utils")
+        return prompts, chat_utils
 
-        for legacy_prompt, risk_prompt in (
-            (prompts.system_prompt, prompts.risk_system_prompt),
-            (prompts.obs_system_prompt, prompts.risk_obs_system_prompt),
-            (prompts.full_system_prompt, prompts.risk_full_system_prompt),
+    def test_normal_and_risk_system_prompts_are_independent(self) -> None:
+        prompts, _ = self._prompt_modules()
+        source = inspect.getsource(prompts)
+
+        for normal_prompt in (
+            prompts.system_prompt,
+            prompts.obs_system_prompt,
+            prompts.full_system_prompt,
         ):
-            with self.subTest(prompt_prefix=legacy_prompt[:24]):
-                self.assertNotIn("Dynamic hazard context", legacy_prompt)
-                self.assertNotIn("hard_blocked", legacy_prompt)
-                self.assertIn("Dynamic hazard context", risk_prompt)
-                self.assertIn(
-                    "Never select a frontier with `hard_blocked=true`",
-                    risk_prompt,
-                )
+            self.assertNotIn("hard_blocked", normal_prompt)
+            self.assertNotIn("hazard_report", normal_prompt)
+        self.assertIn("global top-view", prompts.full_system_prompt)
+        self.assertIn("global top-view", prompts.risk_prompt)
+        self.assertIn("hard_blocked=true", prompts.risk_prompt)
+        self.assertIn("route_max_risk", prompts.risk_prompt)
+        self.assertIn("Low confidence means uncertain, not safe", prompts.risk_prompt)
+        self.assertIn("Return a JSON object only", prompts.risk_prompt)
+        self.assertNotIn("def _risk_prompt", source)
+        self.assertNotIn("_RISK_SAFETY_GUIDANCE", source)
+        self.assertFalse(hasattr(prompts, "risk_system_prompt"))
+        self.assertFalse(hasattr(prompts, "risk_obs_system_prompt"))
+        self.assertFalse(hasattr(prompts, "risk_full_system_prompt"))
 
-        legacy = chat_utils.message_prepare(
-            prompts.system_prompt, [], "chair"
+    def test_normal_and_risk_user_messages_are_separate(self) -> None:
+        prompts, chat_utils = self._prompt_modules()
+        candidate_maps = [BytesIO(b"frontier-0"), BytesIO(b"frontier-1")]
+        normal = chat_utils.message_prepare(
+            prompts.system_prompt,
+            candidate_maps,
+            "chair",
+            num_agents=3,
         )
-        risk = chat_utils.message_prepare(
-            prompts.risk_system_prompt,
-            [],
+        risk = chat_utils.risk_message_prepare(
+            prompts.risk_prompt,
+            candidate_maps,
             "chair",
             risk_context={
-                "frontiers": [{"frontier_id": 0, "hard_blocked": True}]
+                "hazard_report": [
+                    {
+                        "frontier_id": 0,
+                        "hard_blocked": True,
+                        "route_max_risk": 0.9,
+                    },
+                    {
+                        "frontier_id": 1,
+                        "hard_blocked": False,
+                        "route_max_risk": 0.2,
+                    },
+                ]
             },
+            num_agents=3,
         )
-        self.assertEqual(legacy[0]["content"], prompts.system_prompt)
+        self.assertEqual(normal[0]["content"], prompts.system_prompt)
         self.assertEqual(
-            legacy[1]["content"][0]["text"],
-            "two robots need to find a chair",
+            normal[1]["content"][0]["text"],
+            "3 robots need to find a chair",
         )
-        self.assertNotIn("Structured hazard context", legacy[1]["content"][0]["text"])
-        self.assertIn("Structured hazard context", risk[1]["content"][0]["text"])
-        self.assertIn('"hard_blocked": true', risk[1]["content"][0]["text"])
-        # Adding risk context must not add a pseudo-image/frontier.
-        self.assertEqual(len(legacy[1]["content"]), len(risk[1]["content"]))
+        self.assertEqual(risk[0]["content"], prompts.risk_prompt)
+        risk_text = risk[1]["content"][0]["text"]
+        self.assertTrue(risk_text.startswith("Risk-aware frontier assignment"))
+        self.assertIn("Robots (3): robot_0, robot_1, robot_2", risk_text)
+        self.assertIn("Candidate frontiers: 2 images", risk_text)
+        self.assertIn('"hard_blocked": true', risk_text)
+        self.assertIn('"route_max_risk": 0.2', risk_text)
+        self.assertNotIn("hazard_report", normal[1]["content"][0]["text"])
+        # The hazard report stays inside the text block and is not counted as
+        # a candidate image/frontier.
+        self.assertEqual(len(normal[1]["content"]), 3)
+        self.assertEqual(len(risk[1]["content"]), 3)
+        with self.assertRaises(TypeError):
+            chat_utils.message_prepare(
+                prompts.system_prompt,
+                candidate_maps,
+                "chair",
+                risk_context={},
+                num_agents=3,
+            )
+        with self.assertRaisesRegex(ValueError, "risk_context is required"):
+            chat_utils.risk_message_prepare(
+                prompts.risk_prompt,
+                candidate_maps,
+                "chair",
+                risk_context=None,
+                num_agents=3,
+            )
+
+    def test_main_selects_only_the_dedicated_risk_path(self) -> None:
+        root = Path(__file__).resolve().parents[1]
+        main_source = (root / "main.py").read_text(encoding="utf-8")
+        self.assertIn("chat_utils.risk_message_prepare(", main_source)
+        self.assertIn("system_prompt.risk_prompt,", main_source)
+        self.assertNotIn("system_prompt.risk_system_prompt", main_source)
 
 
 class SharedFireTimeTests(unittest.TestCase):

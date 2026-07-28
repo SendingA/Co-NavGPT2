@@ -13,6 +13,7 @@ bound before observation.
 """
 from __future__ import annotations
 
+import warnings
 from typing import Dict, Optional
 
 import numpy as np
@@ -45,11 +46,46 @@ class VoxelSmokeSensor(BaseSensor):
             raise ValueError("VoxelSmokeSensor needs camera intrinsics K")
         self.camera_K = camera_K
         self.scene = scene  # FireScene or None until bound
+        self._torch_failed = False
+        self._torch_warning_emitted = False
 
     # ------------------------------------------------------------------
     def bind_scene(self, scene) -> None:
         """Attach (or replace) the fire-world scene this sensor observes."""
         self.scene = scene
+        self._torch_failed = False
+        self._torch_warning_emitted = False
+
+    # ------------------------------------------------------------------
+    def _wants_torch(self) -> bool:
+        """Resolve the configured backend without importing Torch on NumPy."""
+        voxel = getattr(self.cfg, "voxel", None)
+        if voxel is None:
+            return False
+        backend = str(getattr(voxel, "render_backend", "auto")).lower()
+        if backend not in {"auto", "numpy", "torch"}:
+            raise ValueError(
+                f"unsupported FireWorld render backend {backend!r}; "
+                "expected auto, numpy or torch"
+            )
+        if backend == "numpy" or self._torch_failed:
+            return False
+        if backend == "torch":
+            return True
+
+        # Backend=auto with an explicit device is an intentional Torch
+        # request. With device=auto, only select Torch when CUDA is visible;
+        # Torch-on-CPU is useful for tests but slower than the NumPy reference.
+        requested_device = str(
+            getattr(voxel, "render_device", "auto")
+        ).lower()
+        if requested_device != "auto":
+            return True
+        try:
+            import torch
+            return bool(torch.cuda.is_available())
+        except ImportError:
+            return False
 
     # ------------------------------------------------------------------
     def _params(self) -> VoxelRenderParams:
@@ -117,24 +153,103 @@ class VoxelSmokeSensor(BaseSensor):
             if t_sim_s is None
             else float(t_sim_s)
         )
-        flame_field, smoke_field, temp_field = scene.query(t_sim)
+        out = None
+        if self._wants_torch():
+            try:
+                from ..voxel_render_torch import (
+                    resolve_torch_device,
+                    shared_scene_cache,
+                    volumetric_composite_torch,
+                )
 
-        out = volumetric_composite(
-            rgb_clean=rgb,
-            depth_m=depth_m,
-            cam_pos_world=cam_pos.astype(np.float32),
-            R_cam2world=R.astype(np.float32),
-            flame_field=flame_field,
-            smoke_field=smoke_field,
-            temp_field=temp_field,
-            origin=scene.origin,
-            voxel_m=scene.voxel_m,
-            grid_shape=scene.shape,
-            ambient_c=scene.ambient_c,
-            camera_K=self.camera_K,
-            params=self._params(),
-            t_sim=float(t_sim),
-        )
+                device = resolve_torch_device(
+                    getattr(self.cfg.voxel, "render_device", "auto")
+                )
+                frame_index = scene.fw.frame_index(t_sim)
+                # Use native FP16 timeline views here. Calling scene.query()
+                # would allocate three FP32 CPU arrays before uploading them.
+                flame_field = scene.fw.flame[frame_index]
+                smoke_field = scene.fw.smoke[frame_index]
+                temp_field = scene.fw.temp[frame_index]
+                cache = shared_scene_cache(scene)
+                out = volumetric_composite_torch(
+                    rgb_clean=rgb,
+                    depth_m=depth_m,
+                    cam_pos_world=cam_pos.astype(np.float32),
+                    R_cam2world=R.astype(np.float32),
+                    flame_field=flame_field,
+                    smoke_field=smoke_field,
+                    temp_field=temp_field,
+                    origin=scene.origin,
+                    voxel_m=scene.voxel_m,
+                    grid_shape=scene.shape,
+                    ambient_c=scene.ambient_c,
+                    camera_K=self.camera_K,
+                    params=self._params(),
+                    t_sim=float(t_sim),
+                    device=str(device),
+                    volume_dtype=str(
+                        getattr(
+                            self.cfg.voxel, "render_dtype", "float16"
+                        )
+                    ),
+                    max_sample_points=int(
+                        getattr(
+                            self.cfg.voxel,
+                            "max_sample_points",
+                            2_000_000,
+                        )
+                    ),
+                    cache=cache,
+                    frame_key=(
+                        scene.scene_id,
+                        scene.plan_id,
+                        int(frame_index),
+                    ),
+                )
+                out["render_backend"] = "torch"
+                out["render_device"] = str(device)
+                out["render_frame_index"] = int(frame_index)
+                out["render_cache_hits"] = int(cache.hits)
+                out["render_cache_uploads"] = int(cache.uploads)
+            except (ImportError, RuntimeError, ValueError) as exc:
+                # A missing driver, unsupported GPU kernel or OOM must not
+                # destroy an otherwise valid navigation episode. Disable the
+                # Torch path for this sensor after the first failure.
+                self._torch_failed = True
+                if not self._torch_warning_emitted:
+                    warnings.warn(
+                        "FireWorld Torch rendering failed; falling back to "
+                        f"NumPy for this sensor: {exc}",
+                        RuntimeWarning,
+                        stacklevel=2,
+                    )
+                    self._torch_warning_emitted = True
+
+        if out is None:
+            flame_field, smoke_field, temp_field = scene.query(t_sim)
+            out = volumetric_composite(
+                rgb_clean=rgb,
+                depth_m=depth_m,
+                cam_pos_world=cam_pos.astype(np.float32),
+                R_cam2world=R.astype(np.float32),
+                flame_field=flame_field,
+                smoke_field=smoke_field,
+                temp_field=temp_field,
+                origin=scene.origin,
+                voxel_m=scene.voxel_m,
+                grid_shape=scene.shape,
+                ambient_c=scene.ambient_c,
+                camera_K=self.camera_K,
+                params=self._params(),
+                t_sim=float(t_sim),
+            )
+            out["render_backend"] = "numpy"
+            out["render_device"] = "cpu"
+            if hasattr(scene, "fw"):
+                out["render_frame_index"] = int(
+                    scene.fw.frame_index(t_sim)
+                )
         out["t_sim_s"] = float(t_sim)
         out["robot_step"] = int(robot_step)
         return out

@@ -35,6 +35,7 @@ from utils.explored_map_utils import (
 import utils.pose as pu
 from utils.mapping import create_object_pcd, process_pcd
 from utils.fmm_planner import FMMPlanner
+from utils.local_planners import create_local_planner
 
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
@@ -476,19 +477,20 @@ class VLM_Agent():
         habitat_final_pose = self.habitat_goal_pose.astype(np.float32)
 
         plan_path = []
-        if not getattr(self, 'risk_navigation_enabled', False):
-            # Preserve the historical Habitat shortest-path-first behavior
-            # exactly when risk assessment is disabled.
-            plan_path = self.search_navigable_path(
-                habitat_final_pose
-            )
+        if getattr(self.args, 'local_planner', 'fmm') == 'fmm':
+            if not getattr(self, 'risk_navigation_enabled', False):
+                # Preserve the historical Habitat shortest-path-first behavior
+                # exactly when risk assessment is disabled.
+                plan_path = self.search_navigable_path(
+                    habitat_final_pose
+                )
   
         if len(plan_path) > 1:
             self.plan_path = np.dot(R_habitat2open3d.T, (np.array(plan_path) - self.init_agent_position).T).T
             action = self.greedy_follower_act(self.plan_path)
         else:
-            # Risk-enabled runs always enter FMM here, so a Habitat navmesh
-            # shortest path cannot silently bypass the dynamic risk field.
+            # The default fmm branch retains its historical behavior. Explicit
+            # astar/rl selections always enter their grid planner here.
             self.stg, self.stop, plan_path = self._get_stg(self.obstacle_map, self.current_grid_pose, np.copy(self.goal_map))
             plan_path = np.array(plan_path) 
             plan_path_x = (plan_path[:, 0] - int(self.origins_grid[0])) * self.args.map_resolution / 100.0
@@ -690,6 +692,8 @@ class VLM_Agent():
     def _get_stg(self, grid, start, goal):
         """Get short-term goal"""
 
+        agent_args = getattr(self, 'args', None)
+        planner_name = getattr(agent_args, 'local_planner', 'fmm')
         risk_navigation_enabled = bool(
             getattr(self, 'risk_navigation_enabled', False)
         )
@@ -722,7 +726,7 @@ class VLM_Agent():
         traversible = add_boundary(traversible)
         goal = add_boundary(goal, value=0)
         traversible[goal==1] = 1
-        if risk_navigation_enabled:
+        if risk_navigation_enabled or planner_name != 'fmm':
             # The padding exists for local-window arithmetic only; it is not
             # a navigable corridor around the outside of the scene map.
             traversible[[0, -1], :] = 0
@@ -740,15 +744,43 @@ class VLM_Agent():
                     self.hard_unsafe_mask[x1:x2, y1:y2], value=0
                 ).astype(bool)
 
-        planner = FMMPlanner(
-            traversible,
-            risk_map=risk_map,
-            risk_alpha=(
-                getattr(self, 'risk_alpha', 0.0)
-                if risk_navigation_enabled else 0.0
-            ),
-            hard_unsafe_mask=hard_unsafe_mask,
-        )
+        if planner_name == 'fmm':
+            # Keep the established FMM implementation and constructor path
+            # unchanged for the default baseline.
+            planner = FMMPlanner(
+                traversible,
+                risk_map=risk_map,
+                risk_alpha=(
+                    getattr(self, 'risk_alpha', 0.0)
+                    if risk_navigation_enabled else 0.0
+                ),
+                hard_unsafe_mask=hard_unsafe_mask,
+            )
+        else:
+            planner = create_local_planner(
+                planner_name,
+                traversible,
+                risk_map=risk_map,
+                risk_alpha=(
+                    getattr(self, 'risk_alpha', 0.0)
+                    if risk_navigation_enabled else 0.0
+                ),
+                hard_unsafe_mask=hard_unsafe_mask,
+                rl_checkpoint=getattr(
+                    agent_args, 'rl_local_checkpoint', None
+                ),
+                rl_device=getattr(agent_args, 'rl_local_device', 'cpu'),
+                rl_deterministic=bool(int(getattr(
+                    agent_args, 'rl_local_deterministic', 1
+                ))),
+                rl_crop_size=int(getattr(
+                    agent_args, 'rl_local_crop_size', 31
+                )),
+                rl_rollout_steps=int(getattr(
+                    agent_args, 'rl_local_rollout_steps', 5
+                )),
+                risk_aware=risk_navigation_enabled,
+            )
         if ("plant" in self.goal_name or "tv" in self.goal_name) and \
             np.sum(self.goal_map) > 1:
             selem = skimage.morphology.disk(15)
@@ -761,7 +793,7 @@ class VLM_Agent():
         self._risk_escape_active = False
         self._risk_escape_reason = None
         coordinate_offset = 0
-        if risk_navigation_enabled:
+        if risk_navigation_enabled or planner_name != 'fmm':
             # Risk arrays follow the padded map exactly. The legacy branch
             # historically omitted this +1 offset, so correct it only for the
             # new planner to avoid changing risk-disabled trajectories.

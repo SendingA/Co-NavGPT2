@@ -159,6 +159,10 @@ class RiskRuntime:
                     args, "fire_clock_mode", "wallclock"
                 )),
                 "planner_source": self.source,
+                "local_planner": str(getattr(
+                    args, "local_planner", "fmm"
+                )),
+                "local_planner_uses_risk": self.planning_enabled,
                 "smoke_source": self.smoke_source,
                 "geometry_depth_source": self.geometry_depth_source,
                 "risk_config": asdict(self.config),

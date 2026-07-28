@@ -34,6 +34,13 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             "main_vec.py currently refuses --risk_enabled=1 so a run cannot "
             "be mislabeled without synchronized risk maps/evaluation"
         )
+    from utils.local_planners import validate_local_planner_config
+
+    local_risk_awareness = validate_local_planner_config(args)
+    print(
+        f"[local_planner rank={rank}] name={args.local_planner} "
+        f"risk_aware={local_risk_awareness}"
+    )
     args.rank = rank
     seed = int(config.habitat.seed) + rank
     random.seed(seed)
