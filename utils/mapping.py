@@ -11,7 +11,10 @@ def create_object_pcd(depth_array, mask, cam_K, image, obj_color=None) -> o3d.ge
     cy = cam_K.cy
     
     # Also remove points with invalid depth values
-    mask = np.logical_and(mask, depth_array > 0)
+    mask = np.logical_and(
+        mask,
+        np.isfinite(depth_array) & (depth_array > 0),
+    )
 
     if mask.sum() == 0:
         pcd = o3d.geometry.PointCloud()
@@ -58,6 +61,9 @@ def create_object_pcd(depth_array, mask, cam_K, image, obj_color=None) -> o3d.ge
 
 def pcd_denoise_dbscan(pcd: o3d.geometry.PointCloud, eps=0.02, min_points=10) -> o3d.geometry.PointCloud:
     ### Remove noise via clustering
+    if len(pcd.points) == 0:
+        return pcd
+
     pcd_clusters = pcd.cluster_dbscan(
         eps=eps,
         min_points=min_points,
@@ -100,8 +106,12 @@ def pcd_denoise_dbscan(pcd: o3d.geometry.PointCloud, eps=0.02, min_points=10) ->
     return pcd
 
 def process_pcd(pcd):
-    
+    if len(pcd.points) == 0:
+        return pcd
+
     pcd = pcd.voxel_down_sample(voxel_size=0.01)
+    if len(pcd.points) == 0:
+        return pcd
         
     # print("Before dbscan:", len(pcd.points))
     pcd = pcd_denoise_dbscan(pcd)

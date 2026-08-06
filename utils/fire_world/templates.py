@@ -13,12 +13,15 @@ a ``propagation_rules`` dict. The planner glues them into a plan.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Dict, List, Optional, Tuple
+from functools import partial
+from typing import Callable, Dict, List, Optional
 
 import numpy as np
 
 
-TEMPLATE_VERSION = 2
+TEMPLATE_VERSION = 10
+# Version of the contract in which templates select t=0 sources only.
+IGNITION_SELECTION_VERSION = 1
 
 
 # Exact HM3D semantic.txt category spellings.  Keep these as raw lowercase
@@ -41,21 +44,6 @@ KITCHEN_FALLBACK_CATEGORIES = (
     "kitchen extractor",
     "oven vent",
 )
-KITCHEN_SECONDARY_CATEGORIES = (
-    *KITCHEN_PRIMARY_CATEGORIES,
-    *KITCHEN_FALLBACK_CATEGORIES,
-    "kitchen cabinet",
-    "kitchen lower cabinet",
-    "cabinet",
-    "table",
-    "kitchen counter",
-    "curtain",
-    "towel",
-    "paper towel",
-    "trashcan",
-    "trash can",
-)
-
 BEDROOM_PRIMARY_CATEGORIES = (
     "bed",
     "bed small",
@@ -75,15 +63,6 @@ BEDROOM_FALLBACK_CATEGORIES = (
     "armchair",
     "chair",
 )
-BEDROOM_SECONDARY_CATEGORIES = (
-    *BEDROOM_PRIMARY_CATEGORIES,
-    *BEDROOM_FALLBACK_CATEGORIES,
-    "nightstand",
-    "wardrobe",
-    "cloth",
-    "throw blanket",
-)
-
 LIVING_ELECTRIC_PRIMARY_CATEGORIES = (
     "tv",
     "led tv",
@@ -102,35 +81,38 @@ LIVING_ELECTRIC_FALLBACK_CATEGORIES = (
     "record player",
     "radio",
 )
-LIVING_ELECTRIC_SECONDARY_CATEGORIES = (
-    *LIVING_ELECTRIC_PRIMARY_CATEGORIES,
-    *LIVING_ELECTRIC_FALLBACK_CATEGORIES,
-    "media console",
+# multi_origin sources should be stable, low floor-standing furniture.
+# Cabinets/wardrobes and small or elevated objects (lamp, pillow, laptop,
+# wall TV, curtain) create implausible initial flames near head/ceiling height,
+# so they are excluded from the planner's t=0 source pool. They may still
+# ignite later when the propagation solver heats their fuel voxels.
+MULTI_ORIGIN_INITIAL_CATEGORIES = (
+    "bed",
+    "bed small",
+    "bedframe",
     "sofa",
     "couch",
     "armchair",
     "chair",
-    "cabinet",
-    "curtain",
+    "table",
     "rug",
     "carpet",
+    "desk",
+    "ottoman",
 )
 
 TEMPLATE_CATEGORY_GROUPS = {
     "kitchen_grease_fire": {
         "primary": KITCHEN_PRIMARY_CATEGORIES,
         "fallback": KITCHEN_FALLBACK_CATEGORIES,
-        "secondary": KITCHEN_SECONDARY_CATEGORIES,
     },
     "bedroom_textile": {
         "primary": BEDROOM_PRIMARY_CATEGORIES,
         "fallback": BEDROOM_FALLBACK_CATEGORIES,
-        "secondary": BEDROOM_SECONDARY_CATEGORIES,
     },
     "living_room_electric": {
         "primary": LIVING_ELECTRIC_PRIMARY_CATEGORIES,
         "fallback": LIVING_ELECTRIC_FALLBACK_CATEGORIES,
-        "secondary": LIVING_ELECTRIC_SECONDARY_CATEGORIES,
     },
 }
 
@@ -145,24 +127,23 @@ class IntensityPreset:
     source_temp_c: float
     fuel_kg: float
     duration_s: float
-    secondary_delay_s: Tuple[float, float]
 
 
 INTENSITIES: Dict[str, IntensityPreset] = {
     "light": IntensityPreset(
         n_ignitions_min=1, n_ignitions_max=1,
         source_temp_c=550.0, fuel_kg=2.0,
-        duration_s=300.0, secondary_delay_s=(60.0, 90.0),
+        duration_s=300.0,
     ),
     "medium": IntensityPreset(
         n_ignitions_min=1, n_ignitions_max=2,
         source_temp_c=750.0, fuel_kg=5.0,
-        duration_s=600.0, secondary_delay_s=(45.0, 90.0),
+        duration_s=600.0,
     ),
     "severe": IntensityPreset(
         n_ignitions_min=2, n_ignitions_max=3,
         source_temp_c=950.0, fuel_kg=10.0,
-        duration_s=900.0, secondary_delay_s=(20.0, 60.0),
+        duration_s=900.0,
     ),
 }
 
@@ -214,74 +195,11 @@ def _inventory_pool(inv: Dict) -> List[Dict]:
             "aabb_max": it["aabb_max"],
             "flammability": float(it.get("flammability", 0.0)),
             "smoke_yield": float(it.get("smoke_yield", 0.4)),
+            "region_id": it.get("region_id"),
+            "floor_id": it.get("floor_id"),
         }
         out.append(norm)
     return out
-
-
-def _pick_primary(
-    objects: List[Dict],
-    rng: np.random.Generator,
-    preferred_cats: List[str],
-    fallback_cats: List[str],
-) -> Optional[Dict]:
-    """Pick a primary ignition object weighted by flammability."""
-    pool = (
-        _filter_by_category(objects, preferred_cats)
-        or _filter_by_category(objects, fallback_cats)
-    )
-    if not pool:
-        return None
-    weights = np.array([max(0.05, o.get("flammability", 0.3)) for o in pool])
-    weights /= weights.sum()
-    idx = int(rng.choice(len(pool), p=weights))
-    return pool[idx]
-
-
-def _pick_secondary(
-    objects: List[Dict],
-    primary: Dict,
-    rng: np.random.Generator,
-    radius_m: float,
-    n: int,
-    allowed_cats: Tuple[str, ...],
-    avoid_cats: Tuple[str, ...] = ("toilet", "bathtub", "sink"),
-    same_floor_y_tol: float = 1.5,
-) -> List[Dict]:
-    """Pick up to ``n`` secondary ignitions within ``radius_m`` of primary,
-    weighted by (flammability * 1/distance). Restricted to the same floor
-    via a vertical tolerance (``same_floor_y_tol``) so a kitchen fire
-    cannot 'jump' to a bedroom on a different storey."""
-    if n <= 0:
-        return []
-    p_center = _object_center(primary)
-    avoid = {c.lower() for c in avoid_cats}
-    allowed = {c.lower() for c in allowed_cats}
-    pool = []
-    for o in objects:
-        if o["object_id"] == primary["object_id"]:
-            continue
-        if o["category"].lower() not in allowed:
-            continue
-        if o["category"].lower() in avoid:
-            continue
-        oc = _object_center(o)
-        if abs(oc[1] - p_center[1]) > same_floor_y_tol:
-            continue
-        d_xz = float(np.linalg.norm(oc[[0, 2]] - p_center[[0, 2]]))
-        if d_xz > radius_m:
-            continue
-        f = max(0.05, o.get("flammability", 0.3))
-        w = f / max(0.5, d_xz)
-        pool.append((o, w))
-    if not pool:
-        return []
-    objs, weights = zip(*pool)
-    weights = np.array(weights)
-    weights /= weights.sum()
-    n_pick = min(n, len(objs))
-    idx = rng.choice(len(objs), size=n_pick, replace=False, p=weights)
-    return [objs[int(i)] for i in idx]
 
 
 def _make_ignition(obj: Dict, t_s: float, preset: IntensityPreset, rng: np.random.Generator) -> Dict:
@@ -289,7 +207,10 @@ def _make_ignition(obj: Dict, t_s: float, preset: IntensityPreset, rng: np.rando
     bb_min = np.array(obj["aabb_min"])
     bb_max = np.array(obj["aabb_max"])
     extent_xz = max(bb_max[0] - bb_min[0], bb_max[2] - bb_min[2])
-    src_r = float(np.clip(0.25 + 0.25 * extent_xz, 0.20, 0.80))
+    # Keep the ignition core local even for a large bed/sofa. Wider visual
+    # coverage should come from gradual propagation, not an oversized t=0
+    # sphere that immediately fills the camera.
+    src_r = float(np.clip(0.25 + 0.25 * extent_xz, 0.20, 0.60))
     fuel = preset.fuel_kg * (0.6 + 0.8 * obj.get("flammability", 0.3))
     smoke_yield = float(np.clip(obj.get("smoke_yield", 0.4), 0.05, 1.0))
     # Temperature: small object-level jitter for variety, deterministic by RNG.
@@ -306,6 +227,203 @@ def _make_ignition(obj: Dict, t_s: float, preset: IntensityPreset, rng: np.rando
     }
 
 
+def _weighted_sample_without_replacement(
+    objects: List[Dict],
+    n: int,
+    rng: np.random.Generator,
+) -> List[Dict]:
+    """Sample ``n`` distinct objects using flammability as the weight."""
+    if n > len(objects):
+        return []
+    weights = np.asarray(
+        [max(0.05, o.get("flammability", 0.3)) for o in objects],
+        dtype=np.float64,
+    )
+    weights /= weights.sum()
+    indices = rng.choice(len(objects), size=n, replace=False, p=weights)
+    return [objects[int(i)] for i in np.atleast_1d(indices)]
+
+
+def _pick_explicit_initials(
+    objects: List[Dict],
+    fire_type: str,
+    n_initial: int,
+    rng: np.random.Generator,
+) -> List[Dict]:
+    """Pick exactly ``n_initial`` objects that the planner lights at t=0.
+
+    Templates constrain only the initial cause of the fire. They never choose
+    which objects ignite later; that is decided by the propagation solver from
+    the voxel temperature, fuel, contact and radiation fields.
+    """
+    if fire_type != "multi_origin":
+        groups = TEMPLATE_CATEGORY_GROUPS[fire_type]
+        preferred = _filter_by_category(objects, list(groups["primary"]))
+        preferred_ids = {o["object_id"] for o in preferred}
+        fallback = [
+            o
+            for o in _filter_by_category(objects, list(groups["fallback"]))
+            if o["object_id"] not in preferred_ids
+        ]
+        # Preserve each template's primary-category preference. Fall back only
+        # when the preferred pool cannot satisfy the requested initial count.
+        pool = preferred if len(preferred) >= n_initial else preferred + fallback
+        if len(pool) < n_initial:
+            raise RuntimeError(
+                f"template {fire_type!r} could not satisfy "
+                f"num_ignitions={n_initial}: only {len(pool)} eligible "
+                "initial ignition objects are available in its primary "
+                "and fallback categories"
+            )
+        return _weighted_sample_without_replacement(pool, n_initial, rng)
+
+    initial_categories = {
+        category.lower() for category in MULTI_ORIGIN_INITIAL_CATEGORIES
+    }
+    raw_candidates = [
+        o
+        for o in objects
+        if o.get("flammability", 0.0) >= 0.4
+        and o["category"].lower() in initial_categories
+    ]
+    if len(raw_candidates) < n_initial:
+        raise RuntimeError(
+            f"template {fire_type!r} could not satisfy "
+            f"num_ignitions={n_initial}: only {len(raw_candidates)} eligible "
+            "flammable initial ignition objects are available"
+        )
+
+    # multi_origin remains a same-floor stress test. Choose the floor with the
+    # richest eligible pool, then use farthest-point sampling so the t=0
+    # sources cover distinct areas rather than collapsing into one corner.
+    ys = np.asarray([_object_center(o)[1] for o in raw_candidates])
+    bins = np.round(ys / 1.5).astype(int)
+    counts = {
+        int(bin_id): int(np.sum(bins == bin_id))
+        for bin_id in sorted(set(bins.tolist()))
+    }
+    valid_bins = [bin_id for bin_id, count in counts.items()
+                  if count >= n_initial]
+    if not valid_bins:
+        largest_floor_pool = max(counts.values(), default=0)
+        raise RuntimeError(
+            f"template {fire_type!r} could not satisfy "
+            f"num_ignitions={n_initial}: the largest same-floor group has "
+            f"only {largest_floor_pool} eligible initial ignition objects"
+        )
+    best_bin = max(valid_bins, key=lambda bin_id: (counts[bin_id], -bin_id))
+    floor_objects = [
+        obj for obj, bin_id in zip(raw_candidates, bins)
+        if int(bin_id) == best_bin
+    ]
+    centres = np.asarray([_object_center(o) for o in floor_objects])
+    weights = np.asarray(
+        [max(0.05, obj.get("flammability", 0.3)) for obj in floor_objects],
+        dtype=np.float64,
+    )
+    weights /= weights.sum()
+    first = int(rng.choice(len(floor_objects), p=weights))
+    selected = [first]
+    for _ in range(1, n_initial):
+        distances = np.min(
+            np.linalg.norm(
+                centres[:, None, [0, 2]]
+                - centres[selected][None, :, [0, 2]],
+                axis=-1,
+            ),
+            axis=1,
+        )
+        distances[selected] = -1.0
+        # Prefer high flammability only when spatial distances tie.
+        score = distances + 1e-6 * weights
+        selected.append(int(np.argmax(score)))
+    return [floor_objects[index] for index in selected]
+
+
+def _initial_candidate_capacity(objects: List[Dict], fire_type: str) -> int:
+    """Maximum initial-source count supported by template categories/floor."""
+    if fire_type != "multi_origin":
+        groups = TEMPLATE_CATEGORY_GROUPS[fire_type]
+        initial_categories = {
+            category.lower()
+            for category in (*groups["primary"], *groups["fallback"])
+        }
+        return sum(
+            obj["category"].lower() in initial_categories
+            for obj in objects
+        )
+
+    initial_categories = {
+        category.lower() for category in MULTI_ORIGIN_INITIAL_CATEGORIES
+    }
+    raw_candidates = [
+        obj
+        for obj in objects
+        if obj.get("flammability", 0.0) >= 0.4
+        and obj["category"].lower() in initial_categories
+    ]
+    if not raw_candidates:
+        return 0
+    ys = np.asarray([_object_center(obj)[1] for obj in raw_candidates])
+    bins = np.round(ys / 1.5).astype(int)
+    return max(
+        (int(np.sum(bins == bin_id)) for bin_id in set(bins.tolist())),
+        default=0,
+    )
+
+
+def build_template_ignitions(
+    inv: Dict,
+    fire_type: str,
+    rng: np.random.Generator,
+    preset: IntensityPreset,
+    n_initial: Optional[int] = None,
+) -> List[Dict]:
+    """Generate only the initial ignition objects lit at t=0.
+
+    When ``n_initial`` is omitted, the initial count is drawn from the
+    intensity preset after capping the range to the template's available
+    initial-object capacity. An explicit value is never reduced silently.
+    No later object is scheduled here.
+    """
+    if fire_type == "multi_origin" and n_initial is not None and n_initial < 2:
+        raise ValueError(
+            "fire_type='multi_origin' requires at least two initial sources"
+        )
+    if n_initial is None:
+        capacity = _initial_candidate_capacity(
+            _inventory_pool(inv), fire_type
+        )
+        minimum = int(preset.n_ignitions_min)
+        if fire_type == "multi_origin":
+            minimum = max(2, minimum)
+        preset_maximum = int(preset.n_ignitions_max)
+        if fire_type == "multi_origin":
+            preset_maximum = max(2, preset_maximum)
+        maximum = min(preset_maximum, capacity)
+        if maximum < minimum:
+            raise RuntimeError(
+                f"template {fire_type!r} needs at least {minimum} initial "
+                f"ignition objects for this intensity, but only {capacity} "
+                "eligible objects are available"
+            )
+        if minimum == maximum:
+            n_initial = minimum
+        else:
+            n_initial = int(rng.integers(minimum, maximum + 1))
+
+    objects = _inventory_pool(inv)
+    selected = _pick_explicit_initials(
+        objects, fire_type, int(n_initial), rng
+    )
+    ignitions = []
+    for obj in selected:
+        ignition = _make_ignition(obj, 0.0, preset, rng)
+        ignition["ignition_role"] = "initial"
+        ignitions.append(ignition)
+    return ignitions
+
+
 def _default_propagation_rules(intensity: str) -> Dict:
     # These values feed the stage-3 propagation engine.
     base = {
@@ -316,11 +434,9 @@ def _default_propagation_rules(intensity: str) -> Dict:
         # at 200 C the radiative_gain heat path can sustainably push
         # adjacent furniture into the reaction loop within 30-60 s.
         "ignition_temp_c": 200.0,
-        # Surface flame spread along fuel. Bumped from 0.04 to 0.18 so
-        # the fire visibly grows on a 0.15 m grid: at 0.04 m/s it took
-        # >5 minutes to cross a single voxel, which is why the original
-        # benchmark looked like static fixed sources.
-        "spread_speed_m_per_s": 0.18,
+        # Restore the pasted solver's 0.12 m/s local surface transport. Hard
+        # source envelopes still prevent the old room-wide expansion.
+        "spread_speed_m_per_s": 0.12,
         # 'laplacian' (legacy) or 'gaussian' (smoother, NIST-FDS-like).
         "spread_kernel": "laplacian",
         "ceiling_jet_speed_m_per_s": 0.30,
@@ -329,10 +445,10 @@ def _default_propagation_rules(intensity: str) -> Dict:
         "ambient_temp_c": 25.0,
         # Radiative pre-heating that lets heat jump ~0.6 m to the next
         # piece of furniture in the same room. Scales linearly with
-        # local flame intensity. 250 C/s on a fully-developed flame
-        # voxel inside the 4-cell radiative kernel means a fuel voxel
-        # 0.6 m away crosses ignition_temp in ~30 s.
-        "radiative_gain_c": 250.0,
+        # local flame intensity. The pasted solver's 200 C/s, 4-cell kernel
+        # restores a continuous preheat bridge between nearby furniture; the
+        # object envelope still clips actual ignition to a local domain.
+        "radiative_gain_c": 200.0,
         "radiative_radius_cells": 4,
         # Floors are *semi-transparent* thermal barriers (default 20 %
         # of normal heat conduction) so a fire on one storey can still
@@ -356,169 +472,118 @@ def _default_propagation_rules(intensity: str) -> Dict:
         # which feeds the regular reaction loop. Set the value to 0 to
         # disable floor combustion (e.g. for tile / concrete).
         "floor_ignite_temp_c": 250.0,
-        "floor_fuel_value": 0.7,
+        "floor_fuel_value": 0.52,
         # Direct contact ignition: floor voxels within this many cells
         # of a flame voxel ignite immediately, bypassing heat
         # diffusion's smoothing. Without this the per-voxel thermal
         # spike gets averaged out before reaction sees it.
         "floor_ignite_radius_cells": 2,
-        "floor_flame_contact_thresh": 0.2,
-        # The combustible floor grows outward from each actual ignition
-        # source at 1.5 cm/s and stops at a 2 m radius.  This prevents the
-        # old recursive floor-cell dilation from carpeting the whole room
-        # with flame while keeping a visibly evolving local hazard patch.
-        "floor_spread_speed_m_per_s": 0.015,
-        "floor_max_spread_radius_m": 2.0,
+        "floor_flame_contact_thresh": 0.12,
+        # The combustible floor grows radially around each actual source.
+        # The fixed speed is a lower bound; floor_spread_reach_fraction
+        # supplies a duration-relative deadline that may increase the
+        # per-source constant speed just enough to reach its hard radius.
+        "floor_spread_speed_m_per_s": 0.0044,
+        "floor_max_spread_radius_m": 2.20,
+        "floor_spread_reach_fraction": 0.90,
+        # Object ignition is solver-driven but local. This wider, slowly
+        # growing envelope lets nearby furniture ignite naturally without
+        # allowing overlapping HM3D AABBs to cascade across the whole room.
+        "object_spread_speed_m_per_s": 0.0066,
+        "object_max_spread_radius_m": 1.35,
+        # After a real object ignites, advance a deterministic six-connected
+        # flame front through voxels belonging to that exact object ID. At the
+        # medium default, one 0.15 m layer takes about 18.75 s.
+        "object_bbox_fill_speed_m_per_s": 0.008,
+        # Bound the BBox shortcut to the lower part of tall furniture. Heat
+        # and smoke still rise above this height through their own fields.
+        "object_bbox_max_vertical_spread_m": 0.75,
+        "object_bbox_fill_flame_min": 0.16,
+        "object_bbox_fill_temp_margin_c": 40.0,
+        # The next six-connected voxel shell is preheated and faded in over
+        # one layer instead of appearing in a single discrete jump.
+        "object_bbox_fill_front_width_layers": 1.0,
+        # Do not add another resolution-dependent layer above the metric
+        # flame-column limit.
+        "object_flame_extra_height_cells": 0,
+        # A soft Gaussian front expands radially around each initial source.
+        # Later furniture ignition comes from physical heat transfer rather
+        # than a planner-authored corridor or delayed source.
+        "floor_gaussian_sigma_fraction": 0.58,
+        "floor_gaussian_min_influence": 0.08,
+        "floor_front_softness_m": 0.18,
+        "floor_min_visible_flame": 0.06,
+        # Air/floor flame is clipped to source-centred XZ envelopes. Flame on
+        # real fuel-bearing object voxels is retained outside the envelope so
+        # solver-ignited furniture remains visible.
+        "limit_flame_to_source_envelope": 1,
+        # Lower seed intensity prevents a newly ignited floor patch from
+        # appearing as an opaque, uniformly bright sheet.
+        "floor_seed_flame_min": 0.10,
+        "floor_seed_flame_max": 0.58,
         # Sustained point sources never expire when 1, ensuring the
         # initial ignitions don't burn themselves out before they have
         # a chance to set the rest of the room alight.
         "inextinguishable_sources": 1,
-        # Flame column height: each active flame voxel projects an
-        # upward plume up to ``flame_column_cells`` voxels with linear
-        # intensity decay (controlled by ``flame_column_decay``). This
-        # is what gives flames a visible vertical extent rather than
-        # rendering as a flat blob at the source.
-        "flame_column_cells": 6,
-        "flame_column_decay": 0.75,
+        # The cell count remains an upper bound for compatibility, while the
+        # metric cap makes the final plume height independent of bake
+        # resolution. The source envelope also clips physical flame
+        # transported higher by buoyancy.
+        "flame_column_cells": 3,
+        "max_flame_column_height_m": 0.30,
+        "flame_column_decay": 0.50,
     }
     if intensity == "light":
         base["spread_speed_m_per_s"] *= 0.7
         base["buoyancy_v_m_per_s"] *= 0.8
         base["radiative_gain_c"] *= 0.6
+        base["floor_spread_speed_m_per_s"] *= 0.75
+        base["floor_max_spread_radius_m"] *= 0.65
+        base["object_spread_speed_m_per_s"] *= 0.75
+        base["object_max_spread_radius_m"] *= 0.88
+        base["object_bbox_fill_speed_m_per_s"] *= 0.75
+        base["object_bbox_max_vertical_spread_m"] = 0.55
+        base["flame_column_cells"] = 2
+        base["max_flame_column_height_m"] = 0.20
+        base["flame_column_decay"] = 0.45
     elif intensity == "severe":
         base["spread_speed_m_per_s"] *= 1.5
         base["ceiling_jet_speed_m_per_s"] *= 1.4
         base["buoyancy_v_m_per_s"] *= 1.3
         base["radiative_gain_c"] *= 1.5
+        base["floor_spread_speed_m_per_s"] *= 1.25
+        base["floor_max_spread_radius_m"] *= 1.35
+        base["object_spread_speed_m_per_s"] *= 1.25
+        base["object_max_spread_radius_m"] *= 1.12
+        base["object_bbox_fill_speed_m_per_s"] *= 1.25
+        base["object_bbox_max_vertical_spread_m"] = 0.90
+        base["max_flame_column_height_m"] = 0.35
+        base["flame_column_decay"] = 0.55
     return base
 
 
 # ---------------------------------------------------------------------------
-# Templates
+# Template registry
 # ---------------------------------------------------------------------------
-def _template_kitchen_grease_fire(inv: Dict, rng: np.random.Generator,
-                                  preset: IntensityPreset) -> List[Dict]:
-    objs = _inventory_pool(inv)
-    primary = _pick_primary(
-        objs,
-        rng,
-        preferred_cats=list(KITCHEN_PRIMARY_CATEGORIES),
-        fallback_cats=list(KITCHEN_FALLBACK_CATEGORIES),
+def _registered_initial_template(
+    inv: Dict,
+    rng: np.random.Generator,
+    preset: IntensityPreset,
+    *,
+    fire_type: str,
+) -> List[Dict]:
+    return build_template_ignitions(inv, fire_type, rng, preset)
+
+
+TEMPLATES: Dict[
+    str,
+    Callable[[Dict, np.random.Generator, IntensityPreset], List[Dict]],
+] = {
+    fire_type: partial(_registered_initial_template, fire_type=fire_type)
+    for fire_type in (
+        "kitchen_grease_fire",
+        "bedroom_textile",
+        "living_room_electric",
+        "multi_origin",
     )
-    if primary is None:
-        return []
-    n_extra = rng.integers(preset.n_ignitions_min - 1,
-                           preset.n_ignitions_max) if preset.n_ignitions_max > 1 else 0
-    secondaries = _pick_secondary(
-        objs,
-        primary,
-        rng,
-        radius_m=3.5,
-        n=int(n_extra),
-        allowed_cats=KITCHEN_SECONDARY_CATEGORIES,
-    )
-    igns = [_make_ignition(primary, 0.0, preset, rng)]
-    for k, s in enumerate(secondaries):
-        t = float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k
-        igns.append(_make_ignition(s, t, preset, rng))
-    return igns
-
-
-def _template_bedroom_textile(inv: Dict, rng: np.random.Generator,
-                              preset: IntensityPreset) -> List[Dict]:
-    objs = _inventory_pool(inv)
-    primary = _pick_primary(
-        objs,
-        rng,
-        preferred_cats=list(BEDROOM_PRIMARY_CATEGORIES),
-        fallback_cats=list(BEDROOM_FALLBACK_CATEGORIES),
-    )
-    if primary is None:
-        return []
-    n_extra = rng.integers(preset.n_ignitions_min - 1,
-                           preset.n_ignitions_max) if preset.n_ignitions_max > 1 else 0
-    secondaries = _pick_secondary(
-        objs,
-        primary,
-        rng,
-        radius_m=4.0,
-        n=int(n_extra),
-        allowed_cats=BEDROOM_SECONDARY_CATEGORIES,
-    )
-    igns = [_make_ignition(primary, 0.0, preset, rng)]
-    for k, s in enumerate(secondaries):
-        t = float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k
-        igns.append(_make_ignition(s, t, preset, rng))
-    return igns
-
-
-def _template_living_room_electric(inv: Dict, rng: np.random.Generator,
-                                   preset: IntensityPreset) -> List[Dict]:
-    objs = _inventory_pool(inv)
-    primary = _pick_primary(
-        objs,
-        rng,
-        preferred_cats=list(LIVING_ELECTRIC_PRIMARY_CATEGORIES),
-        fallback_cats=list(LIVING_ELECTRIC_FALLBACK_CATEGORIES),
-    )
-    if primary is None:
-        return []
-    n_extra = rng.integers(preset.n_ignitions_min - 1,
-                           preset.n_ignitions_max) if preset.n_ignitions_max > 1 else 0
-    secondaries = _pick_secondary(
-        objs,
-        primary,
-        rng,
-        radius_m=3.0,
-        n=int(n_extra),
-        allowed_cats=LIVING_ELECTRIC_SECONDARY_CATEGORIES,
-    )
-    igns = [_make_ignition(primary, 0.0, preset, rng)]
-    for k, s in enumerate(secondaries):
-        t = float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k
-        igns.append(_make_ignition(s, t, preset, rng))
-    return igns
-
-
-def _template_multi_origin(inv: Dict, rng: np.random.Generator,
-                           preset: IntensityPreset) -> List[Dict]:
-    """Multiple ignitions on the *same floor* (stress test)."""
-    candidates = [o for o in _inventory_pool(inv) if o.get("flammability", 0) >= 0.4]
-    if len(candidates) < 2:
-        return []
-    # Cluster by Y so we keep all picks on a single floor.
-    ys = np.array([_object_center(o)[1] for o in candidates])
-    bins = np.round(ys / 1.5).astype(int)
-    counts = {b: int(np.sum(bins == b)) for b in set(bins.tolist())}
-    best_bin = max(counts, key=counts.get)
-    objs = [o for o, b in zip(candidates, bins) if b == best_bin]
-    if len(objs) < 2:
-        objs = candidates
-    n = max(2, int(preset.n_ignitions_max))
-    n = min(n, len(objs))
-    centers = np.array([_object_center(o) for o in objs])
-    first = int(rng.integers(0, len(objs)))
-    picks = [first]
-    for _ in range(n - 1):
-        d = np.min(
-            np.linalg.norm(
-                centers[:, None, [0, 2]] - centers[picks][None, :, [0, 2]],
-                axis=-1,
-            ),
-            axis=1,
-        )
-        d[picks] = -1
-        picks.append(int(np.argmax(d)))
-    igns = []
-    for k, i in enumerate(picks):
-        t = 0.0 if k == 0 else float(rng.uniform(*preset.secondary_delay_s)) + 30.0 * k
-        igns.append(_make_ignition(objs[i], t, preset, rng))
-    return igns
-
-
-TEMPLATES: Dict[str, Callable[[Dict, np.random.Generator, IntensityPreset], List[Dict]]] = {
-    "kitchen_grease_fire":   _template_kitchen_grease_fire,
-    "bedroom_textile":       _template_bedroom_textile,
-    "living_room_electric":  _template_living_room_electric,
-    "multi_origin":          _template_multi_origin,
 }

@@ -131,6 +131,7 @@ git -C "$HABITAT_LAB_ROOT" apply \
     "$PROJECT_ROOT/ref/habitat_lab_0.3.3_vulcan.patch"
 
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-lab"
+python -m pip install -e "$HABITAT_LAB_ROOT/habitat-baselines"
 ```
 
 Verify that Python imports the intended checkout and that the patch is present:
@@ -151,6 +152,27 @@ PY
 
 Do not install a second Habitat-Lab package after this step; otherwise Python
 may silently import the wrong checkout.
+
+The editable `habitat-baselines` install is required only by
+`--local_planner pointnav`, but installing it here keeps the environment
+complete for every documented baseline.
+
+Download the official PointNav DD-PPO checkpoint:
+
+```bash
+mkdir -p "$PROJECT_ROOT/data/ddppo-models"
+wget --continue \
+  https://dl.fbaipublicfiles.com/habitat/data/baselines/v1/ddppo/ddppo-models/gibson-2plus-resnet50.pth \
+  -P "$PROJECT_ROOT/data/ddppo-models"
+sha256sum \
+  "$PROJECT_ROOT/data/ddppo-models/gibson-2plus-resnet50.pth"
+```
+
+Expected SHA-256:
+
+```text
+a6a600277efacf5fd98e293267221185d843eb3012aeff62fabfeee24c2bcdad
+```
 
 ## 4. Detection model assets
 
@@ -279,7 +301,9 @@ important experiment controls are:
 --task_config
 --num_agents
 --num_humans
---nav_mode {nearest,co_ut,fill,gpt}
+--nav_mode {nearest,co_ut,fill,random,gpt}
+--cost_utility_lambda 1.0
+--random_goal_min_distance_m 1.0
 --fire_world
 --fire_world_plan_id
 --fire_clock_mode {step,wallclock}
@@ -615,6 +639,8 @@ python scripts/keyboard_teleop_full.py \
     --scene-id Nfvxx8J5NCo \
     --plan-id 83679a07b632 \
     --clock-mode wallclock \
+    --lidar-360 1 --lidar-resolution 320 \
+    --snapshot-dir outputs/teleop_sensor_snapshots \
     --show-dashboard 1
 ```
 
@@ -627,8 +653,15 @@ S or Space  stop
 R           reset
 Tab, 1..N   switch active robot in keyboard_teleop_full.py
 P           pause/resume wall-clock fire
+V           save all individual sensor panels and the dashboard
+Mouse       click SAVE SENSOR PANELS in the dashboard header
 Esc         quit
 ```
+
+The unified teleoperation entrypoint enables four-slice 360-degree LiDAR by
+default. Each manual snapshot is written below
+`--snapshot-dir/<scene>/agent_<id>/step_<step>_<timestamp>/` with the nine
+sensor panels, the composed dashboard, and a JSON manifest.
 
 ## 14. Script inventory
 
@@ -705,8 +738,10 @@ not provide the exact classic multi-agent `Sim-v0` contract used here.
 
 ### `OPENAI_API_KEY` is missing
 
-Use `--nav_mode nearest`, `co_ut`, or `fill` for an offline run, or export the
-key before `--nav_mode gpt`.
+Use `--nav_mode nearest`, `co_ut`, `fill`, or `random` for an offline run, or
+export the key before `--nav_mode gpt`. `random` is reproduced by the same
+`--seed`; `co_ut` evaluates `frontier_size - cost_utility_lambda ×
+robot_grid_distance`.
 
 ### Model files download at runtime
 

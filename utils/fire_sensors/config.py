@@ -75,10 +75,9 @@ class RadarConfig:
 class LidarConfig:
     """360°-style spinning LIDAR (Starr & Lattimer 2014, Fig. 5).
 
-    NOTE: We currently consume Habitat's forward-facing depth sensor and
-    document the limitation. The same back-projection generalises to true
-    360° depth once additional yaw-rotated depth sensors (or an
-    equirectangular sensor) are wired through.
+    The normal runtime consumes four yaw-rotated Habitat depth sensors and
+    stitches their 90° slices into a full surround scan. A forward-depth
+    fallback remains for legacy callers that do not install those sensors.
     """
 
     max_range_m: float = 10.0
@@ -118,17 +117,31 @@ class VoxelSmokeConfig:
     # source core (rendered as one or two pixels). 0.04 keeps the flame
     # envelope visible.
     flame_threshold: float = 0.04
-    # Bumped from 4.0 so the flame still survives 1-2 m of dense smoke.
-    flame_emission_gain: float = 8.0
-    flame_k_ext: float = 0.8
-    flame_glow_ksize: int = 41
-    flame_glow_gain: float = 0.55
+    # Keep the self-luminous flame bright without clipping every burning
+    # surface to white. Highlight compression in the compositor preserves
+    # the orange/yellow colour ratios after the ray integral.
+    flame_emission_gain: float = 3.2
+    flame_k_ext: float = 0.50
+    flame_glow_ksize: int = 21
+    flame_glow_gain: float = 0.18
     # Fraction of the smoke extinction the flame radiation ignores.
     # 0 -> flame attenuates exactly like the scene RGB (will be eaten
     # by smoke); 1 -> smoke is invisible to flame radiation. Realistic
     # ~0.95: visible-band flame leaks through medium-thick smoke
     # (Starr & Lattimer 2014, Fig. 7).
     flame_smoke_passthrough: float = 0.95
+    # Hot flame locally displaces/consumes soot, so smoke extinction and
+    # grey scattering are reduced at flame samples. This creates clear
+    # orange tongues instead of embedding one white blob in grey fog.
+    flame_smoke_displacement: float = 0.52
+    # Flames are emissive volumes, not opaque decals. Blend a controlled
+    # fraction of the clean surface texture back through visible flame so
+    # burning beds, sofas and tables remain recognizable.
+    flame_surface_reveal: float = 0.13
+    # Luminance-preserving Reinhard compression applied only to accumulated
+    # flame radiance. 1.0 prevents long ray paths from saturating all three
+    # RGB channels while retaining their orange/yellow ratios.
+    flame_highlight_compression: float = 1.0
     # Thermal display palette. Cold pixels always retain a darkened RGB
     # structure; this value only blends grayscale heat toward INFERNO as
     # apparent temperature rises.
@@ -160,11 +173,11 @@ class VoxelSmokeConfig:
     # micro-benchmark in docs). For navigation / benchmarking set them
     # to 0 (or use --fire_fast) to get a 4-5x speedup; keep them on
     # only for teleop demos where the fire needs to look alive.
-    flame_noise_strength: float = 0.55
-    flame_edge_break: float = 0.8
-    flame_color_jitter: float = 0.25
+    flame_noise_strength: float = 0.75
+    flame_edge_break: float = 1.05
+    flame_color_jitter: float = 0.32
     flame_time_speed: float = 12.0
-    smoke_noise_strength: float = 0.30
+    smoke_noise_strength: float = 0.24
 
 
 # ---------------------------------------------------------------------------

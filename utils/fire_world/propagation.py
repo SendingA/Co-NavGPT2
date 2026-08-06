@@ -197,10 +197,16 @@ class FirePropagation:
         world: VoxelWorld,
         rules: Dict,
         seed: int = 0,
+        duration_s: Optional[float] = None,
     ) -> None:
         self.world = world
         self.rules = rules
         self.rng = np.random.default_rng(seed)
+        self.duration_s = (
+            None
+            if duration_s is None
+            else max(0.0, float(duration_s))
+        )
 
         # Coefficients (read once for speed).
         self.alpha = float(rules.get("thermal_diffusivity", 0.05))
@@ -260,11 +266,11 @@ class FirePropagation:
         self.spread_kernel = str(rules.get("spread_kernel", "laplacian")).lower()
 
         # ---- Sustained / inextinguishable sources ----------------------
-        # When 1, the per-source sustain_s timer is ignored and each
-        # source keeps replenishing its own solid fuel every step, so
-        # a single point ignition can drive a room-filling fire over
-        # the full episode. Set 0 to model a finite fuel package that
-        # eventually burns itself out.
+        # When 1, the per-source sustain_s timer is ignored and each source
+        # keeps replenishing its own solid fuel every step. The visible flame
+        # still obeys the source envelope below; only heat and smoke can
+        # continue affecting the wider room. Set 0 to model a finite fuel
+        # package that eventually burns itself out.
         self.inextinguishable_sources = bool(
             int(rules.get("inextinguishable_sources", 1))
         )
@@ -277,7 +283,7 @@ class FirePropagation:
         # floor between two pieces of furniture, instead of always
         # needing the agent to be in line of sight of a source.
         self.floor_ignite_temp_c = float(rules.get("floor_ignite_temp_c", 250.0))
-        self.floor_fuel_value = float(rules.get("floor_fuel_value", 0.7))
+        self.floor_fuel_value = float(rules.get("floor_fuel_value", 0.52))
         # Direct contact ignition: any floor voxel within
         # ``floor_ignite_radius_cells`` of an existing flame voxel
         # whose intensity exceeds ``floor_flame_contact_thresh`` gets
@@ -289,7 +295,7 @@ class FirePropagation:
             rules.get("floor_ignite_radius_cells", 2)
         )
         self.floor_flame_contact_thresh = float(
-            rules.get("floor_flame_contact_thresh", 0.2)
+            rules.get("floor_flame_contact_thresh", 0.12)
         )
         # Source-centred floor spread envelope.  Contact ignition used to
         # dilate every burning floor cell on every solver step, which made
@@ -301,24 +307,108 @@ class FirePropagation:
         # of an actual ignition source.  The speed is intentionally much
         # slower than the generic furniture-surface spread coefficient.
         self.floor_spread_speed_m_per_s = max(
-            0.0, float(rules.get("floor_spread_speed_m_per_s", 0.015))
+            0.0, float(rules.get("floor_spread_speed_m_per_s", 0.0044))
         )
         self.floor_max_spread_radius_m = max(
-            0.0, float(rules.get("floor_max_spread_radius_m", 2.0))
+            0.0, float(rules.get("floor_max_spread_radius_m", 1.10))
+        )
+        # Optional duration deadline for the radial floor front. A value in
+        # (0, 1] means every source must reach its scaled maximum radius no
+        # later than this fraction of its remaining simulation duration.
+        # The resulting per-source speed is constant and never slower than
+        # floor_spread_speed_m_per_s. Missing/zero preserves archived plans'
+        # legacy fixed-speed behavior.
+        self.floor_spread_reach_fraction = float(np.clip(
+            rules.get("floor_spread_reach_fraction", 0.0), 0.0, 1.0
+        ))
+        self.object_spread_speed_m_per_s = max(
+            0.0, float(rules.get("object_spread_speed_m_per_s", 0.0066))
+        )
+        self.object_max_spread_radius_m = max(
+            0.0, float(rules.get("object_max_spread_radius_m", 1.35))
+        )
+        self.object_bbox_fill_speed_m_per_s = max(
+            0.0, float(rules.get("object_bbox_fill_speed_m_per_s", 0.008))
+        )
+        # Optional vertical bound for the deterministic object-BBox front.
+        # HM3D instances are voxelised AABBs, so an unrestricted
+        # six-connected fill can otherwise climb an entire curtain, cabinet,
+        # or other tall object. A zero value preserves archived plans'
+        # full-height behavior; a positive value measures upward from the
+        # object's lowest occupied voxel.
+        self.object_bbox_max_vertical_spread_m = max(
+            0.0,
+            float(rules.get("object_bbox_max_vertical_spread_m", 0.0)),
+        )
+        self.object_bbox_fill_flame_min = float(np.clip(
+            rules.get("object_bbox_fill_flame_min", 0.16), 0.0, 1.0
+        ))
+        self.object_bbox_fill_temp_margin_c = max(
+            0.0, float(rules.get("object_bbox_fill_temp_margin_c", 40.0))
+        )
+        # The object front advances in integer voxel shells, but the next
+        # shell is preheated and faded in over this many layers. This retains
+        # exact object-ID connectivity while removing visible 18-second jumps
+        # on the standard 0.15 m / 0.008 m/s medium preset.
+        self.object_bbox_fill_front_width_layers = max(
+            0.05,
+            min(
+                1.0,
+                float(
+                    rules.get("object_bbox_fill_front_width_layers", 1.0)
+                ),
+            ),
         )
         # Range of per-voxel seed flame magnitudes used to break the
         # flat-sheet look on the ignited floor. Each new floor voxel
         # gets a uniform draw in this range, scaled by floor_fuel_value.
-        self.floor_seed_flame_min = float(rules.get("floor_seed_flame_min", 0.1))
-        self.floor_seed_flame_max = float(rules.get("floor_seed_flame_max", 0.65))
-        # Flame column height: every active flame voxel projects an
-        # upward flame plume of up to ``flame_column_cells`` voxels
-        # (default 6 cells ~= 0.9 m on a 0.15 m grid). The plume
-        # intensity decays linearly with height so the top of the
-        # flame is wispier than the base. This is purely a renderer
-        # cue - the upper voxels of the column don't consume fuel.
-        self.flame_column_cells = int(rules.get("flame_column_cells", 6))
-        self.flame_column_decay = float(rules.get("flame_column_decay", 0.75))
+        self.floor_seed_flame_min = float(
+            rules.get("floor_seed_flame_min", 0.10)
+        )
+        self.floor_seed_flame_max = float(
+            rules.get("floor_seed_flame_max", 0.58)
+        )
+        # Soft spatial profile for visible floor spread. The hard maximum
+        # radius still bounds the hazard, while this Gaussian makes the core
+        # brighter and the advancing edge progressively weaker.
+        self.floor_gaussian_sigma_fraction = max(
+            0.05, float(rules.get("floor_gaussian_sigma_fraction", 0.50))
+        )
+        self.floor_gaussian_min_influence = float(np.clip(
+            rules.get("floor_gaussian_min_influence", 0.08), 0.0, 1.0
+        ))
+        # Width of the advancing floor front. Cells inside the geometric
+        # source envelope first receive weak heat, then progressively become
+        # visible and reactive. The envelope radius itself remains hard and
+        # unchanged, so softness improves continuity without enlarging risk.
+        self.floor_front_softness_m = max(
+            0.0, float(rules.get("floor_front_softness_m", 0.18))
+        )
+        # Must remain above the renderer's default 0.04 flame threshold even
+        # at the darkest stable-texture cell (0.75 multiplier), otherwise the
+        # low-intensity edge of radial spread contains invisible gaps.
+        self.floor_min_visible_flame = max(
+            0.0, float(rules.get("floor_min_visible_flame", 0.06))
+        )
+        self.limit_flame_to_source_envelope = bool(
+            int(rules.get("limit_flame_to_source_envelope", 1))
+        )
+        # Flame column height: every active flame voxel projects an upward
+        # plume no taller than the cell count and optional metric cap. The
+        # intensity decays geometrically with height so the top is much
+        # wispier than the base and does not dominate the camera.
+        self.flame_column_cells = max(
+            0, int(rules.get("flame_column_cells", 3))
+        )
+        # A metric cap makes visual height independent of timeline voxel
+        # resolution. Zero keeps the legacy cell-count-only behavior.
+        self.max_flame_column_height_m = max(
+            0.0, float(rules.get("max_flame_column_height_m", 0.0))
+        )
+        self.flame_column_decay = float(rules.get("flame_column_decay", 0.50))
+        self.object_flame_extra_height_cells = max(
+            0, int(rules.get("object_flame_extra_height_cells", 1))
+        )
 
         # ---- Smoke transport tuning -------------------------------------
         # smoke_alpha is a *self-diffusion* coefficient (m^2/s), independent
@@ -365,11 +455,41 @@ class FirePropagation:
         # t_end, smoke_yield). We carry smoke_yield through so the plan
         # value really controls how dense the room ends up.
         self._sources: List[Tuple[Tuple[slice, slice, slice], np.ndarray, float, float, float]] = []
-        # (source_x_m, source_z_m, source_radius_m, ignition_time_s).
+        # (source_x_m, source_z_m, source_radius_m, ignition_time_s,
+        #  floor_spread_scale).
         # Kept separately from _sources because a finite source may expire
         # while the already-lit floor patch remains spatially bounded by
         # the place where that source originally ignited.
-        self._floor_sources: List[Tuple[float, float, float, float]] = []
+        self._floor_sources: List[
+            Tuple[float, float, float, float, float]
+        ] = []
+        # Highest source-core voxel seen so far. Renderer-visible flame is
+        # allowed only the effective metric/cell plume height above it. This
+        # clips buoyancy-transported flame without constraining heat/smoke.
+        self._max_source_core_y = -1
+        # Stable per-cell heterogeneity prevents a perfectly smooth synthetic
+        # sheet without introducing frame-to-frame flicker.
+        self._floor_texture_xz = (
+            0.75 + 0.25 * self.rng.random((Nx, Nz), dtype=np.float32)
+        )
+        # Per-object voxel fronts. An entry is created only after that object
+        # already contains a genuinely hot flame voxel; the planner never
+        # supplies these object IDs.
+        self._object_fill_states: Dict[int, Dict[str, object]] = {}
+        self._object_fill_visible = np.zeros(world.shape, dtype=bool)
+
+    # ------------------------------------------------------------------
+    def effective_flame_column_cells(self) -> int:
+        """Return the renderer plume height after applying its metric cap."""
+        configured_cells = max(0, int(self.flame_column_cells))
+        if self.max_flame_column_height_m <= 0.0:
+            return configured_cells
+        metric_cells = int(np.floor(
+            self.max_flame_column_height_m
+            / max(float(self.world.voxel), 1e-6)
+            + 1e-6
+        ))
+        return min(configured_cells, max(0, metric_cells))
 
     # ------------------------------------------------------------------
     def add_source(
@@ -382,6 +502,7 @@ class FirePropagation:
         smoke_yield: float = 0.5,
         position: Optional[np.ndarray] = None,
         source_radius_m: Optional[float] = None,
+        floor_spread_scale: float = 1.0,
     ) -> None:
         """Register a sustained heat source.
 
@@ -397,6 +518,10 @@ class FirePropagation:
             float(source_temp_c), t_now + float(sustain_s),
             float(np.clip(smoke_yield, 0.0, 1.0)),
         ))
+        self._max_source_core_y = max(
+            self._max_source_core_y,
+            int(sl[1].stop) - 1,
+        )
         # Prefer the plan's exact source geometry.  The slice-based fallback
         # preserves compatibility for external callers using the old method
         # signature.
@@ -417,24 +542,188 @@ class FirePropagation:
             float(source_position[2]),
             max(0.0, float(source_radius_m)),
             float(t_now),
+            max(0.0, float(floor_spread_scale)),
         ))
 
+    def _floor_spread_effective_speed_m_per_s(
+        self,
+        source_radius_m: float,
+        ignition_time_s: float,
+        floor_spread_scale: float,
+    ) -> float:
+        """Return the constant radial speed used for one ignition source.
+
+        New plans provide ``floor_spread_reach_fraction`` and a simulation
+        duration. In that mode, the configured speed is a lower bound and is
+        increased only when needed to hit the scaled radius by the deadline.
+        Archived plans, direct unit tests, and external callers that omit
+        either value retain the exact fixed-speed rule.
+        """
+        speed = self.floor_spread_speed_m_per_s
+        target_radius = (
+            self.floor_max_spread_radius_m
+            * max(0.0, float(floor_spread_scale))
+        )
+        remaining = (
+            None
+            if self.duration_s is None
+            else max(0.0, self.duration_s - float(ignition_time_s))
+        )
+        if (
+            self.floor_spread_reach_fraction > 0.0
+            and remaining is not None
+            and remaining > 0.0
+            and target_radius > float(source_radius_m)
+        ):
+            deadline_s = (
+                remaining * self.floor_spread_reach_fraction
+            )
+            required_speed = (
+                (target_radius - float(source_radius_m))
+                / max(deadline_s, 1e-6)
+            )
+            speed = max(speed, required_speed)
+        return max(0.0, float(speed))
+
+    def _floor_spread_radius_m(
+        self,
+        source_radius_m: float,
+        ignition_time_s: float,
+        floor_spread_scale: float,
+        t_now: float,
+    ) -> float:
+        """Return the hard radial front radius for one source at ``t_now``."""
+        scale = max(0.0, float(floor_spread_scale))
+        target_radius = self.floor_max_spread_radius_m * scale
+        if target_radius <= 0.0:
+            return 0.0
+        source_age = max(0.0, float(t_now) - float(ignition_time_s))
+        speed = self._floor_spread_effective_speed_m_per_s(
+            source_radius_m,
+            ignition_time_s,
+            scale,
+        )
+        return min(
+            target_radius,
+            max(0.0, float(source_radius_m)) + speed * source_age,
+        )
+
+    def floor_source_effective_speeds_m_per_s(self) -> List[float]:
+        """Expose deterministic per-source speeds for timeline metadata."""
+        return [
+            self._floor_spread_effective_speed_m_per_s(
+                source_radius,
+                t_start,
+                spread_scale,
+            )
+            for _, _, source_radius, t_start, spread_scale
+            in self._floor_sources
+        ]
+
+    def _floor_spread_influence_xz(self, t_now: float) -> np.ndarray:
+        """Return a bounded Gaussian field with a soft advancing front.
+
+        Distance controls the stable bright-core/dim-edge profile. A separate
+        smoothstep term controls arrival: a newly reached floor cell begins as
+        weak preheat, fades into visible flame, and only then reaches the
+        reaction temperature. This recovers the continuous thermal front of
+        the reaction-diffusion solver without allowing recursive floor fire
+        beyond the source-centred maximum radius.
+        """
+        nx, _, nz = self.world.shape
+        influence = np.zeros((nx, nz), dtype=np.float32)
+        if not self._floor_sources:
+            return influence
+
+        voxel = float(self.world.voxel)
+        xs = (
+            self.world.origin[0]
+            + (np.arange(nx, dtype=np.float32) + 0.5) * voxel
+        )
+        zs = (
+            self.world.origin[2]
+            + (np.arange(nz, dtype=np.float32) + 0.5) * voxel
+        )
+
+        if self.floor_max_spread_radius_m > 0.0:
+            for (
+                source_x,
+                source_z,
+                source_radius,
+                t_start,
+                spread_scale,
+            ) in self._floor_sources:
+                radius = self._floor_spread_radius_m(
+                    source_radius,
+                    t_start,
+                    spread_scale,
+                    t_now,
+                )
+                if radius <= 0.0:
+                    continue
+                distance_sq = (
+                    (xs[:, None] - source_x) ** 2
+                    + (zs[None, :] - source_z) ** 2
+                )
+                distance = np.sqrt(distance_sq).astype(np.float32)
+                sigma = max(
+                    0.5 * voxel,
+                    radius * self.floor_gaussian_sigma_fraction,
+                )
+                radial = np.exp(
+                    -0.5 * distance_sq / (sigma * sigma)
+                ).astype(np.float32)
+                if self.floor_front_softness_m > 0.0:
+                    front = np.clip(
+                        (radius - distance) / self.floor_front_softness_m,
+                        0.0,
+                        1.0,
+                    )
+                    # Cubic smoothstep gives zero slope at both ends, avoiding
+                    # a brightness kink when a cell becomes fully reached.
+                    front = front * front * (3.0 - 2.0 * front)
+                    radial *= front
+                radial[distance_sq > radius * radius] = 0.0
+                np.maximum(influence, radial, out=influence)
+
+        return influence
+
     def _floor_spread_allowed_xz(self, t_now: float) -> np.ndarray:
-        """Return the XZ cells inside any source's current floor envelope."""
+        """Return the hard XZ envelope reached by radial spread.
+
+        This is intentionally separate from the soft influence field:
+        low-influence cells near the front are allowed to preheat instead of
+        disappearing until a brightness threshold is crossed.
+        """
         nx, _, nz = self.world.shape
         allowed = np.zeros((nx, nz), dtype=bool)
         if not self._floor_sources or self.floor_max_spread_radius_m <= 0.0:
             return allowed
 
         voxel = float(self.world.voxel)
-        xs = self.world.origin[0] + (np.arange(nx, dtype=np.float32) + 0.5) * voxel
-        zs = self.world.origin[2] + (np.arange(nz, dtype=np.float32) + 0.5) * voxel
-        for source_x, source_z, source_radius, t_start in self._floor_sources:
-            source_age = max(0.0, float(t_now) - t_start)
-            radius = min(
-                self.floor_max_spread_radius_m,
-                source_radius + self.floor_spread_speed_m_per_s * source_age,
+        xs = (
+            self.world.origin[0]
+            + (np.arange(nx, dtype=np.float32) + 0.5) * voxel
+        )
+        zs = (
+            self.world.origin[2]
+            + (np.arange(nz, dtype=np.float32) + 0.5) * voxel
+        )
+        for (
+            source_x,
+            source_z,
+            source_radius,
+            t_start,
+            spread_scale,
+        ) in self._floor_sources:
+            radius = self._floor_spread_radius_m(
+                source_radius,
+                t_start,
+                spread_scale,
+                t_now,
             )
+            if radius <= 0.0:
+                continue
             distance_sq = (
                 (xs[:, None] - source_x) ** 2
                 + (zs[None, :] - source_z) ** 2
@@ -442,17 +731,246 @@ class FirePropagation:
             allowed |= distance_sq <= radius * radius
         return allowed
 
+    def _object_spread_allowed_xz(self, t_now: float) -> np.ndarray:
+        """Return the local domain in which real objects may ignite.
+
+        This does not select object IDs. It is a geometric guard against
+        coarse, overlapping inventory AABBs causing an unbounded reaction
+        chain: any fuel-bearing object voxel inside the growing domain can
+        still ignite solely from the physical fields.
+        """
+        nx, _, nz = self.world.shape
+        allowed = np.zeros((nx, nz), dtype=bool)
+        if not self._floor_sources or self.object_max_spread_radius_m <= 0.0:
+            return allowed
+        voxel = float(self.world.voxel)
+        xs = (
+            self.world.origin[0]
+            + (np.arange(nx, dtype=np.float32) + 0.5) * voxel
+        )
+        zs = (
+            self.world.origin[2]
+            + (np.arange(nz, dtype=np.float32) + 0.5) * voxel
+        )
+        for source_x, source_z, source_radius, t_start, _ in self._floor_sources:
+            source_age = max(0.0, float(t_now) - t_start)
+            radius = min(
+                self.object_max_spread_radius_m,
+                source_radius
+                + self.object_spread_speed_m_per_s * source_age,
+            )
+            if radius <= 0.0:
+                continue
+            distance_sq = (
+                (xs[:, None] - source_x) ** 2
+                + (zs[None, :] - source_z) ** 2
+            )
+            allowed |= distance_sq <= radius * radius
+        return allowed
+
+    @staticmethod
+    def _dilate_six_connected(mask: np.ndarray) -> np.ndarray:
+        """Grow a boolean 3D mask by one face-connected voxel."""
+        grown = mask.copy()
+        grown[1:, :, :] |= mask[:-1, :, :]
+        grown[:-1, :, :] |= mask[1:, :, :]
+        grown[:, 1:, :] |= mask[:, :-1, :]
+        grown[:, :-1, :] |= mask[:, 1:, :]
+        grown[:, :, 1:] |= mask[:, :, :-1]
+        grown[:, :, :-1] |= mask[:, :, 1:]
+        return grown
+
+    def _advance_object_bbox_fill(
+        self,
+        t_now: float,
+        object_allowed_xz: np.ndarray,
+    ) -> None:
+        """Advance flame through each already-ignited object's voxel mask.
+
+        HM3D inventory objects are represented by voxelised AABBs. Once the
+        physical solver has produced a hot flame inside one object, a
+        deterministic six-connected front grows through voxels carrying that
+        exact object ID. The fill front is still clipped by the dynamic local
+        object domain at first ignition. After that it may finish the
+        vertically permitted part of the exact object's mask, but it cannot
+        jump to another object ID or create a new domain-external ignition.
+        """
+        w = self.world
+        object_ids = w.object_id_field
+        self._object_fill_visible.fill(False)
+        if (
+            object_ids is None
+            or self.object_bbox_fill_speed_m_per_s <= 0.0
+            or not object_allowed_xz.any()
+        ):
+            return
+
+        allowed_3d = object_allowed_xz[:, None, :]
+        hot_flame = (
+            (object_ids >= 0)
+            & allowed_3d
+            & (w.fuel > 0.05)
+            & (w.temp >= self.t_ignite)
+            & (w.flame >= self.floor_flame_contact_thresh)
+        )
+        for raw_object_id in np.unique(object_ids[hot_flame]):
+            object_id = int(raw_object_id)
+            if object_id in self._object_fill_states:
+                continue
+            seed = hot_flame & (object_ids == object_id)
+            if not seed.any():
+                continue
+            coordinates = np.argwhere(object_ids == object_id)
+            lower = coordinates.min(axis=0)
+            upper = coordinates.max(axis=0) + 1
+            object_slice = tuple(
+                slice(int(lo), int(hi))
+                for lo, hi in zip(lower, upper)
+            )
+            object_mask = (
+                object_ids[object_slice] == object_id
+            ).copy()
+            fill_mask = object_mask.copy()
+            if self.object_bbox_max_vertical_spread_m > 0.0:
+                max_vertical_index = int(np.floor(
+                    self.object_bbox_max_vertical_spread_m
+                    / max(float(w.voxel), 1e-6)
+                    + 1e-6
+                ))
+                fill_mask[:, max_vertical_index + 1:, :] = False
+            reached = seed[object_slice] & fill_mask
+            if not reached.any():
+                # The physical solver may ignite a high part of a tall object,
+                # but it must not use the BBox visual-fill shortcut to carry
+                # that flame farther vertically.
+                continue
+            self._object_fill_states[object_id] = {
+                "start_time": float(t_now),
+                "layers": 0,
+                "slice": object_slice,
+                "object_mask": object_mask,
+                "fill_mask": fill_mask,
+                "reached": reached,
+            }
+
+        for state in self._object_fill_states.values():
+            object_slice = state["slice"]
+            fill_mask = state["fill_mask"]
+            age_s = max(0.0, float(t_now) - float(state["start_time"]))
+            layer_progress = (
+                self.object_bbox_fill_speed_m_per_s
+                * age_s
+                / max(float(w.voxel), 1e-6)
+            )
+            target_layers = int(np.floor(layer_progress))
+            reached = state["reached"]
+            current_layers = int(state["layers"])
+            for _ in range(current_layers, target_layers):
+                reached = (
+                    self._dilate_six_connected(reached)
+                    & fill_mask
+                )
+            state["reached"] = reached
+            state["layers"] = target_layers
+
+            fuel_local = w.fuel[object_slice]
+            stable_fill = (
+                reached
+                & fill_mask
+                & (fuel_local > 0.05)
+            )
+            front = (
+                self._dilate_six_connected(reached)
+                & fill_mask
+                & ~reached
+                & (fuel_local > 0.05)
+            )
+            fractional_layer = float(layer_progress - target_layers)
+            front_start = 1.0 - self.object_bbox_fill_front_width_layers
+            front_strength = float(np.clip(
+                (
+                    fractional_layer - front_start
+                )
+                / self.object_bbox_fill_front_width_layers,
+                0.0,
+                1.0,
+            ))
+            front_strength = (
+                front_strength
+                * front_strength
+                * (3.0 - 2.0 * front_strength)
+            )
+            if not stable_fill.any() and (
+                front_strength <= 0.0 or not front.any()
+            ):
+                continue
+            temp_local = w.temp[object_slice]
+            flame_local = w.flame[object_slice]
+            temp_local[stable_fill] = np.maximum(
+                temp_local[stable_fill],
+                self.t_ignite + self.object_bbox_fill_temp_margin_c,
+            )
+            flame_local[stable_fill] = np.maximum(
+                flame_local[stable_fill],
+                self.object_bbox_fill_flame_min,
+            )
+            visible_local = self._object_fill_visible[object_slice]
+            visible_local[stable_fill] = True
+            if front_strength > 0.0 and front.any():
+                front_target_temp = (
+                    self.ambient
+                    + front_strength
+                    * (
+                        self.t_ignite
+                        + self.object_bbox_fill_temp_margin_c
+                        - self.ambient
+                    )
+                )
+                temp_local[front] = np.maximum(
+                    temp_local[front], front_target_temp
+                )
+                flame_local[front] = np.maximum(
+                    flame_local[front],
+                    self.object_bbox_fill_flame_min * front_strength,
+                )
+                visible_local[front] = True
+
     # ------------------------------------------------------------------
     def step(self, dt: float, t_now: float = 0.0) -> None:
         """One forward step. ``dt`` in seconds, ``t_now`` end-of-step time."""
         w = self.world
         v = w.voxel
 
+        # Flame columns are a visualization cue generated at the end of the
+        # previous step. Remove unsupported air voxels before heat transfer,
+        # radiation, reaction, and the next projection. Without this reset,
+        # each frame's column became the next frame's base, so a nominal
+        # six-cell plume could climb to the ceiling and radiatively enlarge
+        # the physical fire over repeated steps.
+        w.flame[w.fuel <= 0.05] = 0.0
+
+        floor_influence_xz: Optional[np.ndarray] = None
         floor_allowed_xz: Optional[np.ndarray] = None
         floor_blocked: Optional[np.ndarray] = None
+        object_voxels = (
+            w.object_id_field >= 0
+            if w.object_id_field is not None
+            else np.zeros(w.shape, dtype=bool)
+        )
+        object_allowed_xz = self._object_spread_allowed_xz(t_now)
+        object_blocked = (
+            object_voxels & ~object_allowed_xz[:, None, :]
+        )
         if w.floors is not None:
+            floor_influence_xz = self._floor_spread_influence_xz(t_now)
             floor_allowed_xz = self._floor_spread_allowed_xz(t_now)
-            floor_blocked = w.floors & ~floor_allowed_xz[:, None, :]
+            # The floor envelope constrains synthetic floor fuel, not real
+            # inventory objects whose AABBs overlap a floor-mask voxel.
+            floor_blocked = (
+                w.floors
+                & ~floor_allowed_xz[:, None, :]
+                & ~object_voxels
+            )
             # Remove any renderer-only flame column that landed on a floor
             # beyond the source envelope during the previous step.
             w.flame[floor_blocked] = 0.0
@@ -573,6 +1091,7 @@ class FirePropagation:
         ignitable = (w.fuel > self.flammable_threshold) & (w.temp > self.t_ignite)
         if floor_blocked is not None:
             ignitable &= ~floor_blocked
+        ignitable &= ~object_blocked
         if ignitable.any():
             k_neigh = max(1, int(self.fuel_neighborhood_cells))
             fuel_avg = _box_blur_3d(w.fuel, k_neigh)
@@ -654,6 +1173,70 @@ class FirePropagation:
                     float(self.t_ignite) + 50.0 + temp_jitter,
                 )
 
+            # Procedural distributed spread. Source-centred Gaussian fronts
+            # make newly reached floor cells fade in gradually. No route or
+            # future ignition object is supplied by the planner.
+            if floor_influence_xz is not None:
+                distributed = (
+                    w.floors
+                    & floor_allowed_xz[:, None, :]
+                )
+                if distributed.any():
+                    profile_xz = np.clip(
+                        floor_influence_xz, 0.0, 1.0
+                    )
+                    visible_progress_xz = np.sqrt(profile_xz)
+                    target_flame_xz = (
+                        float(self.floor_fuel_value)
+                        * (
+                            self.floor_seed_flame_min
+                            + (
+                                self.floor_seed_flame_max
+                                - self.floor_seed_flame_min
+                            )
+                            * visible_progress_xz
+                        )
+                        * visible_progress_xz
+                        * self._floor_texture_xz
+                    )
+                    target_flame_xz = np.maximum(
+                        target_flame_xz,
+                        self.floor_min_visible_flame
+                        * visible_progress_xz
+                        * self._floor_texture_xz,
+                    )
+                    target_flame = np.broadcast_to(
+                        target_flame_xz[:, None, :], w.shape
+                    )
+                    w.fuel[distributed] = np.maximum(
+                        w.fuel[distributed],
+                        float(self.floor_fuel_value),
+                    )
+                    w.flame[distributed] = np.maximum(
+                        w.flame[distributed],
+                        target_flame[distributed],
+                    )
+                    # Unlike the previous hard assignment to T_ignite+30 C,
+                    # the newly reached shell starts as preheat. It crosses
+                    # the reaction threshold only after the soft front has
+                    # substantially occupied the voxel.
+                    target_temp_xz = (
+                        float(self.ambient)
+                        + (
+                            float(self.t_ignite)
+                            + 100.0
+                            - float(self.ambient)
+                        )
+                        * profile_xz
+                    )
+                    target_temp = np.broadcast_to(
+                        target_temp_xz[:, None, :], w.shape
+                    )
+                    w.temp[distributed] = np.maximum(
+                        w.temp[distributed],
+                        target_temp[distributed],
+                    )
+
         # Surface flame spread along the fuel field.
         # spread_mask = (fuel > 0) OR (temp > t_ignite). The latter
         # term lets flame jump *across* short air gaps that have been
@@ -668,6 +1251,7 @@ class FirePropagation:
                 ).astype(np.float32)
                 if floor_blocked is not None:
                     spread_mask[floor_blocked] = 0.0
+                spread_mask[object_blocked] = 0.0
                 if self.spread_kernel == "gaussian":
                     # Gaussian transport: sigma = spread * dt / v
                     # voxels per step. We blend the original flame with
@@ -817,21 +1401,52 @@ class FirePropagation:
                 keep.append(entry)
             self._sources = keep
 
+        # Once a real object has ignited, let a slow face-connected front
+        # occupy its own voxelised Bounding Box. This is deliberately after
+        # source pinning/reaction detection and before visual column
+        # projection; it cannot choose a future object on the planner's behalf.
+        self._advance_object_bbox_fill(t_now, object_allowed_xz)
+
+        # Keep synthetic floor flame intensity faithful to the Gaussian
+        # profile even after reaction and sustained-source pinning. This is
+        # applied before column projection so the visible tongues inherit the
+        # same bright-core / dim-edge distribution.
+        if w.floors is not None and floor_influence_xz is not None:
+            visible_progress_xz = np.sqrt(
+                np.clip(floor_influence_xz, 0.0, 1.0)
+            )
+            floor_cap_xz = np.clip(
+                0.02
+                + 0.98
+                * visible_progress_xz
+                * self._floor_texture_xz,
+                0.0,
+                1.0,
+            )
+            floor_cap = np.broadcast_to(
+                floor_cap_xz[:, None, :], w.shape
+            )
+            w.flame[w.floors] = np.minimum(
+                w.flame[w.floors],
+                floor_cap[w.floors],
+            )
+
         # 8) Flame column: project flame upward from each burning voxel
         # so the rendered fire has a visible vertical plume instead of
         # rendering as a flat sheet at the fuel's height. For each y
-        # layer above an active flame (within ``flame_column_cells``)
+        # layer above an active flame (within the effective cell/metric cap)
         # we copy the source flame intensity decayed by a geometric
         # factor (``flame_column_decay``) per layer and OR it with
         # whatever is already there. Walls / ceilings block the
         # column (zero out at solid voxels). Top of the column also
         # contributes to the smoke field so the plume bridges into
         # the buoyancy step on the next iteration.
-        if self.flame_column_cells > 0 and self.flame_column_decay > 0.0:
+        flame_column_cells = self.effective_flame_column_cells()
+        if flame_column_cells > 0 and self.flame_column_decay > 0.0:
             base = np.clip(w.flame, 0.0, 1.0)
             current = base.copy()
             col_acc = base.copy()
-            for h in range(1, int(self.flame_column_cells) + 1):
+            for h in range(1, flame_column_cells + 1):
                 # Shift the flame up by one voxel in y; reflect at top.
                 lifted = np.zeros_like(current)
                 lifted[:, h:, :] = base[:, :-h, :]
@@ -854,6 +1469,46 @@ class FirePropagation:
         # disabled and after sustained-source pinning has run.
         if floor_blocked is not None:
             w.flame[floor_blocked] = 0.0
+
+        # Final renderer-visible fire contract: synthetic floor/air flames
+        # stay within the growing source-centred XZ patches and cannot ride
+        # buoyancy to the ceiling. Real fuel-bearing object voxels are exempt:
+        # if physics heats another object above ignition, its flame must remain
+        # visible even outside the initial floor envelope.
+        if (
+            self.limit_flame_to_source_envelope
+            and self._floor_sources
+            and self.floor_max_spread_radius_m > 0.0
+        ):
+            flame_allowed_xz = (
+                floor_allowed_xz
+                if floor_allowed_xz is not None
+                else self._floor_spread_allowed_xz(t_now)
+            )
+            object_supported = (
+                object_voxels
+                & (w.fuel > 0.05)
+                & (
+                    object_allowed_xz[:, None, :]
+                    | self._object_fill_visible
+                )
+            )
+            outside_envelope = ~flame_allowed_xz[:, None, :]
+            w.flame[outside_envelope & ~object_supported] = 0.0
+            max_visible_y = min(
+                w.shape[1] - 1,
+                self._max_source_core_y + flame_column_cells,
+            )
+            if max_visible_y + 1 < w.shape[1]:
+                high_flame = w.flame[:, max_visible_y + 1:, :]
+                high_object = object_supported[:, max_visible_y + 1:, :]
+                high_flame[~high_object] = 0.0
+            max_object_y = min(
+                w.shape[1] - 1,
+                max_visible_y + self.object_flame_extra_height_cells,
+            )
+            if max_object_y + 1 < w.shape[1]:
+                w.flame[:, max_object_y + 1:, :] = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -894,9 +1549,16 @@ def run_propagation(
         ceiling_path=struct.get("ceiling_voxel_path"),
     )
 
-    sim = FirePropagation(world, rules, seed=seed)
+    sim = FirePropagation(
+        world,
+        rules,
+        seed=seed,
+        duration_s=duration,
+    )
 
-    # Schedule of ignitions sorted by time.
+    # New plans contain t=0 initial objects only. Sorting retains read
+    # compatibility with old archived plans without recreating their removed
+    # parent-child corridor behavior.
     ignitions = sorted(plan["ignitions"], key=lambda ig: float(ig["ignite_time_s"]))
     next_ig = 0
     n_steps = int(np.ceil(duration / dt))
@@ -933,7 +1595,10 @@ def run_propagation(
                        t_now=0.0,
                        smoke_yield=float(ig.get("smoke_yield", 0.5)),
                        position=np.asarray(ig["position"]),
-                       source_radius_m=float(ig["source_radius_m"]))
+                       source_radius_m=float(ig["source_radius_m"]),
+                       floor_spread_scale=float(
+                           ig.get("floor_spread_scale", 1.0)
+                       ))
         next_ig += 1
     snapshot(0, 0.0)
 
@@ -955,7 +1620,10 @@ def run_propagation(
                            t_now=t_now,
                            smoke_yield=float(ig.get("smoke_yield", 0.5)),
                            position=np.asarray(ig["position"]),
-                           source_radius_m=float(ig["source_radius_m"]))
+                           source_radius_m=float(ig["source_radius_m"]),
+                           floor_spread_scale=float(
+                               ig.get("floor_spread_scale", 1.0)
+                           ))
             next_ig += 1
 
         sim.step(dt, t_now=t_now)
@@ -991,6 +1659,42 @@ def run_propagation(
         "ceiling_y_idx": int(sim.ceiling_y),
         "floor_spread_speed_m_per_s": float(sim.floor_spread_speed_m_per_s),
         "floor_max_spread_radius_m": float(sim.floor_max_spread_radius_m),
+        "floor_spread_reach_fraction": float(
+            sim.floor_spread_reach_fraction
+        ),
+        "floor_source_effective_speeds_m_per_s": [
+            float(value)
+            for value in sim.floor_source_effective_speeds_m_per_s()
+        ],
+        "floor_front_softness_m": float(sim.floor_front_softness_m),
+        "object_spread_speed_m_per_s": float(
+            sim.object_spread_speed_m_per_s
+        ),
+        "object_max_spread_radius_m": float(
+            sim.object_max_spread_radius_m
+        ),
+        "object_bbox_fill_speed_m_per_s": float(
+            sim.object_bbox_fill_speed_m_per_s
+        ),
+        "object_bbox_max_vertical_spread_m": float(
+            sim.object_bbox_max_vertical_spread_m
+        ),
+        "object_bbox_fill_front_width_layers": float(
+            sim.object_bbox_fill_front_width_layers
+        ),
+        "flame_column_cells": int(sim.flame_column_cells),
+        "max_flame_column_height_m": float(
+            sim.max_flame_column_height_m
+        ),
+        "effective_flame_column_cells": int(
+            sim.effective_flame_column_cells()
+        ),
+        "effective_flame_column_height_m": float(
+            sim.effective_flame_column_cells() * voxel_m
+        ),
+        "object_flame_extra_height_cells": int(
+            sim.object_flame_extra_height_cells
+        ),
     }
 
     if out_dir is not None:

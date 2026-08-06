@@ -148,6 +148,79 @@ class TorchRendererParityTest(unittest.TestCase):
             float(output["thermal_temperature"].max()), 25.0
         )
 
+    def test_flame_is_chromatic_and_preserves_surface_texture(self):
+        kwargs = _render_case()
+        height, width = kwargs["rgb_clean"].shape[:2]
+        yy, xx = np.mgrid[:height, :width]
+        checker = ((xx // 2 + yy // 2) % 2).astype(np.uint8)
+        kwargs["rgb_clean"] = np.stack(
+            [
+                55 + 145 * checker,
+                70 + 115 * checker,
+                85 + 85 * checker,
+            ],
+            axis=-1,
+        ).astype(np.uint8)
+        kwargs["params"] = VoxelRenderParams(
+            max_depth_m=3.0,
+            n_steps=24,
+            render_scale=1.0,
+            flame_glow_gain=0.0,
+            flame_noise_strength=0.0,
+            flame_edge_break=0.0,
+            flame_color_jitter=0.0,
+            smoke_noise_strength=0.0,
+        )
+
+        output = volumetric_composite(**kwargs)
+        flame_mask = output["flame_mask"] > 0.0
+        self.assertGreater(int(flame_mask.sum()), 20)
+
+        fire_rgb = output["image"][flame_mask].astype(np.float32)
+        white_ratio = np.mean(np.min(fire_rgb, axis=1) >= 245.0)
+        self.assertLess(float(white_ratio), 0.05)
+        self.assertGreater(
+            float(np.mean(fire_rgb[:, 0] - fire_rgb[:, 2])),
+            15.0,
+        )
+
+        clean_luma = kwargs["rgb_clean"].mean(axis=-1)[flame_mask]
+        fire_luma = output["image"].mean(axis=-1)[flame_mask]
+        texture_correlation = np.corrcoef(clean_luma, fire_luma)[0, 1]
+        self.assertGreater(float(texture_correlation), 0.25)
+
+    def test_textured_flame_matches_torch_and_changes_over_time(self):
+        kwargs = _render_case()
+        kwargs["params"] = VoxelRenderParams(
+            max_depth_m=3.0,
+            n_steps=12,
+            render_scale=1.0,
+            flame_glow_gain=0.0,
+        )
+        expected = volumetric_composite(**kwargs)
+        actual = volumetric_composite_torch(
+            **kwargs,
+            device="cpu",
+            volume_dtype="float32",
+            max_sample_points=1_000_000,
+        )
+        np.testing.assert_array_equal(actual["image"], expected["image"])
+
+        later_kwargs = dict(kwargs)
+        later_kwargs["t_sim"] = 0.17
+        later = volumetric_composite(**later_kwargs)
+        flame_region = (
+            (expected["flame_mask"] > 0.0)
+            | (later["flame_mask"] > 0.0)
+        )
+        self.assertGreater(int(flame_region.sum()), 20)
+        changed = np.any(
+            expected["image"][flame_region]
+            != later["image"][flame_region],
+            axis=1,
+        )
+        self.assertGreater(float(np.mean(changed)), 0.10)
+
     def test_scene_cache_is_shared_by_multiple_agent_sensors(self):
         scene = SimpleNamespace()
         self.assertIs(shared_scene_cache(scene), shared_scene_cache(scene))
@@ -337,6 +410,22 @@ class TorchRendererIntegrationTest(unittest.TestCase):
         self.assertEqual(config.max_sample_points, 12345)
         self.assertEqual(config.n_steps, 10)
         self.assertAlmostEqual(config.render_scale, 0.35)
+        self.assertEqual(config.flame_noise_strength, 0.0)
+
+        pretty_args = SimpleNamespace(**vars(args))
+        pretty_args.fire_fast = 0
+        pretty_config = VoxelSmokeConfig(
+            **voxel_smoke_kwargs(pretty_args)
+        )
+        self.assertAlmostEqual(pretty_config.flame_noise_strength, 0.75)
+        self.assertAlmostEqual(pretty_config.flame_edge_break, 1.05)
+        self.assertAlmostEqual(pretty_config.flame_color_jitter, 0.32)
+        self.assertAlmostEqual(pretty_config.smoke_noise_strength, 0.24)
+        self.assertAlmostEqual(pretty_config.flame_k_ext, 0.50)
+        self.assertAlmostEqual(
+            pretty_config.flame_smoke_displacement, 0.52
+        )
+        self.assertAlmostEqual(pretty_config.flame_surface_reveal, 0.13)
 
 
 if __name__ == "__main__":

@@ -10,10 +10,10 @@ from utils.fire_world.hm3d_semantic import read_semantic_txt
 from utils.fire_world.planner import build_plan
 from utils.fire_world.scene_scan import MATERIAL_TABLE
 from utils.fire_world.templates import (
+    MULTI_ORIGIN_INITIAL_CATEGORIES,
     TEMPLATE_CATEGORY_GROUPS,
     TEMPLATES,
-    _pick_primary,
-    _pick_secondary,
+    _pick_explicit_initials,
 )
 
 
@@ -62,7 +62,50 @@ class FireTemplateSemanticTests(unittest.TestCase):
         self.assertEqual(MATERIAL_TABLE["oven and stove"], (0.85, 0.70))
         self.assertNotIn("tv_monitor", MATERIAL_TABLE)
 
-    def test_primary_and_secondary_selection_cannot_use_unlisted_category(self):
+    def test_multi_origin_initial_categories_are_real_floor_furniture(self):
+        categories = set(MULTI_ORIGIN_INITIAL_CATEGORIES)
+        self.assertTrue(categories <= self.semantic_categories)
+        self.assertTrue(categories <= set(MATERIAL_TABLE))
+        self.assertTrue({"bed", "chair", "table", "desk"} <= categories)
+        self.assertTrue(
+            {
+                "cabinet",
+                "wardrobe",
+                "nightstand",
+                "lamp",
+                "pillow",
+                "laptop",
+                "tv",
+                "curtain",
+            }.isdisjoint(
+                categories
+            )
+        )
+
+    def test_eight_source_multi_origin_contains_only_low_initial_furniture(self):
+        inventory = json.loads(
+            (SCENES / "Nfvxx8J5NCo" / "inventory.json").read_text()
+        )
+        plan = build_plan(
+            inventory,
+            fire_type="multi_origin",
+            intensity="severe",
+            seed=7,
+            num_ignitions=8,
+        )
+
+        self.assertEqual(len(plan["ignitions"]), 8)
+        self.assertTrue(
+            all(
+                ignition["category"] in MULTI_ORIGIN_INITIAL_CATEGORIES
+                and ignition["ignition_role"] == "initial"
+                and ignition["ignite_time_s"] == 0.0
+                and "parent_object_id" not in ignition
+                for ignition in plan["ignitions"]
+            )
+        )
+
+    def test_initial_selection_cannot_use_unlisted_category(self):
         objects = [
             {
                 "object_id": 1,
@@ -78,23 +121,10 @@ class FireTemplateSemanticTests(unittest.TestCase):
             },
         ]
         rng = np.random.default_rng(1)
-        self.assertIsNone(
-            _pick_primary(
-                objects,
-                rng,
-                preferred_cats=["tv"],
-                fallback_cats=["monitor"],
+        with self.assertRaisesRegex(RuntimeError, "only 0 eligible"):
+            _pick_explicit_initials(
+                objects, "living_room_electric", 1, rng
             )
-        )
-        secondaries = _pick_secondary(
-            objects,
-            objects[1],
-            rng,
-            radius_m=2.0,
-            n=1,
-            allowed_cats=("tv",),
-        )
-        self.assertEqual(secondaries, [])
 
     def test_generated_plan_categories_match_semantic_ids_and_template_groups(self):
         for inventory_path in sorted(SCENES.glob("*/inventory.json")):
@@ -113,7 +143,7 @@ class FireTemplateSemanticTests(unittest.TestCase):
                         seed=7,
                     )
                     allowed_groups = TEMPLATE_CATEGORY_GROUPS.get(template_name)
-                    for index, ignition in enumerate(plan["ignitions"]):
+                    for ignition in plan["ignitions"]:
                         category = ignition["category"].lower()
                         self.assertEqual(
                             semantic_by_id[ignition["object_id"]],
@@ -123,10 +153,18 @@ class FireTemplateSemanticTests(unittest.TestCase):
                             allowed = (
                                 set(allowed_groups["primary"])
                                 | set(allowed_groups["fallback"])
-                                if index == 0
-                                else set(allowed_groups["secondary"])
                             )
                             self.assertIn(category, allowed)
+                        else:
+                            self.assertIn(
+                                category,
+                                MULTI_ORIGIN_INITIAL_CATEGORIES,
+                            )
+                        self.assertEqual(
+                            ignition["ignition_role"], "initial"
+                        )
+                        self.assertEqual(ignition["ignite_time_s"], 0.0)
+                        self.assertNotIn("parent_object_id", ignition)
 
     def test_active_plan_matches_inventory_and_semantic_geometry(self):
         scene_id = "Nfvxx8J5NCo"

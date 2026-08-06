@@ -150,64 +150,121 @@ truth, which is what makes the hazard spatially consistent (C2).
 
 ## 2. Stage 2 — Planner: (fire_type, intensity, seed) → reproducible plan
 
-**Goal.** From the inventory, decide which objects ignite, when, at what
-source temperature, and with what smoke yield; and emit the propagation
-rule set. Code: `utils/fire_world/templates.py` (scenario logic) and
+**Goal.** From the inventory, select only the objects ignited at `t=0`,
+assign their source temperature and smoke yield, and emit the propagation
+rule set. Later object ignition is an output of the solver. Code:
+`utils/fire_world/templates.py` (scenario logic) and
 `utils/fire_world/planner.py` (CLI + hashing).
 
 **Deterministic identity.** A plan is content-addressed by a
 SHA1-truncated hash of its inputs (scene, fire_type, intensity, seed,
-template version), so the same inputs always yield the same `plan_id`
-and the same ignitions (C1).
+template version, ignition-selection version, and optional explicit initial
+count), so the same inputs always yield the same `plan_id` and the same
+ignitions (C1).
 
 **Template-based source selection** (`TEMPLATES` in `templates.py`). Each
-template picks a primary source by **flammability-weighted sampling**
-restricted to the relevant categories, then adds up to *N* secondary
-sources on the **same floor** using **distance- and flammability-weighted**
-sampling. Template v2 also restricts secondary sources to a declared
-scenario-specific category set. There is no arbitrary-object fallback:
-if a scene contains none of a template's exact semantic categories,
-planning fails explicitly instead of silently substituting an unrelated
-object. `TEMPLATE_CATEGORY_GROUPS` is regression-checked against all 36
-installed HM3D `semantic.txt` files and `MATERIAL_TABLE`.
+template samples one or more initial sources by flammability from its declared
+primary/fallback categories and ignites all of them at `t=0`. Template v8
+does not choose secondary objects, future ignition times, parent-child links,
+or routes. There is no arbitrary-object fallback: if a scene lacks the
+required initial semantic objects, planning fails explicitly instead of
+silently substituting an unrelated object.
+`TEMPLATE_CATEGORY_GROUPS` is regression-checked against all 36 installed
+HM3D `semantic.txt` files and `MATERIAL_TABLE`.
 
-| Template | Primary semantic categories (fallback) | Secondary policy / radius |
+| Template | Initial semantic categories (fallback) | Initial placement policy |
 | --- | --- | --- |
-| `kitchen_grease_fire` | `stove`, `stovetop`, `oven and stove`, `oven`, `cooker` (→ exact kitchen appliances/hoods) | declared kitchen appliances and nearby kitchen fuels, ≤ 3.5 m |
-| `bedroom_textile` | `bed`, `bed small`, `bedframe`, `pillow`, `blanket`, `bed sheet` (→ exact bedroom textiles/furniture) | declared bedroom textiles and nearby furniture, ≤ 4.0 m |
-| `living_room_electric` | `tv`, `led tv`, `wall tv`, `monitor`, `computer`, tower/laptop variants (→ exact AV electronics) | declared electronics and nearby living-room fuels, ≤ 3.0 m |
-| `multi_origin` | data-driven high-flammability inventory instances | two or more maximally-separated nodes on one floor |
+| `kitchen_grease_fire` | `stove`, `stovetop`, `oven and stove`, `oven`, `cooker` (→ exact kitchen appliances/hoods) | flammability-weighted exact count |
+| `bedroom_textile` | `bed`, `bed small`, `bedframe`, `pillow`, `blanket`, `bed sheet` (→ exact bedroom textiles/furniture) | flammability-weighted exact count |
+| `living_room_electric` | `tv`, `led tv`, `wall tv`, `monitor`, `computer`, tower/laptop variants (→ exact AV electronics) | flammability-weighted exact count |
+| `multi_origin` | low floor furniture: beds, sofas/seating, tables/desks, rugs/carpets and ottomans | two or more spatially distributed initial nodes on one floor |
 
 **Intensity presets** (`INTENSITIES`, three tiers):
 
-| intensity | n_ignitions (min–max) | source_temp_c | fuel_kg | duration_s |
+| intensity | initial sources (min–max) | source_temp_c | fuel_kg | duration_s |
 | --- | --- | --- | --- | --- |
 | light | 1–1 | 550 | 2 | 300 |
 | medium | 1–2 | 750 | 5 | 600 |
 | severe | 2–3 | 950 | 10 | 900 |
 
-**Plan schema (`plans/<plan_id>.json`).** Top level: `scene_id`,
+Initial-only generation is the only planner mode. When `--num_ignitions` is
+omitted, the intensity row above supplies the initial-source count. Passing
+`--num_ignitions N` overrides that range with an **exact initial-source
+count**. The plan then contains exactly N distinct entries, all with
+`ignite_time_s = 0` and `ignition_role = "initial"`. Which other furniture
+objects ignite later is decided inside `FirePropagation.step` from fuel,
+temperature, conduction and radiation.
+
+An explicit request fails instead of silently reducing the scenario when
+there are fewer than N initial candidates. `multi_origin` requires `N >= 2`.
+All plans store the resolved count as `num_initial_ignitions` plus
+`ignition_selection_mode = "initial_only"` and
+`ignition_selection_version`; an explicit override additionally stores
+`num_initial_ignitions_requested` and participates in `plan_id`.
+`TEMPLATE_VERSION = 10` gives vertically bounded plans new IDs, so their
+timelines cannot be confused with template-v9. V10 retains the enlarged
+duration-aware radial floor hazard from v9 and adds metric limits for both
+free flame columns and vertical object-BBox visual fill.
+
+**Plan schema v3 (`plans/<plan_id>.json`).** Top level: `scene_id`,
 `world_aabb`, `fire_type`, `intensity`, `seed`, `template_version`,
-`duration_s`. Each `ignitions[i]`: `object_id`, `category`, `position`,
+`duration_s`, `num_initial_ignitions`, `ignition_selection_mode`, and
+`ignition_selection_version`, plus
+optional `num_initial_ignitions_requested`. Each `ignitions[i]`:
+`object_id`, `category`, `position`,
 `ignite_time_s`, `source_radius_m`, `source_temp_c`, `fuel_kg`,
-`smoke_yield`. Plus a global `propagation_rules` block
+`smoke_yield`, and `ignition_role = "initial"`. There are no secondary,
+parent or delay fields. Plus a global
+`propagation_rules` block
 (`_default_propagation_rules`) whose defaults are:
 
 - `flammable_threshold = 0.4`, `ignition_temp_c = 200` (lowered from the
   ~350 °C literature autoignition value so the discrete grid reaches it
   via radiative pre-heating; documented inline in `templates.py`),
-- `spread_speed_m_per_s = 0.18` (light ×0.7, severe ×1.5),
+- `spread_speed_m_per_s = 0.12` (light ×0.7, severe ×1.5),
   `spread_kernel = "laplacian"`,
 - `ceiling_jet_speed_m_per_s = 0.30`, `buoyancy_v_m_per_s = 0.5`,
   `thermal_diffusivity = 0.05`, `ambient_temp_c = 25`,
-- `radiative_gain_c = 250`, `radiative_radius_cells = 4` (bridges the air
-  gap between disjoint furniture),
+- `radiative_gain_c = 200`, `radiative_radius_cells = 4` (severe gain 300;
+  enough to bridge a short furniture gap without heating an entire room),
 - `floor_thermal_attenuation = 0.20` (semi-transparent floors, NFPA 921
   §5.10 rationale), `flame_through_floors = 1`, floor-ignition and
   fuel-abundance knobs,
-- `floor_spread_speed_m_per_s = 0.015` and
-  `floor_max_spread_radius_m = 2.0`: floor flame grows from each ignition
-  source at 1.5 cm/s and cannot extend beyond 2 m from that source.
+- floor flame uses `floor_fuel_value = 0.52`, a two-cell contact radius,
+  heterogeneous seed intensity 0.10–0.58, and intensity-dependent bounded
+  envelopes: light `0.0033 m/s minimum, 1.43 m`; medium
+  `0.0044 m/s minimum, 2.20 m`; severe
+  `0.0055 m/s minimum, 2.97 m`. `floor_spread_reach_fraction = 0.90`
+  raises a source's constant effective speed only when the preset speed would
+  fail to reach that radius within 90% of its remaining simulation duration.
+- solver-driven object ignition uses a slightly wider dynamic local domain:
+  light `0.00495 m/s, 1.188 m`; medium `0.0066 m/s, 1.35 m`; severe
+  `0.00825 m/s, 1.512 m`. This domain masks reaction space but never names an
+  object ID; actual ignition still requires the object's fuel voxel to cross
+  `ignition_temp_c`.
+- after that physical ignition, a deterministic six-connected front fills
+  voxels carrying the same `object_id_field` value at light/medium/severe
+  speeds `0.006/0.008/0.010 m/s`. The dynamic domain gates first ignition;
+  after ignition the front may fill the lower part of that object's exact
+  mask, but cannot cross into a neighbouring object's Bounding Box or ignite
+  a new object outside the domain. To keep tall AABBs from carrying visible
+  flame to their top, `object_bbox_max_vertical_spread_m` limits the fill
+  above the object's lowest occupied voxel to `0.55/0.75/0.90 m` for
+  light/medium/severe. Temperature and smoke transport remain unrestricted.
+- `limit_flame_to_source_envelope = 1` clips synthetic floor and air flame
+  to those growing XZ envelopes. Fuel-supported inventory object voxels are
+  exempt, so furniture ignited by the solver remains visible outside an
+  initial envelope. Temperature and smoke remain unconstrained.
+- `max_flame_column_height_m = 0.20/0.30/0.35` for
+  light/medium/severe is a metric hard cap on the visual plume. The actual
+  number of layers is `min(flame_column_cells,
+  floor(max_flame_column_height_m / voxel_m))`, so the cap cannot be exceeded
+  at a different bake resolution. `object_flame_extra_height_cells = 0`
+  removes the former resolution-dependent extra object layer.
+- radial floor intensity follows
+  `G_r(d,t)=exp(-d²/(2·(0.58·r(t))²))` inside the bounded source radius.
+- `floor_min_visible_flame = 0.06` keeps the dim radial edge above the
+  renderer threshold; no planner-authored directional link is added.
 
 **Paper framing.** (a) deterministic hashing ⇒ full reproducibility;
 (b) templates map onto recognisable real-world fire classes;
@@ -257,42 +314,61 @@ stages are:
    box-blurred fuel neighbourhood), so a cushion-dense corner burns
    brighter than an isolated chair. Surface flame spread is a
    Laplacian (or Gaussian) operator masked by `𝟙(fuel>0 ∨ T>T_ignite)`.
-6. **Bounded floor ignition** — floor voxels can ignite by **direct flame
+6. **Continuous bounded floor ignition** — floor voxels can ignite by **direct flame
    contact** (a flame voxel within `floor_ignite_radius_cells`) or by
    **sustained heating** (`T > floor_ignite_temp_c`) only inside the union
-   of source-centred envelopes
-   `r(t) = min(floor_max_spread_radius_m, source_radius_m +
-   floor_spread_speed_m_per_s · source_age_s)`. On ignition they receive
+   of source-centred envelopes. For source `i`, let
+   `R_i = floor_max_spread_radius_m × floor_spread_scale_i` and
+   `v_i = max(v_preset,
+   (R_i-source_radius_i)/(floor_spread_reach_fraction ×
+   (duration_s-ignite_time_i)))`. The front is then
+   `r_i(t) = min(R_i, source_radius_i + v_i × source_age_i)`.
+   On ignition floor voxels receive
    synthetic fuel `floor_fuel_value` and a per-voxel randomised seed
-   flame. The default envelope grows at 0.015 m/s and stops at 2.0 m, so
-   the floor hazard evolves gradually around each source instead of
-   recursively filling the room. Floor flames outside the envelope are
-   also cleared after surface spread and flame-column projection. Smoke
-   transport is intentionally not radius-limited and can still fill the
-   room.
+   flame. The larger light/medium/severe caps are 1.43/2.20/2.97 m; a
+   constant per-source speed reaches each cap before the source's remaining
+   duration expires. The hard radius still prevents recursive room-wide
+   spread. With `limit_flame_to_source_envelope = 1`, synthetic floor/air flame
+   outside the envelope is cleared after surface spread and flame-column
+   projection. Fuel-supported object voxels inside the wider dynamic object
+   domain are exempt, so a real object heated above the ignition threshold
+   remains visibly burning. Smoke and temperature transport are intentionally
+   not radius-limited.
+   Within the radius, flame magnitude follows the radial Gaussian above, so
+   the centre stays bright while the moving edge fades smoothly. No object or
+   route is preselected as the destination of spread.
 7. **Radiative pre-heating** — flame voxels heat fuel within
    `radiative_radius_cells` by `radiative_gain_c·dt·(blurred flame)`,
-   bridging air gaps so a kitchen fire can reach a chair ~0.6 m away in
-   ~30 s.
+   bridging short air gaps while keeping pre-heating local.
 8. **Decay + cooling** — flame relaxes once fuel is exhausted; smoke
    decays first-order at `smoke_decay_per_s` (default ≈ 860 s half-life);
    temperature relaxes exponentially toward ambient.
 9. **Sustained sources** — each unexpired ignition pins its spherical
    neighbourhood to `≥ ambient + (T_src − ambient)·falloff` and injects
    smoke at a rate proportional to its `smoke_yield`. With
-   `inextinguishable_sources = 1` (default) sources never expire, so a
-   single ignition can drive a room-filling fire over the episode.
+   `inextinguishable_sources = 1` (default) sources never expire. The visible
+   fire stays local because of the source envelope, while the resulting smoke
+   and temperature field may still affect the wider room.
 
-A rendering-only **flame-column** cue extends each active flame voxel
-upward by up to `flame_column_cells` with linear decay
-(`flame_column_decay`); these upper voxels do not consume fuel.
+A visualization-oriented **flame-column** cue has both a legacy cell-count
+upper bound (two cells for light, three for medium/severe) and the v10 metric
+caps `0.20/0.30/0.35 m`, with geometric decay of 0.45–0.55. At the default
+0.15 m resolution this yields one/two/two vertical layers
+(`0.15/0.30/0.30 m`). Unsupported column voxels are cleared before the next
+physical solver step, so columns cannot stack toward the ceiling or amplify
+radiation; they are regenerated from the current burning surface for each
+saved frame. After projection, buoyancy-transported visible flame above the
+same effective limit is clipped as well; heat and smoke are not
+height-clipped.
 
 **Output.** `timeline.npz` holds `flame / smoke / temp` as compressed
 fp16 volumes plus `times` (fp32 seconds) and a `meta_json` unicode array;
 a sibling `timeline_meta.json` sidecar carries the same metadata so the
 loader can bypass numpy's pickle path across version boundaries. Default
 propagation grid is `voxel_m = 0.15` (coarser than the 0.10 m inventory
-grid, for speed).
+grid, for speed). Metadata records both configured and effective flame-column
+height as well as the object-BBox vertical limit, so baked assets remain
+auditable.
 
 **Paper framing.** Cite NIST FDS / OpenFOAM as the full-physics
 reference and position this solver as the deliberately-simplified
@@ -357,11 +433,16 @@ own smoke degradation from the shared `cfg.smoke` parameters.
 ### 5.1 Volumetric RGB — `VoxelSmokeSensor` / `voxel_render.py`
 
 Per-pixel front-to-back emission–absorption ray-march. Each ray carries
-**two** transmittance accumulators so flame radiance survives dense smoke:
+**two** transmittance accumulators so flame radiance survives dense smoke,
+plus separate smoke-scatter and flame-radiance buffers:
 
-- **Scene channel** `T_scene = ∏ exp(−(σ_smoke + σ_flame)·ds)`, used for
-  the clean scene RGB and smoke scatter, with
+- **Scene channel** `T_scene = ∏ exp(−(σ_smoke,visible + σ_flame)·ds)`,
+  used for the clean scene RGB and smoke scatter, with
   `σ_smoke = k_ext · smoke_voxel` (`smoke_k_ext`, default 4.0 /m).
+- **Flame-local smoke displacement.** A strong flame removes up to `0.52`
+  of the co-located smoke extinction and grey scatter. This models hot
+  combustion gas displacing cooler soot and prevents orange flame structure
+  from being flattened into one grey-white fog bank.
 - **Flame channel** `T_flame = ∏ exp(−((1−p)·σ_smoke + σ_flame)·ds)`,
   where `p = flame_smoke_passthrough` (default 0.95) is the fraction of
   smoke extinction that flame self-emission ignores — consistent with
@@ -369,12 +450,24 @@ Per-pixel front-to-back emission–absorption ray-march. Each ray carries
   [Starr & Lattimer, 2014, Fig. 7].
 
 Flame emission is coloured by a multi-stop LUT (deep red → orange →
-yellow → near-white core) indexed by voxel flame intensity;
+yellow → chromatic yellow-white core) indexed by voxel flame intensity;
 `flame_threshold = 0.04` lets trilinearly-interpolated edge voxels
-participate, and `flame_emission_gain = 8` keeps flame visible in dense
-smoke. Optional procedural flicker/wisp noise
-(`flame_noise_strength`, …) is **pure visualisation eye-candy** and is
-disabled by default under `--fire_fast 1` for navigation-speed rendering.
+participate. The default `flame_emission_gain = 3.2`,
+`flame_k_ext = 0.50`, and peak-preserving highlight compression keep long
+rays through a burning furniture Bounding Box below display-white without
+discarding their red/orange colour ratios. A bounded `0.13` clean-surface
+reveal then retains upholstery, wood grain and object edges behind the
+translucent emissive volume.
+
+High-quality mode combines 3-D turbulence with a surface-anchored noise
+sample. The latter is shared along each ray, so flame bands and broken
+edges survive integration instead of averaging back into a smooth blob.
+The defaults are `flame_noise_strength = 0.75`,
+`flame_edge_break = 1.05`, `flame_color_jitter = 0.32`, and a reduced
+`flame_glow_gain = 0.18`. This detail is visualisation-only and does not
+change flame voxels, temperature, thermal masks or risk maps. It remains
+disabled under `--fire_fast 1`; use `--fire_fast 0` for teleoperation and
+qualitative figures.
 
 ### 5.2 Smoke-degraded depth — `SmokeDepthSensor`
 
@@ -394,7 +487,12 @@ point cloud. In `mode="learned"` (default) it bypasses the raw heatmap
 and emits a LiDAR-like 3D cloud with `learned_noise_m = 0.10` Gaussian
 noise and 4× stride subsampling, tuned to roughly match RadarHD's
 reported post-training median Hausdorff error. mmWave is treated as
-nearly smoke-invariant.
+nearly smoke-invariant. All shared navigation/teleoperation previews
+carry physical axes: the BEV uses lateral `Y [m]` horizontally and
+forward `X [m]` vertically, while the range–azimuth and range–elevation
+plots use angle `[deg]` horizontally and range `[m]` vertically. These
+axes decorate only the preview images; the raw heatmap and point-cloud
+arrays consumed by navigation are unchanged.
 
 ### 5.4 360° LiDAR — `LidarSensor` / `lidar_360.py`
 
@@ -494,16 +592,16 @@ ceiling instances are stamped as thin slabs rather than full-height AABBs.
 A *plan* selects ignitions and propagation rules from the inventory under
 a `(fire_type, intensity, seed)` triple. We expose four template
 generators (kitchen-grease, bedroom-textile, living-room-electric,
-multi-origin) that choose a primary ignition by flammability-weighted
-sampling within the relevant categories, then add up to *N* secondaries
-on the same floor by distance- and flammability-weighted sampling. Three
-intensity presets (light / medium / severe) set the primary source
+multi-origin) that select only the initial ignition objects at `t=0`.
+Single-type templates use flammability-weighted sampling within their
+declared categories; multi-origin uses spatially distributed low furniture
+on one floor. Three intensity presets (light / medium / severe) set the source
 temperature (550 / 750 / 950 °C), the per-ignition fuel mass
 (2 / 5 / 10 kg), and the simulated duration (300 / 600 / 900 s). The
-output `plan.json` records each ignition's world position, source radius,
-source temperature, ignition delay, and smoke yield, together with the
-global propagation rule set. Each plan is content-addressed by a
-SHA1-truncated hash of its inputs.
+output `plan.json` records each initial object's world position, source
+radius, source temperature and smoke yield together with the global
+propagation rule set. Later object ignition is an emergent solver result, not
+a plan entry. Each plan is content-addressed by a SHA1-truncated hash.
 
 ### 7.4 Voxel propagation
 
@@ -629,23 +727,99 @@ python -m utils.fire_world.scene_scan --scene Nfvxx8J5NCo
 # 2) Auto-generate a plan (or hand-write plans/<id>.json)
 python -m utils.fire_world.planner \
     --scene Nfvxx8J5NCo \
-    --fire_type bedroom_textile --intensity severe --seed 7
+    --fire_type multi_origin --intensity medium --seed 7 \
+    --num_ignitions 4
 
-# 3) Run propagation (use the same conda env as navigation)
+# N means exactly four initial sources at t=0. The planner does not select
+# any later object; propagation decides that from the voxel heat/fuel fields.
+# The planner prints the new count-specific plan_id. Inspect without writing:
+python -m utils.fire_world.planner \
+    --scene Nfvxx8J5NCo \
+    --fire_type multi_origin --intensity medium --seed 7 \
+    --num_ignitions 4 --print_only
+
+# 3) Run propagation with the plan_id printed by step 2
+# (6df964ec1f4c for the exact template-v8 inputs above)
 python -m utils.fire_world.propagation \
-    --scene Nfvxx8J5NCo --plan_id 83679a07b632 \
+    --scene Nfvxx8J5NCo --plan_id 6df964ec1f4c \
     --voxel_m 0.15
 
 # 4) Automated evaluation (wallclock clock, real-time fire)
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id 6df964ec1f4c \
     --fire_clock_mode wallclock --fire_speedup 1.0 \
     --depth_use_clean 1
 
 # 4') Or drive manually to inspect the field (step clock for reproducibility)
 python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
-    --scene-id Nfvxx8J5NCo --plan-id 83679a07b632 \
+    --scene-id Nfvxx8J5NCo --plan-id 6df964ec1f4c \
     --clock-mode step --steps-per-unit 1 --seconds-per-unit 5.0 \
     --depth_use_clean 1 --show-dashboard 1
 ```
+
+## Appendix C — Preparing complete FireWorld asset matrices
+
+`scripts/prepare_fire_world_scene.py` runs scene scan, deterministic planning,
+propagation, timeline validation and checksumming as one resumable command.
+By default it prepares all four templates at all three intensities:
+
+```bash
+python scripts/prepare_fire_world_scene.py \
+    --scene Nfvxx8J5NCo \
+    --fire-types all --intensities all --seeds 42
+```
+
+Use comma-separated selectors to prepare a subset. `--dry-run` performs
+semantic planning and size estimation without writing; the default resume
+mode validates an existing timeline header, times and metadata before
+skipping it. `--force` explicitly rebakes valid assets.
+
+The dataset coordinator uses the same runner and canonical runtime paths:
+
+```bash
+# Read-only task and storage preflight
+python scripts/prepare_fire_world_dataset.py \
+    --dataset-root data/scene_datasets/hm3d_v0.2 --splits val \
+    --fire-types all --intensities all --seeds 42 \
+    --jobs 1 --dry-run
+
+# Production run; automatically resumes validated assets
+python scripts/prepare_fire_world_dataset.py \
+    --dataset-root data/scene_datasets/hm3d_v0.2 --splits val \
+    --fire-types all --intensities all --seeds 42 \
+    --jobs 2
+```
+
+Only folders containing matching `basis.glb`, `semantic.glb` and
+`semantic.txt` files are executable. Incomplete dataset folders and
+template/category shortages are recorded as explicit skip statuses rather
+than silently substituted. Before propagation, the coordinator computes an
+uncompressed upper bound for every missing timeline, checks free disk, and
+caps requested workers using the largest estimated process memory.
+
+Canonical assets remain:
+
+```text
+scenes/<scene>/inventory.json
+scenes/<scene>/structural/{walls,floors,ceilings}.npy
+scenes/<scene>/plans/<plan_id>.json
+outputs/fire_world/<scene>/<plan_id>/timeline.npz
+outputs/fire_world/<scene>/<plan_id>/timeline_meta.json
+```
+
+Operational records are stored separately:
+
+```text
+outputs/fire_world/<scene>/asset_index.json
+outputs/fire_world/runs/<run_id>/run_config.json
+outputs/fire_world/runs/<run_id>/preflight.json
+outputs/fire_world/runs/<run_id>/resource_plan.json
+outputs/fire_world/runs/<run_id>/manifest.jsonl
+outputs/fire_world/runs/<run_id>/summary.json
+outputs/fire_world/runs/<run_id>/logs/<scene>/<scenario>.log
+```
+
+New timelines are baked under `outputs/fire_world/.staging/`, validated, and
+then atomically installed. A replaced directory is retained under
+`.replaced/`; lock files under `.locks/` prevent duplicate concurrent work.

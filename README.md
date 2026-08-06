@@ -131,6 +131,7 @@ git -C "$HABITAT_LAB_ROOT" apply \
     "$PROJECT_ROOT/ref/habitat_lab_0.3.3_vulcan.patch"
 
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-lab"
+python -m pip install -e "$HABITAT_LAB_ROOT/habitat-baselines"
 ```
 
 Verify that Python imports the intended checkout and that the patch is present:
@@ -151,6 +152,25 @@ PY
 
 Do not install a second Habitat-Lab package after this step; otherwise Python
 may silently import the wrong checkout.
+
+The editable `habitat-baselines` install enables the official pretrained
+PointNav DD-PPO baseline selected by `--local_planner pointnav`. Download its
+default checkpoint with:
+
+```bash
+mkdir -p "$PROJECT_ROOT/data/ddppo-models"
+wget --continue \
+  https://dl.fbaipublicfiles.com/habitat/data/baselines/v1/ddppo/ddppo-models/gibson-2plus-resnet50.pth \
+  -P "$PROJECT_ROOT/data/ddppo-models"
+sha256sum \
+  "$PROJECT_ROOT/data/ddppo-models/gibson-2plus-resnet50.pth"
+```
+
+Expected SHA-256:
+
+```text
+a6a600277efacf5fd98e293267221185d843eb3012aeff62fabfeee24c2bcdad
+```
 
 ## 4. Detection model assets
 
@@ -278,7 +298,9 @@ important experiment controls are:
 --task_config
 --num_agents
 --num_humans
---nav_mode {nearest,co_ut,fill,gpt}
+--nav_mode {nearest,co_ut,fill,random,gpt}
+--cost_utility_lambda 1.0
+--random_goal_min_distance_m 1.0
 --fire_world
 --fire_world_plan_id
 --fire_clock_mode {step,wallclock}
@@ -369,6 +391,30 @@ python main_vec.py \
 `main_vec.py` supports FireWorld rendering but intentionally refuses
 `--risk_enabled=1`. Use `main.py` for synchronized risk maps and exposure
 evaluation.
+
+### 8.4 Normal/person planner benchmark launcher
+
+The resumable launcher evaluates the same 200-episode budget on native
+ObjectNav and static-person ObjectNav. Its default controlled matrix compares
+all global planners with FMM fixed and all benchmark-ready local planners
+with `co_ut` fixed:
+
+```bash
+/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+    scripts/run_baseline_benchmarks.py --episodes 200 --dry-run
+
+export OPENAI_API_KEY="<YOUR_KEY>"
+/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+    scripts/run_baseline_benchmarks.py \
+    --episodes 200 --study-id normal_primary_200ep
+```
+
+Use `--global-planners nearest co_ut fill random` for the offline rows without
+OpenAI, or `--matrix cartesian` for every selected global/local pair. `random`
+is deterministically keyed by the experiment seed, episode, and replan step.
+Outputs, commands, status, aggregate metrics, and completeness reports are isolated
+under `outputs/benchmarks/<study_id>/`. Full options and resume semantics are
+documented in [docs/main_usage.md](docs/main_usage.md).
 
 ## 9. Reproducing FireWorld
 
@@ -614,6 +660,8 @@ python scripts/keyboard_teleop_full.py \
     --scene-id Nfvxx8J5NCo \
     --plan-id 83679a07b632 \
     --clock-mode wallclock \
+    --lidar-360 1 --lidar-resolution 320 \
+    --snapshot-dir outputs/teleop_sensor_snapshots \
     --show-dashboard 1
 ```
 
@@ -626,8 +674,18 @@ S or Space  stop
 R           reset
 Tab, 1..N   switch active robot in keyboard_teleop_full.py
 P           pause/resume wall-clock fire
+V           save all sensor panels and the dashboard
+Mouse       click SAVE SENSOR PANELS in the dashboard header
 Esc         quit
 ```
+
+`keyboard_teleop_full.py` enables true 360-degree LiDAR by default. It
+installs four 90-degree depth slices (front/left/back/right) before Habitat
+constructs the environment; use `--lidar-360 0` only for a forward-depth
+compatibility run. A manual snapshot is stored under
+`--snapshot-dir/<scene>/agent_<id>/step_<step>_<timestamp>/` and contains
+clean/smoke RGB-D, thermal, LiDAR BEV, radar BEV/range-azimuth/
+range-elevation, the dashboard, and `manifest.json`.
 
 ## 14. Script inventory
 
@@ -703,8 +761,8 @@ not provide the exact classic multi-agent `Sim-v0` contract used here.
 
 ### `OPENAI_API_KEY` is missing
 
-Use `--nav_mode nearest`, `co_ut`, or `fill` for an offline run, or export the
-key before `--nav_mode gpt`.
+Use `--nav_mode nearest`, `co_ut`, `fill`, or `random` for an offline run, or
+export the key before `--nav_mode gpt`.
 
 ### Model files download at runtime
 

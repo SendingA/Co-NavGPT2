@@ -3,8 +3,8 @@
 Exercises:
   * deterministic plan_id under fixed inputs
   * all four templates produce non-empty plans on the val_mini fixture
-  * same-floor constraint: secondary ignitions stay within +/-1.5 m of
-    the primary's Y coordinate
+  * every plan contains initial t=0 objects only
+  * multi-origin initial objects remain on one floor
 
 Run with::
 
@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
@@ -60,16 +61,19 @@ def test_all_templates() -> None:
         for intensity in INTENSITIES:
             plan = build_plan(inv, name, intensity, seed=11)
             assert plan["ignitions"], f"empty ignitions for {name}/{intensity}"
+            assert len(plan["ignitions"]) == plan["num_initial_ignitions"]
             for ig in plan["ignitions"]:
                 assert ig["source_temp_c"] > 0
                 assert ig["source_radius_m"] > 0
                 assert ig["fuel_kg"] > 0
-                assert ig["ignite_time_s"] >= 0
+                assert ig["ignite_time_s"] == 0
+                assert ig["ignition_role"] == "initial"
+                assert "parent_object_id" not in ig
             print(f"  {name}/{intensity}: {len(plan['ignitions'])} ignitions")
     print("all templates: OK")
 
 
-def test_same_floor_constraint() -> None:
+def test_initial_only_constraint() -> None:
     inv = load_inventory(SCENE, SCENES_ROOT)
     for name, intensity, seed in [
         ("kitchen_grease_fire", "medium", 42),
@@ -78,30 +82,48 @@ def test_same_floor_constraint() -> None:
         ("multi_origin", "severe", 0),
     ]:
         plan = build_plan(inv, name, intensity, seed)
-        ys = [ig["position"][1] for ig in plan["ignitions"]]
-        if len(ys) > 1:
-            spread = max(ys) - min(ys)
+        initials = plan["ignitions"]
+        assert len(initials) == plan["num_initial_ignitions"]
+        assert all(ig["ignition_role"] == "initial" for ig in initials)
+        assert all(ig["ignite_time_s"] == 0.0 for ig in initials)
+        assert all("parent_object_id" not in ig for ig in initials)
+
+        if name == "multi_origin":
+            initial_ys = [
+                ignition["position"][1] for ignition in initials
+            ]
+            spread = max(initial_ys) - min(initial_ys)
             assert spread <= 1.5 + 1e-3, (
-                f"ignitions span {spread:.2f} m vertically "
-                f"({name}/{intensity}/seed={seed})"
+                f"multi_origin initial sources span {spread:.2f} m "
+                "vertically"
             )
-            print(f"  {name}/{intensity} seed={seed} y-spread={spread:.2f} m")
-    print("same-floor constraint: OK")
+        print(
+            f"  {name}/{intensity} seed={seed} "
+            f"initials={len(initials)} initial-only=OK"
+        )
+    print("initial-only planner constraints: OK")
 
 
 def test_write_and_reread() -> None:
     inv = load_inventory(SCENE, SCENES_ROOT)
-    out = write_plan(inv, "kitchen_grease_fire", "medium", 42, plans_root=SCENES_ROOT)
-    plan = json.loads(out.read_text())
+    with TemporaryDirectory() as temp_dir:
+        out = write_plan(
+            inv,
+            "kitchen_grease_fire",
+            "medium",
+            42,
+            plans_root=Path(temp_dir),
+        )
+        plan = json.loads(out.read_text())
     assert plan["plan_id"] == plan_id_for(SCENE, "kitchen_grease_fire", "medium", 42)
-    print(f"write_plan: OK -> {out}")
+    print(f"write_plan temporary round-trip: OK -> {out.name}")
 
 
 def main() -> int:
     test_deterministic_plan_id()
     test_plan_id_in_payload()
     test_all_templates()
-    test_same_floor_constraint()
+    test_initial_only_constraint()
     test_write_and_reread()
     print("ALL OK")
     return 0

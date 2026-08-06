@@ -47,6 +47,33 @@ def get_args() -> argparse.Namespace:
                              "map; opens an Open3D GUI in main.py")
     parser.add_argument("--print_images", type=int, default=0,
                         help="1: persist visualization frames to disk")
+    parser.add_argument(
+        "--max_episodes",
+        type=int,
+        default=0,
+        help=(
+            "maximum dataset episodes evaluated by main.py; 0 keeps the "
+            "current all-episodes behavior"
+        ),
+    )
+    parser.add_argument(
+        "--start_episode",
+        type=int,
+        default=1,
+        help=(
+            "one-based first dataset episode to evaluate; values above 1 "
+            "require --resume_metrics_path"
+        ),
+    )
+    parser.add_argument(
+        "--resume_metrics_path",
+        type=str,
+        default=None,
+        help=(
+            "exact resume_state.json or legacy aggregate.json used to seed "
+            "cumulative metrics when --start_episode is above 1"
+        ),
+    )
 
     # ------------------------------------------------------------------
     # Camera + scene config
@@ -131,19 +158,40 @@ def get_args() -> argparse.Namespace:
     # Global planner
     # ------------------------------------------------------------------
     parser.add_argument("--nav_mode", type=str, default="gpt",
-                        choices=["nearest", "co_ut", "fill", "gpt"],
+                        choices=["nearest", "co_ut", "fill", "random", "gpt"],
                         help="global frontier policy. nearest=closest, "
-                             "co_ut=cooperative assignment, fill=highest "
-                             "frontier score, gpt=GPT-4o decision.")
+                             "co_ut=frontier size minus lambda times robot "
+                             "distance, fill=highest frontier score, "
+                             "random=reproducible random long-term map goal, "
+                             "gpt=GPT-4o decision.")
+    parser.add_argument(
+        "--cost_utility_lambda",
+        type=float,
+        default=1.0,
+        help=(
+            "distance coefficient in co_ut: frontier_size - lambda * "
+            "robot_distance (distance is measured in map cells)"
+        ),
+    )
+    parser.add_argument(
+        "--random_goal_min_distance_m",
+        type=float,
+        default=1.0,
+        help=(
+            "preferred minimum robot-to-goal distance for nav_mode=random; "
+            "sampling falls back to any reachable free cell when needed"
+        ),
+    )
     parser.add_argument(
         "--local_planner",
         type=str,
         default="fmm",
-        choices=["fmm", "astar", "rl"],
+        choices=["fmm", "astar", "rl", "pointnav"],
         help=(
             "local navigation baseline. fmm preserves the current "
             "navmesh-first/FMM-fallback implementation exactly; astar and rl "
-            "select the added grid-planner backends"
+            "select grid-planner backends; pointnav runs a pretrained "
+            "Habitat PointNav policy through the frontier-goal adapter"
         ),
     )
     parser.add_argument(
@@ -175,6 +223,58 @@ def get_args() -> argparse.Namespace:
         type=int,
         default=5,
         help="learned grid moves rolled out to form one short-term goal",
+    )
+    parser.add_argument(
+        "--pointnav_checkpoint",
+        type=str,
+        default="data/ddppo-models/gibson-2plus-resnet50.pth",
+        help=(
+            "Habitat pretrained PointNav weights (default: official "
+            "Gibson 2+ depth ResNet50 DD-PPO model)"
+        ),
+    )
+    parser.add_argument(
+        "--pointnav_config",
+        type=str,
+        default=None,
+        help=(
+            "exact Habitat-Baselines training config; omitted for known "
+            "official DD-PPO models, which use packaged ddppo_pointnav.yaml"
+        ),
+    )
+    parser.add_argument(
+        "--pointnav_observation_mode",
+        type=str,
+        default="auto",
+        choices=["auto", "depth", "rgb", "rgbd", "blind"],
+        help=(
+            "checkpoint visual schema; auto recognizes Habitat official "
+            "model filenames or uses an embedded checkpoint config"
+        ),
+    )
+    parser.add_argument(
+        "--pointnav_device",
+        type=str,
+        default="cpu",
+        help="PyTorch device for pretrained PointNav inference",
+    )
+    parser.add_argument(
+        "--pointnav_deterministic",
+        type=int,
+        default=0,
+        help=(
+            "0 samples actions as in Habitat's published DD-PPO evaluation; "
+            "1 uses the modal action"
+        ),
+    )
+    parser.add_argument(
+        "--pointnav_goal_tolerance",
+        type=float,
+        default=0.05,
+        help=(
+            "metres: world-goal change above this value resets that robot's "
+            "PointNav recurrent state"
+        ),
     )
     parser.add_argument("--fill_mode", type=int, default=0,
                         help="1: when an agent revisits the same frontier, "
@@ -239,7 +339,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--fire_flame_noise", type=float, default=None,
                         help="Override flame procedural-noise strength "
                              "[0..1.5]. None = decided by --fire_fast "
-                             "(0 when fast, 0.55 otherwise).")
+                             "(0 when fast, 0.75 otherwise).")
     parser.add_argument(
         "--fire_render_backend",
         type=str,
@@ -382,6 +482,16 @@ def load_config(args: argparse.Namespace):
       knobs so envs/random_humanoid.py + envs/robot_models.py can pull
       everything from a single object.
     """
+    pointnav_spec = None
+    if str(getattr(args, "local_planner", "fmm")).lower() == "pointnav":
+        from utils.local_planners.pointnav import load_pointnav_runtime_spec
+
+        pointnav_spec = load_pointnav_runtime_spec(
+            getattr(args, "pointnav_checkpoint", None),
+            getattr(args, "pointnav_config", None),
+            getattr(args, "pointnav_observation_mode", "auto"),
+        )
+
     overrides: List[str] = [
         f"habitat.simulator.habitat_sim_v0.gpu_device_id={args.gpu_id}",
     ]
@@ -409,6 +519,12 @@ def load_config(args: argparse.Namespace):
         config.habitat.seed = args.seed
         _apply_camera_geometry(config, args)
         _set_num_robot_agents(config, args.num_agents)
+        if pointnav_spec is not None:
+            from utils.local_planners.pointnav import (
+                apply_pointnav_simulator_schema,
+            )
+
+            apply_pointnav_simulator_schema(config, args, pointnav_spec)
 
         _apply_conav_overrides(config, args)
         _resolve_conav_paths(config)
@@ -438,7 +554,7 @@ def voxel_smoke_kwargs(args) -> dict:
     else:
         n_steps = int(args.fire_world_n_steps)
         render_scale = float(args.fire_world_render_scale)
-        default_noise = 0.55
+        default_noise = 0.75
 
     noise = getattr(args, "fire_flame_noise", None)
     noise = default_noise if noise is None else float(noise)
@@ -448,9 +564,9 @@ def voxel_smoke_kwargs(args) -> dict:
         flame_noise = edge_break = color_jitter = smoke_noise = 0.0
     else:
         flame_noise = noise
-        edge_break = 0.8 * (noise / 0.55)
-        color_jitter = 0.25 * (noise / 0.55)
-        smoke_noise = 0.30 * (noise / 0.55)
+        edge_break = 1.05 * (noise / 0.75)
+        color_jitter = 0.32 * (noise / 0.75)
+        smoke_noise = 0.24 * (noise / 0.75)
 
     return {
         "n_steps": n_steps,

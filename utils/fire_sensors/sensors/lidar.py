@@ -66,7 +66,7 @@ class LidarSensor(BaseSensor):
         obs: Optional[Dict[str, np.ndarray]],
     ) -> np.ndarray:
         """Return the *clean* point cloud before noise/dropout."""
-        if obs is not None and any(u in obs for u in LIDAR_DEPTH_UUIDS):
+        if obs is not None and all(u in obs for u in LIDAR_DEPTH_UUIDS):
             cloud = stitch_lidar_360(
                 obs,
                 max_range_m=self.cfg.lidar.max_range_m,
@@ -98,7 +98,10 @@ class LidarSensor(BaseSensor):
         density = float(np.clip(s_cfg.smoke_density, 0.0, 1.0))
 
         pts = self._acquire_points(depth_m, obs)
-        is_360 = obs is not None and any(u in obs for u in LIDAR_DEPTH_UUIDS)
+        is_360 = (
+            obs is not None
+            and all(u in obs for u in LIDAR_DEPTH_UUIDS)
+        )
 
         if pts.size > 0:
             # 1) range-dependent Gaussian noise

@@ -3,7 +3,7 @@
 The formal local-planner selector is:
 
 ```text
---local_planner fmm | astar | rl
+--local_planner fmm | astar | rl | pointnav
 ```
 
 `fmm` is the default and deliberately preserves the repository's existing
@@ -12,10 +12,16 @@ navmesh for a shortest path and falls back to grid FMM when the navmesh path is
 unavailable. In risk-aware mode it goes directly to risk-aware grid FMM. This
 historical hybrid remains labelled `fmm` for continuity with existing runs.
 
-`astar` and `rl` are explicit new backends. They never invoke Habitat's
+`astar` and `rl` are explicit grid backends. They never invoke Habitat's
 navmesh. Both consume the same inflated occupancy grid, visited/collision
 state, dilated goal and shared low-level turn/forward controller used by the
 existing FMM fallback.
+
+`pointnav` is a separate, agent-scoped backend for Habitat's official
+pretrained PointNav DD-PPO policy. It consumes a dedicated checkpoint-shaped
+depth/RGB policy sensor and a frontier-relative point goal, maintains recurrent
+policy state, and emits Habitat actions directly. It is not an alias for the
+map-based `rl` backend.
 
 ## Automatic local risk awareness
 
@@ -42,10 +48,12 @@ python main.py --local_planner astar \
     --fire_clock_mode step --risk_enabled 1 --risk_source none
 ```
 
-The same rule applies to `fmm` and `rl`. Risk availability changes the entire
-navigation stack consistently: a sensed/oracle map is available to the global
-frontier logic and the selected local planner, while `source=none` hides it
-from both.
+The same rule applies to `fmm`, `rl`, and `pointnav`. Risk availability changes
+the entire navigation stack consistently: a sensed/oracle map is available to
+the global frontier logic and the selected local planner, while `source=none`
+hides it from both. The frozen PointNav network remains risk-blind; its aware
+form adds the common risk-aware frontier selection plus a one-step hard-hazard
+action shield outside the policy.
 
 ## A* definition
 
@@ -129,6 +137,96 @@ Do not report a smoke-trained policy as a benchmark baseline. A reported RL
 result needs a converged, frozen checkpoint, fixed seed/config, and training
 data that do not include validation/test scenes.
 
+## Habitat PointNav DD-PPO
+
+Install `habitat-baselines` from the same Habitat-Lab 0.3.3 checkout used by
+the project:
+
+```bash
+python -m pip install -e "$HABITAT_LAB_ROOT/habitat-baselines"
+```
+
+Download the official Gibson 2+ depth ResNet50 + LSTM512 checkpoint:
+
+```bash
+mkdir -p data/ddppo-models
+wget --continue \
+  https://dl.fbaipublicfiles.com/habitat/data/baselines/v1/ddppo/ddppo-models/gibson-2plus-resnet50.pth \
+  -P data/ddppo-models
+sha256sum data/ddppo-models/gibson-2plus-resnet50.pth
+```
+
+The validated official file is 49,853,716 bytes and has SHA-256:
+
+```text
+a6a600277efacf5fd98e293267221185d843eb3012aeff62fabfeee24c2bcdad
+```
+
+Run the baseline with:
+
+```bash
+python main.py \
+    --local_planner pointnav \
+    --pointnav_checkpoint data/ddppo-models/gibson-2plus-resnet50.pth \
+    --pointnav_device cuda:0
+```
+
+The official `.pth` contains weights but no embedded training config. The
+adapter recognizes Habitat's published checkpoint filenames, loads the
+matching packaged `ddppo_pointnav.yaml`, and strictly loads the state dict.
+The default checkpoint contract is:
+
+```text
+training data     Gibson 2+
+policy            PointNavResNetPolicy, ResNet50 + 2-layer LSTM512
+visual input      normalized depth, 256 x 256 x 1, float32 in [0, 1]
+goal input        pointgoal_with_gps_compass, polar [distance, angle]
+policy camera     256 x 256, HFOV 90 degrees
+actions           STOP, MOVE_FORWARD, TURN_LEFT, TURN_RIGHT
+motion            0.25 m forward, 10 degree turn
+```
+
+The policy camera is separate from the project's mapping camera. The default
+ObjectNav RGB-D stream remains `640 x 480, HFOV 79` for point-cloud mapping,
+detection, VLM input, FireWorld perception and dashboards. A second
+`pointnav_depth` sensor renders the checkpoint-exact `256 x 256, HFOV 90`
+observation directly; it is not cropped or resized from the mapping image.
+RGB checkpoints similarly receive `pointnav_rgb`, and RGB-D checkpoints
+receive aligned policy-only RGB and depth sensors. If a different checkpoint
+has an embedded config, that config drives its policy sensors. For an
+unrecognized weights-only checkpoint, pass both `--pointnav_config` and
+`--pointnav_observation_mode`; schema or weight mismatches fail instead of
+silently falling back.
+
+Each robot has independent LSTM hidden state, previous action, mask, and local
+frontier state. A changed frontier resets only that robot. PointNav `STOP`
+means that the local frontier was reached: it is intercepted, its local state
+is cleared, and global frontier replanning is requested. It is never sent to
+the ObjectNav environment. Only the existing detected-object completion path
+may issue the task-level STOP.
+
+`--pointnav_deterministic 0` samples actions, matching Habitat's published
+evaluation procedure. Set it to `1` for modal actions in deterministic
+engineering runs and record the choice with benchmark artifacts.
+
+For fire experiments:
+
+```bash
+# Frozen PointNav plus risk-aware frontier assignment and hard-hazard shield
+python main.py --local_planner pointnav \
+    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --risk_enabled 1 --risk_source sensed
+
+# Frozen PointNav without access to planning risk; evaluator remains active
+python main.py --local_planner pointnav \
+    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --risk_enabled 1 --risk_source none
+```
+
+Report the first as `pointnav-ddppo+shield`, not as a risk-conditioned neural
+policy. The shield never emits STOP and never adds a hazard channel to the
+checkpoint observation.
+
 ## Fair benchmark matrix
 
 Hold the dataset episodes, seeds, FireWorld plans, global `nav_mode`, risk
@@ -142,6 +240,8 @@ astar x aware
 astar x blind
 rl    x aware
 rl    x blind
+pointnav-ddppo+shield x aware
+pointnav-ddppo        x blind
 ```
 
 The primary metrics remain Habitat Success, Habitat SPL, SafeSuccess and CHE.

@@ -1,5 +1,4 @@
 import numpy as np
-import ast
 import time
 import requests
 import json
@@ -8,11 +7,13 @@ import base64
 import openai
 from openai import OpenAI
 from io import BytesIO
-import ast
+from pathlib import Path
+import threading
 import cv2
 from dataclasses import asdict, is_dataclass
 
 import utils.visualization as vu
+from utils.global_planners.errors import GPTResponseError
 import os
 
 def _get_openai_client():
@@ -242,57 +243,282 @@ def risk_message_prepare(
     ]
 
 
-def chat_with_gpt4v(chat_history, gpt_type = args.gpt_type):
-    num_frontier = len(chat_history[1]['content'])-1
-    retries = 5    
-    while retries > 0:  
-        try: 
+GPT_MODEL = "gpt-4o"
+GPT_MAX_ATTEMPTS = 5
+GPT_MAX_COMPLETION_TOKENS = 300
+_GPT_RESPONSE_STATUS_LOCK = threading.Lock()
+
+
+def _frontier_assignment_response_format(num_agents, num_frontiers):
+    """Build the strict schema for this exact robot/frontier request."""
+    if int(num_agents) < 1:
+        raise ValueError("num_agents must be at least 1")
+    if int(num_frontiers) < 1:
+        raise ValueError("num_frontiers must be at least 1")
+
+    frontier_values = [
+        f"frontier_{frontier_id}"
+        for frontier_id in range(int(num_frontiers))
+    ]
+    properties = {
+        f"robot_{robot_id}": {
+            "type": "string",
+            "enum": frontier_values,
+        }
+        for robot_id in range(int(num_agents))
+    }
+    properties["reason"] = {"type": "string"}
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "frontier_assignment",
+            "strict": True,
+            "schema": {
+                "type": "object",
+                "properties": properties,
+                "required": list(properties),
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _jsonable_response_value(value):
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    if isinstance(value, dict):
+        return {
+            str(key): _jsonable_response_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [_jsonable_response_value(item) for item in value]
+    return str(value)
+
+
+def _emit_gpt_response_status(payload):
+    """Append one credential-free JSONL record without polluting stdout."""
+    rank = int(getattr(args, "rank", 0))
+    rank_suffix = "" if rank == 0 else f"_rank{rank}"
+    status_path = (
+        Path(args.dump_location)
+        / "logs"
+        / "gpt"
+        / f"gpt_response_status{rank_suffix}.jsonl"
+    )
+    record = dict(_jsonable_response_value(payload))
+    record.setdefault("logged_at_unix_s", time.time())
+    record.setdefault("process_id", os.getpid())
+    line = json.dumps(
+        record,
+        ensure_ascii=False,
+        sort_keys=True,
+        allow_nan=False,
+    )
+    with _GPT_RESPONSE_STATUS_LOCK:
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        with status_path.open("a", encoding="utf-8") as handle:
+            handle.write(line + "\n")
+
+
+def _validate_frontier_assignment(
+    payload,
+    *,
+    num_agents,
+    num_frontiers,
+):
+    if not isinstance(payload, dict):
+        return "response is not a JSON object"
+    required = {
+        *(f"robot_{robot_id}" for robot_id in range(int(num_agents))),
+        "reason",
+    }
+    if set(payload) != required:
+        return (
+            "response keys do not match schema: expected "
+            + ", ".join(sorted(required))
+        )
+    if not isinstance(payload["reason"], str):
+        return "reason must be a string"
+    for robot_id in range(int(num_agents)):
+        key = f"robot_{robot_id}"
+        expected = {
+            f"frontier_{frontier_id}"
+            for frontier_id in range(int(num_frontiers))
+        }
+        if payload[key] not in expected:
+            return f"{key} is outside the current frontier set"
+    return None
+
+
+def _api_error_status(error, *, attempt, num_agents, num_frontiers):
+    return {
+        "event": "gpt_response",
+        "attempt": int(attempt),
+        "max_attempts": GPT_MAX_ATTEMPTS,
+        "model_requested": GPT_MODEL,
+        "num_agents": int(num_agents),
+        "num_frontiers": int(num_frontiers),
+        "outcome": "api_error",
+        "error_type": type(error).__name__,
+        "error_message": str(error),
+        "status_code": getattr(error, "status_code", None),
+        "request_id": getattr(error, "request_id", None),
+        "error_code": getattr(error, "code", None),
+    }
+
+
+def chat_with_gpt4v(
+    chat_history,
+    gpt_type=args.gpt_type,
+    *,
+    num_agents=None,
+    num_frontiers=None,
+):
+    """Return a strictly validated assignment or raise ``GPTResponseError``."""
+    del gpt_type  # Keep the historical call signature; this baseline is GPT-4o.
+    agent_count = int(args.num_agents if num_agents is None else num_agents)
+    frontier_count = int(
+        len(chat_history[1]["content"]) - 1
+        if num_frontiers is None
+        else num_frontiers
+    )
+    response_format = _frontier_assignment_response_format(
+        agent_count,
+        frontier_count,
+    )
+    last_outcome = "no_response"
+
+    for attempt in range(1, GPT_MAX_ATTEMPTS + 1):
+        try:
             response = client.chat.completions.create(
-                model='gpt-4o', 
-                response_format = { "type": "json_object" },
+                model=GPT_MODEL,
+                response_format=response_format,
                 messages=chat_history,
                 temperature=0.1,
-                max_tokens=100,
+                max_completion_tokens=GPT_MAX_COMPLETION_TOKENS,
             )
+        except (openai.APIConnectionError, openai.RateLimitError) as error:
+            status = _api_error_status(
+                error,
+                attempt=attempt,
+                num_agents=agent_count,
+                num_frontiers=frontier_count,
+            )
+            status["outcome"] = (
+                "connection_error"
+                if isinstance(error, openai.APIConnectionError)
+                else "rate_limit"
+            )
+            _emit_gpt_response_status(status)
+            last_outcome = status["outcome"]
+            if attempt < GPT_MAX_ATTEMPTS:
+                time.sleep(min(2 ** (attempt - 1), 8))
+            continue
+        except openai.APIError as error:
+            status = _api_error_status(
+                error,
+                attempt=attempt,
+                num_agents=agent_count,
+                num_frontiers=frontier_count,
+            )
+            _emit_gpt_response_status(status)
+            last_outcome = status["outcome"]
+            if attempt < GPT_MAX_ATTEMPTS:
+                time.sleep(min(2 ** (attempt - 1), 8))
+            continue
 
-            response_message = response.choices[0].message.content
-            print('gpt-4o' + " response: ")
-            print(response_message)
-            try:
-                ground_json = ast.literal_eval(response_message)
-                # Make sure ground_json has the right size
-                if len(ground_json) == args.num_agents+1:
-                    # Check if each "robot_i" frontier is in a valid range
-                    is_valid = True
-                    for i in range(args.num_agents):
-                        # If out of range, set is_valid to False and break
-                        if int(ground_json[f"robot_{i}"].split('_')[1]) >= num_frontier:
-                            is_valid = False
-                            break
+        choice = response.choices[0]
+        message = choice.message
+        content = message.content
+        refusal = getattr(message, "refusal", None)
+        finish_reason = choice.finish_reason
+        if content is not None:
+            print(f"{GPT_MODEL} response:", flush=True)
+            print(content, flush=True)
+        status = {
+            "event": "gpt_response",
+            "attempt": attempt,
+            "max_attempts": GPT_MAX_ATTEMPTS,
+            "response_id": getattr(response, "id", None),
+            "request_id": getattr(response, "_request_id", None),
+            "model_requested": GPT_MODEL,
+            "model_returned": getattr(response, "model", None),
+            "created": getattr(response, "created", None),
+            "system_fingerprint": getattr(
+                response, "system_fingerprint", None
+            ),
+            "service_tier": getattr(response, "service_tier", None),
+            "finish_reason": finish_reason,
+            "refusal": refusal,
+            "content": content,
+            "content_present": content is not None,
+            "content_chars": 0 if content is None else len(content),
+            "tool_call_count": len(getattr(message, "tool_calls", None) or []),
+            "usage": getattr(response, "usage", None),
+            "num_agents": agent_count,
+            "num_frontiers": frontier_count,
+        }
 
-                    # If still valid after the loop, we're done, return
-                    if is_valid:
-                        return ground_json
-                
-            except (SyntaxError, ValueError) as e:
-                print(response_message)
-        except openai.APIError as e:
-            #Handle API error here, e.g. retry or log
-            print(f"OpenAI API returned an API Error: {e}")
-            pass
-        except openai.APIConnectionError as e:
-            #Handle connection error here
-            print(f"Failed to connect to OpenAI API: {e}")
-            pass
-        except openai.RateLimitError as e:
-            #Handle rate limit error (we recommend using exponential backoff)
-            print(f"OpenAI API request exceeded rate limit: {e}")
-            pass
-        retries -=1
-            
-    # print(ground_json)
-    ground_json = {
-                    "robot_0": "frontier_0",
-                    "robot_1": "frontier_0"
-                    }
-    return ground_json
+        if refusal:
+            status["outcome"] = "refusal"
+            _emit_gpt_response_status(status)
+            raise GPTResponseError(
+                "GPT refused the frontier-assignment request",
+                reason="refusal",
+                attempts=attempt,
+            )
+        if finish_reason == "content_filter":
+            status["outcome"] = "content_filter"
+            _emit_gpt_response_status(status)
+            raise GPTResponseError(
+                "GPT frontier assignment was blocked by the content filter",
+                reason="content_filter",
+                attempts=attempt,
+            )
+        if content is None:
+            status["outcome"] = "empty_content"
+            _emit_gpt_response_status(status)
+            last_outcome = status["outcome"]
+            continue
+        if finish_reason == "length":
+            status["outcome"] = "truncated"
+            _emit_gpt_response_status(status)
+            last_outcome = status["outcome"]
+            continue
+
+        try:
+            assignment = json.loads(content)
+        except json.JSONDecodeError as error:
+            status["outcome"] = "invalid_json"
+            status["validation_error"] = str(error)
+            _emit_gpt_response_status(status)
+            last_outcome = status["outcome"]
+            continue
+
+        validation_error = _validate_frontier_assignment(
+            assignment,
+            num_agents=agent_count,
+            num_frontiers=frontier_count,
+        )
+        if validation_error is not None:
+            status["outcome"] = "invalid_schema"
+            status["validation_error"] = validation_error
+            _emit_gpt_response_status(status)
+            last_outcome = status["outcome"]
+            continue
+
+        status["outcome"] = "valid"
+        _emit_gpt_response_status(status)
+        return assignment
+
+    raise GPTResponseError(
+        (
+            "GPT did not produce a valid frontier assignment after "
+            f"{GPT_MAX_ATTEMPTS} attempts"
+        ),
+        reason=last_outcome,
+        attempts=GPT_MAX_ATTEMPTS,
+    )

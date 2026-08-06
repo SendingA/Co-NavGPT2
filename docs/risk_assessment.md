@@ -219,9 +219,16 @@ U_team = sum_a u_a,assignment(a) - w_red · redundancy
 | `nav_mode` | `w_I` | `w_D` | `w_R` 默认 | `w_U` | `w_red` |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | `nearest` | 0.00 | 1.00 | 2.00 | 0.50 | 0.00 |
-| `co_ut` | 0.15 | 0.80 | 2.00 | 0.50 | 1.00 |
+| `co_ut` | 1.00 | `cost_utility_lambda`（默认 1.00） | 2.00 | 0.50 | 0.00 |
 | `fill` | 1.00 | 0.25 | 2.00 | 0.50 | 0.75 |
 | `gpt` / 其它 | 1.00 | 0.35 | 2.00 | 0.50 | 0.75 |
+
+普通 `co_ut` 严格使用未归一化的
+`frontier_size - cost_utility_lambda × robot_grid_distance`。开启 risk 后，
+size 与 distance 按上式做确定性归一化，再加入 risk 和 uncertainty 项，避免
+cell 数量级掩盖 `[0,1]` 风险值。`random` 不使用这个 frontier utility：
+它在每个机器人的已探索可达自由空间内随机采样，并提前剔除 hard-unsafe 和超过
+danger threshold 的 cell。
 
 `gpt` 模式还会把同一 hazard report 作为 JSON 交给 VLM，但安全性不依赖 VLM
 服从提示：确定性 guard 会拒绝不存在、格式错误或 `hard_blocked` 的选择，并只

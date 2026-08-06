@@ -27,7 +27,12 @@ from utils.general_utils import (
 from utils.detection_segmentation import Object_Detection_and_Segmentation
 
 from constants import color_palette, category_to_id #, category_to_id_replica
-from utils.visualization import init_vis_image, draw_line, vis_result_fast
+from utils.visualization import (
+    draw_line,
+    fit_image_to_panel,
+    init_vis_image,
+    vis_result_fast,
+)
 from utils.explored_map_utils import (
     build_full_scene_pcd,
     detect_frontier,
@@ -35,7 +40,12 @@ from utils.explored_map_utils import (
 import utils.pose as pu
 from utils.mapping import create_object_pcd, process_pcd
 from utils.fmm_planner import FMMPlanner
-from utils.local_planners import create_local_planner
+from utils.local_planners import (
+    AStarPathCache,
+    create_local_planner,
+    frontier_grid_to_world,
+    shield_pointnav_action,
+)
 
 # Disable torch gradient computation
 torch.set_grad_enabled(False)
@@ -109,13 +119,37 @@ class VLM_Agent():
         self.goal_name = None
         
         self.turn_angle = args.turn_angle
-        self.init_map_and_navigation_param()        
+        self.init_map_and_navigation_param()
+        self.pointnav_planner = None
+        if str(getattr(args, 'local_planner', 'fmm')).lower() == 'pointnav':
+            self.pointnav_planner = create_local_planner(
+                'pointnav',
+                pointnav_checkpoint=getattr(
+                    args, 'pointnav_checkpoint', None
+                ),
+                pointnav_config=getattr(args, 'pointnav_config', None),
+                pointnav_device=getattr(args, 'pointnav_device', 'cpu'),
+                pointnav_deterministic=bool(int(getattr(
+                    args, 'pointnav_deterministic', 1
+                ))),
+                pointnav_goal_tolerance=float(getattr(
+                    args, 'pointnav_goal_tolerance', 0.05
+                )),
+                pointnav_env_action_map=getattr(
+                    args, 'pointnav_env_action_map', None
+                ),
+                pointnav_observation_mode=getattr(
+                    args, 'pointnav_observation_mode', 'auto'
+                ),
+            )
         # ------------------------------------------------------------------
 
     def reset(self, observations, agent_state) -> None:
         self.episode_n += 1
         self.init_map_and_pose()
         self.init_map_and_navigation_param()
+        if self.pointnav_planner is not None:
+            self.pointnav_planner.reset_robot(self.agent_id)
         
         # ------------------------------------------------------------------
         ##### At first step, get the object name and init the visualization
@@ -123,6 +157,7 @@ class VLM_Agent():
         if self.l_step == 0:
             self.init_sim_position = agent_state.sensor_states["depth"].position
             self.init_agent_position = agent_state.position
+            self.init_agent_rotation = agent_state.rotation
             self.init_sim_rotation = quaternion.as_rotation_matrix(agent_state.sensor_states["depth"].rotation)
 
             self.goal_id = int(observations['objectgoal'][0])
@@ -181,6 +216,7 @@ class VLM_Agent():
         self.init_sim_position = None
         self.init_sim_rotation = None
         self.init_agent_position = None
+        self.init_agent_rotation = None
         self.Open3D_traj = []
         self.nearest_point = None
         self.current_grid_pose = None
@@ -201,6 +237,11 @@ class VLM_Agent():
         self.found_goal = False
         self.last_action = 0
         self.last_goal = None
+        self._latest_pointnav_observations = None
+        self._latest_pointnav_agent_state = None
+        self.pointnav_replan_requested = False
+        self.pointnav_last_decision = None
+        self._astar_path_cache = None
 
         # The shared risk map is supplied by the orchestration layer after
         # every dynamic fire-field update.  Keeping this state on the agent
@@ -277,6 +318,8 @@ class VLM_Agent():
 
     def mapping(self, observations, agent_state):
         time_step_info = 'Mapping time (s): \n'
+        self._latest_pointnav_observations = observations
+        self._latest_pointnav_agent_state = agent_state
 
         preprocess_s_time = time.time()
 
@@ -436,29 +479,70 @@ class VLM_Agent():
         habitat_final_pose = self.habitat_goal_pose.astype(np.float32)
 
         plan_path = []
-        if getattr(self.args, 'local_planner', 'fmm') == 'fmm':
-            if not getattr(self, 'risk_navigation_enabled', False):
-                # Preserve the historical Habitat shortest-path-first behavior
-                # exactly when risk assessment is disabled.
-                plan_path = self.search_navigable_path(
-                    habitat_final_pose
-                )
-  
-        if len(plan_path) > 1:
-            plan_path = np.dot(R_habitat2open3d.T, (np.array(plan_path) - self.init_agent_position).T).T
-            action = self.greedy_follower_act(plan_path)
+        planner_name = str(
+            getattr(self.args, 'local_planner', 'fmm')
+        ).lower()
+        if (
+            planner_name == 'pointnav'
+            and has_navigation_goal
+            and self.pointnav_planner is not None
+        ):
+            self.pointnav_planner.clear_local_goal(self.agent_id)
+            self.pointnav_replan_requested = False
+        if planner_name == 'pointnav' and not has_navigation_goal:
+            habitat_final_pose = frontier_grid_to_world(
+                goal_points,
+                origins_grid=self.origins_grid,
+                map_resolution_cm=self.args.map_resolution,
+                camera_local_y=self.camera_position[1],
+                initial_agent_position=self.init_agent_position,
+                initial_sensor_rotation=self.init_sim_rotation,
+            )
+            self.habitat_goal_pose = habitat_final_pose
+            self.plan_path = np.asarray(
+                [self.camera_position, Open3d_goal_pose],
+                dtype=np.float32,
+            )
+            action = self._pointnav_frontier_act(habitat_final_pose)
         else:
-            # The default fmm branch retains its historical behavior. Explicit
-            # astar/rl selections always enter their grid planner here.
-            self.stg, self.stop, plan_path = self._get_stg(self.obstacle_map, self.current_grid_pose, np.copy(self.goal_map))
-            plan_path = np.array(plan_path) 
-            plan_path_x = (plan_path[:, 0] - int(self.origins_grid[0])) * self.args.map_resolution / 100.0
-            plan_path_y = plan_path[:, 0] * 0
-            plan_path_z = (plan_path[:, 1] - int(self.origins_grid[1])) * self.args.map_resolution / 100.0
+            use_existing_object_path = (
+                planner_name == 'pointnav' and has_navigation_goal
+            )
+            if planner_name == 'fmm' or use_existing_object_path:
+                if not getattr(self, 'risk_navigation_enabled', False):
+                    plan_path = self.search_navigable_path(
+                        habitat_final_pose
+                    )
 
-            plan_path = np.stack((plan_path_x, plan_path_y, plan_path_z), axis=-1)
+            if len(plan_path) > 1:
+                plan_path = np.dot(
+                    R_habitat2open3d.T,
+                    (np.array(plan_path) - self.init_agent_position).T,
+                ).T
+                action = self.greedy_follower_act(plan_path)
+            else:
+                planner_override = (
+                    'fmm' if use_existing_object_path else None
+                )
+                self.stg, self.stop, plan_path = self._get_stg(
+                    self.obstacle_map,
+                    self.current_grid_pose,
+                    np.copy(self.goal_map),
+                    planner_name_override=planner_override,
+                )
+                plan_path = np.array(plan_path)
+                plan_path_x = (
+                    plan_path[:, 0] - int(self.origins_grid[0])
+                ) * self.args.map_resolution / 100.0
+                plan_path_y = plan_path[:, 0] * 0
+                plan_path_z = (
+                    plan_path[:, 1] - int(self.origins_grid[1])
+                ) * self.args.map_resolution / 100.0
 
-            action = self.ffm_act()
+                plan_path = np.stack(
+                    (plan_path_x, plan_path_y, plan_path_z), axis=-1
+                )
+                action = self.ffm_act()
 
     
             
@@ -484,6 +568,53 @@ class VLM_Agent():
         act_end_time = time.time()
         # print('act_time: %.3f秒'%(act_end_time - act_time)) 
         return action
+
+    def _pointnav_frontier_act(self, goal_world):
+        if self.pointnav_planner is None:
+            raise RuntimeError("PointNav planner was not initialized")
+        if (
+            self._latest_pointnav_observations is None
+            or self._latest_pointnav_agent_state is None
+        ):
+            raise RuntimeError(
+                "mapping() must provide a fresh observation before PointNav"
+            )
+        decision = self.pointnav_planner.act(
+            robot_id=self.agent_id,
+            observations=self._latest_pointnav_observations,
+            agent_state=self._latest_pointnav_agent_state,
+            goal_world=goal_world,
+            episode_start_position=self.init_agent_position,
+            episode_start_rotation=self.init_agent_rotation,
+        )
+        self.pointnav_last_decision = decision
+        if decision.request_global_replan:
+            self.pointnav_replan_requested = True
+            action = int(self.pointnav_planner.env_action_map['turn_left'])
+        else:
+            action = int(decision.action)
+            if getattr(self, 'risk_navigation_enabled', False):
+                shielded = shield_pointnav_action(
+                    action,
+                    env_action_map=self.pointnav_planner.env_action_map,
+                    current_cell=self.current_grid_pose,
+                    relative_angle_deg=self.relative_angle,
+                    hard_unsafe_mask=self.hard_unsafe_mask,
+                    risk_map=self.risk_map,
+                    map_resolution_cm=self.args.map_resolution,
+                    forward_step_size_m=self.pointnav_planner.spec.forward_step_size,
+                    turn_angle_deg=self.pointnav_planner.spec.turn_angle,
+                )
+                if shielded != action:
+                    action = shielded
+                    self.pointnav_planner.record_executed_action(
+                        self.agent_id, action
+                    )
+        self.l_step += 1
+        return action
+
+    def acknowledge_pointnav_replan(self):
+        self.pointnav_replan_requested = False
     
 
     def search_navigable_path(self, original_point, offset = 0.1):
@@ -648,11 +779,73 @@ class VLM_Agent():
         # print('action: %.3f秒'%(action_e_time - action_s_time)) 
         return action
 
-    def _get_stg(self, grid, start, goal):
+    def _get_astar_stg_once(
+        self,
+        planner,
+        state,
+        *,
+        x1,
+        y1,
+        coordinate_offset,
+    ):
+        """Derive control and visualization output from one A* search."""
+
+        padded_start = planner._clip_cell(state)
+        reusable_path = None
+        astar_cache = getattr(self, '_astar_path_cache', None)
+        if astar_cache is not None:
+            astar_cache.restore_goal_distance(planner)
+            reusable_path = astar_cache.reusable_suffix(
+                planner,
+                padded_start,
+            )
+
+        result = planner.plan(state, reusable_path=reusable_path)
+        if result.path:
+            self._astar_path_cache = AStarPathCache.capture(
+                planner,
+                result.path,
+            )
+            sampled = planner.sample_path(result.path, max_waypoints=10)
+        else:
+            # Preserve the goal-distance transform across failed searches.
+            # The empty path itself is never reusable.
+            self._astar_path_cache = AStarPathCache.capture(planner, ())
+            sampled = [padded_start]
+
+        if len(sampled) == 1:
+            # Keep the historical visualization contract, which always
+            # returned at least the current pose and one waypoint.
+            sampled.append(sampled[0])
+        path = [
+            [
+                cell[0] + x1 - coordinate_offset,
+                cell[1] + y1 - coordinate_offset,
+            ]
+            for cell in sampled
+        ]
+        stg = (
+            result.stg[0] + x1 - coordinate_offset,
+            result.stg[1] + y1 - coordinate_offset,
+        )
+
+        if result.replan:
+            self.replan_count += 1
+        else:
+            self.replan_count = 0
+        return stg, result.stop, path
+
+    def _get_stg(
+        self, grid, start, goal, planner_name_override=None
+    ):
         """Get short-term goal"""
 
         agent_args = getattr(self, 'args', None)
-        planner_name = getattr(agent_args, 'local_planner', 'fmm')
+        planner_name = (
+            planner_name_override
+            if planner_name_override is not None
+            else getattr(agent_args, 'local_planner', 'fmm')
+        )
         risk_navigation_enabled = bool(
             getattr(self, 'risk_navigation_enabled', False)
         )
@@ -819,13 +1012,22 @@ class VLM_Agent():
 
         planner.set_multi_goal(goal)
 
-        path = []
-        path.append(start)
-
         state = [
             start[0] - x1 + coordinate_offset,
             start[1] - y1 + coordinate_offset,
         ]
+        if planner_name == 'astar':
+            return self._get_astar_stg_once(
+                planner,
+                state,
+                x1=x1,
+                y1=y1,
+                coordinate_offset=coordinate_offset,
+            )
+
+        path = []
+        path.append(start)
+
         stg_x, stg_y, replan, stop_f = planner.get_short_term_goal(state)
         stg_x, stg_y = (
             stg_x + x1 - coordinate_offset,
@@ -1146,7 +1348,12 @@ class VLM_Agent():
                                 cv2.LINE_AA)
 
         vis_image_rgb = init_vis_image(text_queries, self.last_action)
-        vis_image_rgb[50:530, 15:655] = self.annotated_image 
+        observation_panel = fit_image_to_panel(
+            self.annotated_image,
+            panel_width=640,
+            panel_height=480,
+        )
+        vis_image_rgb[50:530, 15:655] = observation_panel
         vis_image_rgb[50:530, 670:1150] = vis_image
         
         if self.args.print_images:

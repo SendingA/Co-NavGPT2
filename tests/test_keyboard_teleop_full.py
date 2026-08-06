@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from types import SimpleNamespace
 
+import cv2
 import numpy as np
+from omegaconf import OmegaConf
 
-from scripts.keyboard_teleop_full import compose_view
+from scripts.keyboard_teleop_full import (
+    compose_view,
+    draw_snapshot_button,
+    maybe_build_fire,
+    point_in_rect,
+    save_sensor_snapshot,
+    window_point_to_image,
+)
 from utils.fire_pipeline import step_fire_observation
 from utils.fire_sensors.dashboard import render_dashboard
 
@@ -167,6 +179,120 @@ class TeleopDashboardLayoutTests(unittest.TestCase):
             grid_w // 2,
             radar_el_color,
         )
+
+    def test_snapshot_button_hitbox_and_all_panel_files(self) -> None:
+        dashboard = _solid_image(500, 900, (1, 2, 3))
+        rendered, rect = draw_snapshot_button(dashboard)
+        x1, y1, x2, y2 = rect
+        self.assertTrue(point_in_rect((x1 + x2) // 2, (y1 + y2) // 2, rect))
+        self.assertFalse(point_in_rect(x1 - 1, y1, rect))
+        self.assertFalse(np.array_equal(rendered, dashboard))
+        self.assertEqual(
+            window_point_to_image(
+                450,
+                250,
+                window_size=(900, 500),
+                image_shape=(1000, 1800, 3),
+            ),
+            (900, 500),
+        )
+
+        height, width = 32, 48
+        with tempfile.TemporaryDirectory() as temp_dir:
+            saved_to = save_sensor_snapshot(
+                root_dir=Path(temp_dir),
+                scene_id="/dataset/Nfvxx8J5NCo.basis.glb",
+                agent_id=1,
+                robot_step=17,
+                rgb_clean=_solid_image(height, width, (11, 22, 33)),
+                rgb_smoke=_solid_image(height, width, (44, 55, 66)),
+                depth_clean=np.full(
+                    (height, width, 1), 0.5, dtype=np.float32
+                ),
+                depth_smoke=np.full(
+                    (height, width), 1.5, dtype=np.float32
+                ),
+                thermal=_solid_image(height, width, (20, 30, 40)),
+                lidar=_solid_image(height, width, (30, 40, 50)),
+                radar_bev=_solid_image(height, width, (40, 50, 60)),
+                radar_az=_solid_image(height, width, (50, 60, 70)),
+                radar_el=_solid_image(height, width, (60, 70, 80)),
+                dashboard=rendered,
+                max_depth_m=5.0,
+                lidar_is_360=True,
+            )
+
+            expected = {
+                "rgb_clean.png",
+                "depth_clean.png",
+                "thermal.png",
+                "lidar_bev.png",
+                "rgb_smoke.png",
+                "depth_smoke.png",
+                "radar_bev.png",
+                "radar_range_azimuth.png",
+                "radar_range_elevation.png",
+                "dashboard.png",
+            }
+            self.assertEqual(
+                {path.name for path in saved_to.glob("*.png")},
+                expected,
+            )
+            manifest = json.loads(
+                (saved_to / "manifest.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(manifest["agent_id"], 1)
+            self.assertEqual(manifest["robot_step"], 17)
+            self.assertTrue(manifest["lidar_is_360"])
+            self.assertFalse(manifest["missing_files"])
+            self.assertEqual(set(manifest["saved_files"]), expected)
+
+            # RGB inputs cross the API boundary as RGB and must be encoded
+            # to disk in the BGR order expected by OpenCV.
+            saved_rgb = cv2.imread(str(saved_to / "rgb_clean.png"))
+            np.testing.assert_array_equal(saved_rgb[0, 0], (33, 22, 11))
+
+    def test_sensor_suite_remains_available_without_a_fire_plan(self) -> None:
+        config = OmegaConf.create({
+            "habitat": {
+                "simulator": {
+                    "agents_order": ["agent_0"],
+                    "agents": {
+                        "agent_0": {
+                            "sim_sensors": {
+                                "depth_sensor": {
+                                    "max_depth": 5.0,
+                                    "hfov": 79.0,
+                                },
+                                "rgb_sensor": {
+                                    "width": 64,
+                                    "height": 48,
+                                    "hfov": 79.0,
+                                },
+                            },
+                        },
+                    },
+                },
+            },
+        })
+        with tempfile.TemporaryDirectory() as temp_dir:
+            args = SimpleNamespace(
+                plan_id=None,
+                smoke_density=0.6,
+                n_steps=8,
+                fast=1,
+                smoke_k_ext=4.0,
+                render_scale=0.5,
+                flame_smoke_passthrough=0.95,
+                save_frames_to=temp_dir,
+                seed=7,
+            )
+            scene, suites = maybe_build_fire(args, config, num_agents=1)
+
+        self.assertIsNone(scene)
+        self.assertEqual(len(suites), 1)
+        self.assertIsNone(suites[0].scene)
+        self.assertEqual(suites[0].cfg.smoke_density, 0.0)
 
 
 class FirePipelineCleanRgbTests(unittest.TestCase):

@@ -218,6 +218,9 @@ class FireSensorSuite:
             # lidar
             "lidar_points": lidar_out["points"],
             "lidar_image": lidar_out["image"],
+            # Optional for compatibility with custom/test LiDAR backends
+            # implementing the pre-360 output contract.
+            "lidar_is_360": bool(lidar_out.get("is_360", False)),
             # radar
             "radar_heatmap": radar_out["heatmap"],
             "radar_image_az": radar_out["image_az"],

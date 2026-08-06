@@ -137,7 +137,7 @@ _FLAME_LUT_RGB = np.array([
     [0.95, 0.30, 0.05],   # deep orange
     [1.00, 0.60, 0.10],   # orange
     [1.00, 0.85, 0.30],   # yellow
-    [1.00, 0.97, 0.78],   # near white core
+    [1.00, 0.90, 0.48],   # yellow-white core, still chromatic
 ], dtype=np.float32)
 
 
@@ -349,10 +349,10 @@ class VoxelRenderParams:
     # (one or two pixels). 0.04 lets the flame envelope render as a
     # proper volumetric blob.
     flame_threshold: float = 0.04
-    flame_emission_gain: float = 8.0
-    flame_k_ext: float = 0.8
-    flame_glow_ksize: int = 41
-    flame_glow_gain: float = 0.55
+    flame_emission_gain: float = 3.2
+    flame_k_ext: float = 0.50
+    flame_glow_ksize: int = 21
+    flame_glow_gain: float = 0.18
     thermal_color_blend: float = 0.85
     thermal_surface_start: float = 0.72
     thermal_air_coupling: float = 0.025
@@ -365,6 +365,16 @@ class VoxelRenderParams:
     #   * red/orange wavelengths Mie-scatter less in soot (paper Fig. 7),
     #   * hot soot in the flame envelope itself glows.
     flame_smoke_passthrough: float = 0.95
+    # Fraction of smoke extinction/scattering removed at a strong flame
+    # sample. Hot combustion gases are locally clearer than the surrounding
+    # cool soot plume.
+    flame_smoke_displacement: float = 0.52
+    # Maximum clean-surface texture mixed through pixels containing flame.
+    # This models the translucency of an emissive volume and keeps burning
+    # furniture visually recognizable.
+    flame_surface_reveal: float = 0.13
+    # Luminance-preserving compression of integrated flame radiance.
+    flame_highlight_compression: float = 1.0
 
     # ---- Procedural flame texturing --------------------------------------
     # All values below are dimensionless multipliers applied to the
@@ -375,33 +385,34 @@ class VoxelRenderParams:
     # means the flame can be brightened by up to 50% or dimmed by 50%
     # at sub-voxel scale. 0 disables the effect and the flame renders
     # as a smooth blob (the legacy look).
-    flame_noise_strength: float = 0.55
+    flame_noise_strength: float = 0.75
     # ``flame_edge_break`` controls how much noise is applied at the
     # flame edge (where fl_used is between threshold and ~0.4). High
     # values produce ragged "tongues" of flame breaking off the main
     # body; low values keep the silhouette smooth.
-    flame_edge_break: float = 0.8
+    flame_edge_break: float = 1.05
     # ``flame_color_jitter`` shifts the LUT lookup by +/- this fraction
     # of [0,1] using a second noise field, so the same flame intensity
-    # produces a range of colors from deep red to near-white core.
-    flame_color_jitter: float = 0.25
+    # produces a range of colors from deep red to a chromatic yellow core.
+    flame_color_jitter: float = 0.32
     # ``flame_time_speed`` is how fast (in flicker units per fire-second)
     # the noise pattern advances. Real flames flicker at 5-15 Hz which
     # at speedup=1 maps to ~1.5 phase units per second; we let it
     # scroll faster to look "lively" even at slow simulation rates.
     flame_time_speed: float = 12.0
     # Smoke texture modulation: very mild noise applied to the smoke
-    # field so the plume isn't a uniform grey blob. 0.25 means each
-    # ray-march point's smoke density can vary up to 25% from its
+    # field so the plume isn't a uniform grey blob. 0.24 means each
+    # ray-march point's smoke density can vary up to 24% from its
     # smooth voxel value.
-    smoke_noise_strength: float = 0.30
+    smoke_noise_strength: float = 0.24
 
 
 def finalize_volumetric_outputs(
     *,
     rgb_clean: np.ndarray,
     transmittance: np.ndarray,
-    color_acc: np.ndarray,
+    smoke_color_acc: np.ndarray,
+    flame_color_acc: np.ndarray,
     flame_seen: np.ndarray,
     temp_apparent: np.ndarray,
     output_hw: Tuple[int, int],
@@ -428,8 +439,11 @@ def finalize_volumetric_outputs(
         transmittance = cv2.resize(
             transmittance, (w_full, h_full), interpolation=cv2.INTER_LINEAR
         )
-        color_acc = cv2.resize(
-            color_acc, (w_full, h_full), interpolation=cv2.INTER_LINEAR
+        smoke_color_acc = cv2.resize(
+            smoke_color_acc, (w_full, h_full), interpolation=cv2.INTER_LINEAR
+        )
+        flame_color_acc = cv2.resize(
+            flame_color_acc, (w_full, h_full), interpolation=cv2.INTER_LINEAR
         )
         flame_seen = cv2.resize(
             flame_seen, (w_full, h_full), interpolation=cv2.INTER_LINEAR
@@ -439,7 +453,40 @@ def finalize_volumetric_outputs(
         )
 
     scene = rgb_clean.astype(np.float32) / 255.0
-    out = scene * transmittance[..., None] + color_acc
+    # A long ray through a uniformly burning Bounding Box can accumulate
+    # radiance well above display white. Clipping that sum independently per
+    # channel turns every flame into a textureless white patch. Compress by
+    # the RGB peak instead: this bounds the highlight while preserving the
+    # red/orange/yellow channel ratios created by the LUT and procedural
+    # texture.
+    flame_peak = np.max(flame_color_acc, axis=-1)
+    compression = max(0.0, float(params.flame_highlight_compression))
+    flame_scale = 1.0 / (1.0 + compression * flame_peak)
+    flame_display = flame_color_acc * flame_scale[..., None]
+
+    out = (
+        scene * transmittance[..., None]
+        + smoke_color_acc
+        + flame_display
+    )
+
+    # A real flame volume is partially transparent. Recover a bounded amount
+    # of the clean surface only where a flame is actually visible. This keeps
+    # a bedspread, sofa cushion or wood grain legible instead of replacing the
+    # whole burning object with emissive fog.
+    reveal_strength = float(
+        np.clip(params.flame_surface_reveal, 0.0, 0.75)
+    )
+    if reveal_strength > 0.0:
+        reveal_ramp = max(0.20, float(params.flame_threshold) * 4.0)
+        reveal_mask = np.clip(
+            (flame_seen - float(params.flame_threshold))
+            / max(reveal_ramp - float(params.flame_threshold), 1e-4),
+            0.0,
+            1.0,
+        )
+        reveal = reveal_strength * reveal_mask[..., None]
+        out = out * (1.0 - reveal) + scene * reveal
     out_u8 = np.clip(out * 255.0, 0, 255).astype(np.uint8)
 
     # Optional flame glow halo.
@@ -595,7 +642,8 @@ def volumetric_composite(
     color_jitter_amp = float(np.clip(params.flame_color_jitter, 0.0, 1.0))
     smoke_noise_amp = float(np.clip(params.smoke_noise_strength, 0.0, 1.0))
 
-    color_acc = np.zeros((H, W, 3), dtype=np.float32)
+    smoke_color_acc = np.zeros((H, W, 3), dtype=np.float32)
+    flame_color_acc = np.zeros((H, W, 3), dtype=np.float32)
     T_acc = np.ones((H, W), dtype=np.float32)
     flame_seen = np.zeros((H, W), dtype=np.float32)
     temp_apparent = np.full((H, W), float(ambient_c), dtype=np.float32)
@@ -606,13 +654,35 @@ def volumetric_composite(
         step_m_h = step_m[ray_hits]
         T_acc_h = np.ones(start_h.shape[0], dtype=np.float32)        # for scene + scatter
         T_acc_flame_h = np.ones(start_h.shape[0], dtype=np.float32)  # for flame emission
-        color_acc_h = np.zeros((start_h.shape[0], 3), dtype=np.float32)
+        smoke_color_acc_h = np.zeros(
+            (start_h.shape[0], 3), dtype=np.float32
+        )
+        flame_color_acc_h = np.zeros(
+            (start_h.shape[0], 3), dtype=np.float32
+        )
         flame_seen_h = np.zeros(start_h.shape[0], dtype=np.float32)
         temp_surface_num_h = np.zeros(start_h.shape[0], dtype=np.float32)
         temp_surface_den_h = np.zeros(start_h.shape[0], dtype=np.float32)
         temp_path_excess_h = np.zeros(start_h.shape[0], dtype=np.float32)
         surface_start = float(np.clip(params.thermal_surface_start, 0.0, 0.95))
         air_coupling = float(np.clip(params.thermal_air_coupling, 0.0, 1.0))
+        # A surface-anchored noise value is shared by all samples on one ray.
+        # Blending it with 3-D turbulence prevents the detail from averaging
+        # to one flat colour when a ray traverses a large burning AABB.
+        ray_intensity_noise_h = None
+        ray_color_noise_h = None
+        if noise_strength > 0.0:
+            ray_intensity_noise_h = fractal_flame_noise(
+                end_h,
+                time_phase=noise_phase,
+                seed=17,
+            )
+        if color_jitter_amp > 0.0:
+            ray_color_noise_h = fractal_flame_noise(
+                end_h,
+                time_phase=noise_phase * 0.7,
+                seed=23,
+            )
 
         for i in range(N):
             t = np.float32(ts[i])
@@ -631,26 +701,46 @@ def volumetric_composite(
                 n_smoke = fractal_flame_noise(pts, time_phase=noise_phase * 0.4,
                                               seed=11)
                 sm = np.clip(sm * (1.0 + smoke_noise_amp * n_smoke), 0.0, 1.5)
-            # Procedural flame texture: sub-voxel value-noise modulates
-            # the flame intensity to break the smooth trilinear blob
-            # into 'tongues'. The modulation is strongest near the
-            # flame edge (fl small) so the silhouette becomes ragged,
-            # while the bright core stays mostly stable to keep the
-            # fire recognisable.
+            # Procedural flame texture: use coherent noise as a density
+            # coverage field, not just a small brightness wobble. The core
+            # stays stable while edge samples can nearly disappear or stretch
+            # into bright tongues. This survives integration along a ray much
+            # better than the old symmetric multiply-and-average modulation.
             if noise_strength > 0.0:
                 n_intensity = fractal_flame_noise(pts, time_phase=noise_phase,
                                                   seed=1)
-                # Edge weight: peaks where fl ~ 0.2 and falls off both
-                # toward 0 (nothing to break) and toward 1 (stable core).
+                if ray_intensity_noise_h is not None:
+                    n_intensity = np.clip(
+                        0.35 * n_intensity
+                        + 0.65 * ray_intensity_noise_h,
+                        -1.0,
+                        1.0,
+                    )
                 fl_norm = np.clip(fl, 0.0, 1.0)
-                edge_w = 4.0 * fl_norm * (1.0 - fl_norm)  # in [0,1], peaks at 0.5
-                # Two-term modulation: a small global flicker on every
-                # voxel + a stronger contribution at the silhouette.
-                fl_mod = fl * (
-                    1.0 + noise_strength * n_intensity
-                          + edge_break * edge_w * n_intensity
+                edge_w = 4.0 * fl_norm * (1.0 - fl_norm)
+                detail_weight = np.clip(
+                    noise_strength * (0.30 + 0.70 * edge_w),
+                    0.0,
+                    0.95,
                 )
-                fl = np.clip(fl_mod, 0.0, fl_norm.max() * 1.2)
+                density_texture = np.clip(
+                    0.55 + 0.95 * n_intensity, 0.05, 1.45
+                )
+                edge_texture = np.clip(
+                    0.65 + edge_break * n_intensity, 0.05, 1.40
+                )
+                core_detail = (
+                    (1.0 - detail_weight)
+                    + detail_weight * density_texture
+                )
+                silhouette_detail = (
+                    (1.0 - edge_w) + edge_w * edge_texture
+                )
+                fl = np.clip(
+                    fl * core_detail * silhouette_detail,
+                    0.0,
+                    1.2,
+                )
 
             fl_used = np.clip((fl - thr_lo) * thr_inv, 0.0, 1.0) * fl
 
@@ -662,16 +752,35 @@ def volumetric_composite(
             if color_jitter_amp > 0.0:
                 n_color = fractal_flame_noise(pts, time_phase=noise_phase * 0.7,
                                               seed=5)
+                if ray_color_noise_h is not None:
+                    n_color = np.clip(
+                        0.35 * n_color + 0.65 * ray_color_noise_h,
+                        -1.0,
+                        1.0,
+                    )
                 lut_input = np.clip(fl_used + color_jitter_amp * n_color, 0.0, 1.0)
             else:
                 lut_input = fl_used
 
-            # Two separate optical depths: the scene path sees full
-            # smoke + flame extinction; the flame path sees only a
+            # Hot combustion gas locally displaces soot. Reducing both grey
+            # scattering and smoke extinction at a flame sample exposes
+            # chromatic flame structure and some of the burning surface.
+            smoke_displacement = float(
+                np.clip(params.flame_smoke_displacement, 0.0, 1.0)
+            )
+            flame_presence = np.clip(fl_used / 0.35, 0.0, 1.0)
+            sm_visible = sm * (
+                1.0 - smoke_displacement * flame_presence
+            )
+
+            # Two separate optical depths: the scene path sees displaced
+            # smoke + translucent flame extinction; the flame path sees only a
             # fraction of the smoke (passthrough) plus flame's own
             # absorption. Both share step_m_h.
-            sigma_scene = smoke_k * sm + flame_k * fl_used
-            sigma_flame = smoke_k_for_flame * sm + flame_k * fl_used
+            sigma_scene = smoke_k * sm_visible + flame_k * fl_used
+            sigma_flame = (
+                smoke_k_for_flame * sm_visible + flame_k * fl_used
+            )
             T_step_scene = np.exp(-(sigma_scene * step_m_h))
             T_step_flame = np.exp(-(sigma_flame * step_m_h))
 
@@ -682,13 +791,16 @@ def volumetric_composite(
             )
             scatter = (
                 smoke_color.reshape(1, 3)
-                * (sm * smoke_k * step_m_h)[:, None]
+                * (sm_visible * smoke_k * step_m_h)[:, None]
             )
 
-            color_acc_h = (
-                color_acc_h
-                + T_acc_flame_h[:, None] * emission   # flame uses its own T
-                + T_acc_h[:, None] * scatter           # scatter uses scene T
+            flame_color_acc_h = (
+                flame_color_acc_h
+                + T_acc_flame_h[:, None] * emission
+            )
+            smoke_color_acc_h = (
+                smoke_color_acc_h
+                + T_acc_h[:, None] * scatter
             )
             T_acc_h = T_acc_h * T_step_scene
             T_acc_flame_h = T_acc_flame_h * T_step_flame
@@ -719,7 +831,8 @@ def volumetric_composite(
         )
         temp_apparent_h = float(ambient_c) + apparent_excess_h
 
-        color_acc[ray_hits] = color_acc_h
+        smoke_color_acc[ray_hits] = smoke_color_acc_h
+        flame_color_acc[ray_hits] = flame_color_acc_h
         T_acc[ray_hits] = T_acc_h
         flame_seen[ray_hits] = flame_seen_h
         temp_apparent[ray_hits] = temp_apparent_h
@@ -727,7 +840,8 @@ def volumetric_composite(
     return finalize_volumetric_outputs(
         rgb_clean=rgb_clean,
         transmittance=T_acc,
-        color_acc=color_acc,
+        smoke_color_acc=smoke_color_acc,
+        flame_color_acc=flame_color_acc,
         flame_seen=flame_seen,
         temp_apparent=temp_apparent,
         output_hw=(H_full, W_full),

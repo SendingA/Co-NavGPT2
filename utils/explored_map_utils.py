@@ -29,7 +29,16 @@ def build_full_scene_pcd(depth, image, cam_K):
     u, v = np.meshgrid(x, y)
     
     # Apply the mask, and unprojection is done only on the valid points
-    valid_mask = depth > 0
+    valid_mask = np.isfinite(depth) & (depth > 0)
+    if not np.any(valid_mask):
+        # Habitat uses the normalized maximum depth for rays that do not hit
+        # scene geometry.  The navigation preprocessing converts those rays
+        # to zero, so a camera pointed entirely into no-return space can
+        # legitimately produce an empty frame.  Open3D's DBSCAN constructs a
+        # KD-tree internally and emits ``SetRawData: no data`` for an empty
+        # cloud, therefore return before any Open3D neighborhood operation.
+        return o3d.geometry.PointCloud()
+
     masked_depth = depth[valid_mask]
     u = u[valid_mask]
     v = v[valid_mask]
@@ -55,6 +64,8 @@ def build_full_scene_pcd(depth, image, cam_K):
     pcd.colors = o3d.utility.Vector3dVector(colors)
     
     camera_object_pcd = pcd.voxel_down_sample(0.05)
+    if len(camera_object_pcd.points) == 0:
+        return camera_object_pcd
     
     labels = np.array(
         camera_object_pcd.cluster_dbscan(eps=0.1, min_points=15)

@@ -14,6 +14,55 @@ from constants import color_palette, coco_categories, category_to_id
 import supervision as sv
 from supervision.draw.color import Color, ColorPalette
 
+
+def fit_image_to_panel(
+    image: np.ndarray,
+    panel_width: int,
+    panel_height: int,
+    *,
+    pad_value: int = 0,
+) -> np.ndarray:
+    """Resize an HWC image to a fixed panel without changing aspect ratio."""
+    image = np.asarray(image)
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("panel image must have shape (height, width, 3)")
+    if image.shape[0] <= 0 or image.shape[1] <= 0:
+        raise ValueError("panel image dimensions must be positive")
+    panel_width = int(panel_width)
+    panel_height = int(panel_height)
+    if panel_width <= 0 or panel_height <= 0:
+        raise ValueError("panel dimensions must be positive")
+
+    scale = min(
+        panel_width / float(image.shape[1]),
+        panel_height / float(image.shape[0]),
+    )
+    resized_width = max(1, min(panel_width, int(round(image.shape[1] * scale))))
+    resized_height = max(
+        1, min(panel_height, int(round(image.shape[0] * scale)))
+    )
+    interpolation = (
+        cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    )
+    resized = cv2.resize(
+        image,
+        (resized_width, resized_height),
+        interpolation=interpolation,
+    )
+    panel = np.full(
+        (panel_height, panel_width, 3),
+        np.asarray(pad_value, dtype=image.dtype),
+        dtype=image.dtype,
+    )
+    offset_x = (panel_width - resized_width) // 2
+    offset_y = (panel_height - resized_height) // 2
+    panel[
+        offset_y:offset_y + resized_height,
+        offset_x:offset_x + resized_width,
+    ] = resized
+    return panel
+
+
 # Copied from https://github.com/concept-graphs/concept-graphs/     
 def vis_result_fast(
     image: np.ndarray, 

@@ -101,15 +101,20 @@ class VoxelSmokeSensor(BaseSensor):
             flame_glow_ksize=int(v.flame_glow_ksize),
             flame_glow_gain=float(v.flame_glow_gain),
             flame_smoke_passthrough=float(v.flame_smoke_passthrough),
+            flame_smoke_displacement=float(v.flame_smoke_displacement),
+            flame_surface_reveal=float(v.flame_surface_reveal),
+            flame_highlight_compression=float(
+                v.flame_highlight_compression
+            ),
             thermal_color_blend=float(v.thermal_color_blend),
             thermal_surface_start=float(v.thermal_surface_start),
             thermal_air_coupling=float(v.thermal_air_coupling),
             render_scale=float(v.render_scale),
-            flame_noise_strength=float(getattr(v, "flame_noise_strength", 0.55)),
-            flame_edge_break=float(getattr(v, "flame_edge_break", 0.8)),
-            flame_color_jitter=float(getattr(v, "flame_color_jitter", 0.25)),
+            flame_noise_strength=float(getattr(v, "flame_noise_strength", 0.75)),
+            flame_edge_break=float(getattr(v, "flame_edge_break", 1.05)),
+            flame_color_jitter=float(getattr(v, "flame_color_jitter", 0.32)),
             flame_time_speed=float(getattr(v, "flame_time_speed", 12.0)),
-            smoke_noise_strength=float(getattr(v, "smoke_noise_strength", 0.30)),
+            smoke_noise_strength=float(getattr(v, "smoke_noise_strength", 0.24)),
         )
 
     # ------------------------------------------------------------------

@@ -46,17 +46,25 @@ The active selector is `--nav_mode`:
 | Value | Current behavior without planning risk |
 | --- | --- |
 | `nearest` | Each robot selects its nearest frontier; sharing is allowed |
-| `co_ut` | Greedy cooperative assignment that avoids duplicate frontiers when possible |
+| `co_ut` | Each robot maximizes `frontier_size - cost_utility_lambda * robot_grid_distance` |
 | `fill` | Selects the frontier with the highest frontier score |
+| `random` | Reproducibly samples a long-term goal from the robot's reachable explored free-space component |
 | `gpt` | Sends separate candidate-map images to GPT-4o for assignment |
 
 Global replanning occurs every `--num_local_steps` navigation steps, default
 `25`.
 
-When `risk_source=sensed` or `oracle`, all four modes enter the common
-risk-aware frontier assignment path. Their names then select different
-utility weights and sharing behavior; they are no longer byte-for-byte the
-risk-blind algorithms. Report these rows as, for example,
+The entrypoints do not implement these policies directly. `main.py` and
+`main_vec.py` retain the replanning cadence and frontier detection, then pass a
+`GlobalPlannerContext` to the planner returned by
+`utils.global_planners.create_global_planner`. The five implementations live
+in `utils/global_planners/{nearest,co_ut,fill,random,gpt}.py`; this keeps benchmark
+labels and CLI flags stable while making each baseline independently testable.
+
+When `risk_source=sensed` or `oracle`, frontier-based modes enter the common
+risk-aware frontier assignment path. `random` instead samples from reachable
+explored free cells after removing hard-unsafe and above-threshold cells.
+These are no longer byte-for-byte the risk-blind algorithms. Report rows as, for example,
 `nearest+sensed-risk`, not simply `nearest`.
 
 ### 2.3 Local planner selectors
@@ -68,7 +76,7 @@ The active selector is `--local_planner`:
 | `fmm` | Implemented | Historical navmesh-first/FMM fallback when blind; risk-aware FMM when risk is available |
 | `astar` | Implemented | Grid A* with blind and risk-aware forms |
 | `rl` | Implemented but not benchmark-ready | Map-based PPO waypoint policy trained on randomized grids |
-| PointNav DD-PPO | Not integrated | Proposed standard pretrained RL local-control baseline |
+| `pointnav` | Implemented | Official pretrained PointNav DD-PPO frontier-local control; blind policy or policy plus external hard-hazard shield |
 
 The existing `rl` backend must not be described as Habitat PointNav. It uses
 an egocentric occupancy/goal crop and produces a grid waypoint. It is a useful
@@ -93,9 +101,19 @@ The prompt text still mentions frontier-direction images even though the
 active candidate builder supplies maps only. This must be reconciled before
 the prompt study.
 
-The API call also hard-codes `gpt-4o`; `--gpt_type` does not currently change
-the requested model. Model selection and exact request logging are required
-before publishing a VLM comparison.
+The API call still hard-codes `gpt-4o`; `--gpt_type` does not currently change
+the requested model. Frontier assignments now use a strict, request-specific
+JSON Schema (one required enum-valued key per robot plus `reason`) and a
+300-token completion budget. Every attempt appends a machine-readable JSONL
+record to `<dump_location>/logs/gpt/gpt_response_status.jsonl`, containing
+response/request IDs, returned model, finish reason, refusal, content state,
+usage and validation outcome. Stdout retains only the historical
+`gpt-4o response:` label and non-empty JSON body, not the status metadata.
+Refusals and content-filter terminations are explicit failures. Empty,
+truncated or invalid output is retried, and exhausted requests emit
+`[gpt-fallback]` before using `co_ut`; with planning risk this means the
+risk-aware `co_ut` assignment. Model selection and durable request/candidate
+image artifact capture are still required before publishing a VLM comparison.
 
 ### 2.5 Current FireWorld coverage
 
@@ -196,13 +214,18 @@ Compare:
 nearest
 co_ut
 fill
+random
 gpt
 ```
 
-Run all four on both datasets in `normal` and `fire-sensed`. Extract the
+Run all five on both datasets in `normal` and `fire-sensed`. Extract the
 matched normal subset by scene/episode when comparing against FireWorld;
 do not compare a 36-scene normal aggregate directly with a two-scene fire
 aggregate.
+
+Any `co_ut` result generated before this implementation change used the old
+nearest-unassigned behavior. Do not mix those artifacts with corrected
+Cost-Utility runs; start a new study ID or rerun the affected run IDs.
 
 ### 5.2 Local-planner block
 
@@ -225,10 +248,9 @@ pointnav-ddppo
 Keep the existing map-PPO `rl` row in supplementary experiments only after a
 converged checkpoint exists.
 
-### 5.3 PointNav DD-PPO adapter requirements
+### 5.3 PointNav DD-PPO adapter contract
 
-A pretrained PointNav policy cannot be dropped into the current local-planner
-factory without an adapter. The implementation must:
+The `--local_planner pointnav` adapter now:
 
 1. Convert the selected frontier grid/world position into the point-goal
    coordinate convention expected by the checkpoint.
@@ -239,8 +261,9 @@ factory without an adapter. The implementation must:
 5. Intercept PointNav `STOP`: it means the local frontier was reached and
    should trigger global replanning. It must not terminate the ObjectNav
    episode. Only the existing detected-object STOP path may end ObjectNav.
-6. Record checkpoint URL/source, SHA-256, training dataset, architecture, and
-   inference determinism.
+6. Records the official checkpoint URL/source, SHA-256, training dataset,
+   architecture, and inference determinism in
+   `docs/local_planner_baselines.md`.
 
 The pretrained policy is risk-blind. If a with-risk variant is required,
 label it explicitly as `pointnav-ddppo+shield`: keep the frozen policy and
@@ -388,8 +411,9 @@ and ablation row.
 
 ## 9. Unified output layout
 
-Current outputs are fragmented across `dump_location`, `fire_dump_dir`, and
-`risk_dump_dir`. The benchmark launcher should bind them under:
+Fire/risk/VLM outputs are still fragmented across `dump_location`,
+`fire_dump_dir`, and `risk_dump_dir`. The final all-condition launcher should
+bind them under:
 
 ```text
 outputs/benchmarks/<study_id>/
@@ -440,6 +464,20 @@ For storage control, save full fire dashboards and per-step PNGs only for a
 preregistered diagnostic subset. Do not duplicate large `timeline.npz` files
 inside every run; reference their absolute/relative path and hash.
 
+The implemented normal-scene launcher,
+`scripts/run_baseline_benchmarks.py`, currently covers the global/local
+planner blocks on `objectnav` and `person`. It writes
+`study_manifest.json`, `environment.json`, per-run command/manifest/status,
+streamed stdout, parsed aggregate metrics, navigation outputs, retry history,
+exact per-episode cumulative metric checkpoints, archived attempt stdout,
+and `reports/completeness.json`. Incomplete runs automatically resume from
+the highest valid checkpoint while preserving the original run identity. It
+requires the exact requested final
+episode marker (for example `---(200/200)`) before marking a run complete and
+resumes matching completed runs. Per-episode JSONL, resolved Hydra configs,
+VLM request capture, and FireWorld/risk artifact binding remain work for the
+all-condition launcher rather than being silently claimed by this script.
+
 ## 10. Execution order
 
 ### Phase 0: blocking infrastructure
@@ -448,9 +486,11 @@ inside every run; reference their absolute/relative path and hash.
    failure.
 2. Generate dataset/episode manifests.
 3. Add per-episode JSONL metrics while preserving the current Habitat SPL.
-4. Implement the unified launcher, run status, resume and completeness checks.
+4. Normal/person planner launcher, run status, resume and completeness checks:
+   implemented in `scripts/run_baseline_benchmarks.py`; extend it for
+   fire/risk/VLM artifacts before the full benchmark.
 5. Rebake and validate the missing medium Nfvxx8J5NCo timeline.
-6. Integrate and validate PointNav DD-PPO.
+6. Validate PointNav DD-PPO on the pilot episode manifest.
 
 ### Phase 1: pilot
 

@@ -10,10 +10,220 @@ plugged into the dashboard.
 """
 from __future__ import annotations
 
-from typing import Tuple
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
+
+
+def _format_axis_tick(value: float) -> str:
+    """Format physical tick values compactly for a small dashboard panel."""
+    if abs(value) < 5e-7:
+        value = 0.0
+    if np.isclose(value, round(value), atol=1e-6):
+        return f"{value:.0f}"
+    return f"{value:.1f}"
+
+
+def _put_vertical_text(
+    image: np.ndarray,
+    text: str,
+    *,
+    center_y: int,
+    x: int = 5,
+    font_scale: float = 0.48,
+    color: Tuple[int, int, int] = (225, 225, 225),
+) -> None:
+    """Draw a 90-degree counter-clockwise label on a BGR image."""
+    (text_w, text_h), baseline = cv2.getTextSize(
+        text, cv2.FONT_HERSHEY_SIMPLEX, font_scale, 1
+    )
+    patch = np.zeros(
+        (text_h + baseline + 8, text_w + 8, 3), dtype=np.uint8
+    )
+    cv2.putText(
+        patch,
+        text,
+        (4, text_h + 3),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        color,
+        1,
+        cv2.LINE_AA,
+    )
+    rotated = cv2.rotate(patch, cv2.ROTATE_90_COUNTERCLOCKWISE)
+    y = max(0, center_y - rotated.shape[0] // 2)
+    y2 = min(image.shape[0], y + rotated.shape[0])
+    x2 = min(image.shape[1], x + rotated.shape[1])
+    if y2 <= y or x2 <= x:
+        return
+    crop = rotated[: y2 - y, : x2 - x]
+    mask = np.any(crop != 0, axis=2)
+    target = image[y:y2, x:x2]
+    target[mask] = crop[mask]
+
+
+def add_metric_axes(
+    image: np.ndarray,
+    *,
+    x_label: str,
+    y_label: str,
+    x_limits: Tuple[float, float],
+    y_limits: Tuple[float, float],
+    plot_size: Optional[Tuple[int, int]] = None,
+    x_tick_count: int = 5,
+    y_tick_count: int = 5,
+) -> np.ndarray:
+    """Add labelled physical axes around a sensor preview.
+
+    ``x_limits`` are the values at the left and right image edges.
+    ``y_limits`` are the values at the top and bottom image edges.  This
+    explicit image-edge convention preserves the existing radar orientation:
+    range bin zero stays at the top of the range-angle heatmaps.
+
+    Args:
+        image: BGR/gray sensor preview.
+        x_label: Horizontal-axis label including physical units.
+        y_label: Vertical-axis label including physical units.
+        x_limits: Physical values at the left/right plot edges.
+        y_limits: Physical values at the top/bottom plot edges.
+        plot_size: Optional ``(width, height)`` used to make small heatmaps
+            readable before they enter the dashboard.
+    """
+    if image is None or image.size == 0:
+        raise ValueError("image must be a non-empty numpy array")
+    if x_tick_count < 2 or y_tick_count < 2:
+        raise ValueError("axis tick counts must be at least two")
+
+    if image.ndim == 2:
+        plot = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
+    elif image.ndim == 3 and image.shape[2] == 3:
+        plot = image.copy()
+    else:
+        raise ValueError("image must be gray or three-channel BGR")
+
+    if plot_size is not None:
+        plot_w, plot_h = int(plot_size[0]), int(plot_size[1])
+        if plot_w <= 0 or plot_h <= 0:
+            raise ValueError("plot_size dimensions must be positive")
+        plot = cv2.resize(
+            plot, (plot_w, plot_h), interpolation=cv2.INTER_NEAREST
+        )
+    else:
+        plot_h, plot_w = plot.shape[:2]
+
+    left_margin = 78
+    right_margin = 18
+    top_margin = 30
+    bottom_margin = 62
+    canvas = np.full(
+        (
+            top_margin + plot_h + bottom_margin,
+            left_margin + plot_w + right_margin,
+            3,
+        ),
+        10,
+        dtype=np.uint8,
+    )
+
+    x_positions = np.linspace(0, plot_w - 1, x_tick_count)
+    y_positions = np.linspace(0, plot_h - 1, y_tick_count)
+    grid_color = (60, 60, 60)
+    for x_pos in x_positions:
+        cv2.line(
+            plot,
+            (int(round(x_pos)), 0),
+            (int(round(x_pos)), plot_h - 1),
+            grid_color,
+            1,
+            cv2.LINE_AA,
+        )
+    for y_pos in y_positions:
+        cv2.line(
+            plot,
+            (0, int(round(y_pos))),
+            (plot_w - 1, int(round(y_pos))),
+            grid_color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    x0, y0 = left_margin, top_margin
+    canvas[y0 : y0 + plot_h, x0 : x0 + plot_w] = plot
+    axis_color = (205, 205, 205)
+    cv2.rectangle(
+        canvas,
+        (x0, y0),
+        (x0 + plot_w - 1, y0 + plot_h - 1),
+        axis_color,
+        1,
+    )
+
+    font = cv2.FONT_HERSHEY_SIMPLEX
+    tick_scale = 0.42
+    x_values = np.linspace(x_limits[0], x_limits[1], x_tick_count)
+    for x_pos, value in zip(x_positions, x_values):
+        x = x0 + int(round(x_pos))
+        cv2.line(
+            canvas,
+            (x, y0 + plot_h),
+            (x, y0 + plot_h + 5),
+            axis_color,
+            1,
+        )
+        text = _format_axis_tick(float(value))
+        (text_w, _), _ = cv2.getTextSize(text, font, tick_scale, 1)
+        cv2.putText(
+            canvas,
+            text,
+            (x - text_w // 2, y0 + plot_h + 20),
+            font,
+            tick_scale,
+            axis_color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    y_values = np.linspace(y_limits[0], y_limits[1], y_tick_count)
+    for y_pos, value in zip(y_positions, y_values):
+        y = y0 + int(round(y_pos))
+        cv2.line(canvas, (x0 - 5, y), (x0, y), axis_color, 1)
+        text = _format_axis_tick(float(value))
+        (text_w, text_h), _ = cv2.getTextSize(text, font, tick_scale, 1)
+        cv2.putText(
+            canvas,
+            text,
+            (x0 - text_w - 9, y + text_h // 2),
+            font,
+            tick_scale,
+            axis_color,
+            1,
+            cv2.LINE_AA,
+        )
+
+    label_scale = 0.48
+    (x_label_w, _), _ = cv2.getTextSize(x_label, font, label_scale, 1)
+    cv2.putText(
+        canvas,
+        x_label,
+        (
+            x0 + max(0, (plot_w - x_label_w) // 2),
+            canvas.shape[0] - 10,
+        ),
+        font,
+        label_scale,
+        (225, 225, 225),
+        1,
+        cv2.LINE_AA,
+    )
+    _put_vertical_text(
+        canvas,
+        y_label,
+        center_y=y0 + plot_h // 2,
+        x=5,
+        font_scale=label_scale,
+    )
+    return canvas
 
 
 def points_to_bev(

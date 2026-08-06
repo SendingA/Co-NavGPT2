@@ -421,7 +421,12 @@ def volumetric_composite_torch(
         )
 
         transmittance = np.ones((height, width), dtype=np.float32)
-        color_acc = np.zeros((height, width, 3), dtype=np.float32)
+        smoke_color_acc = np.zeros(
+            (height, width, 3), dtype=np.float32
+        )
+        flame_color_acc = np.zeros(
+            (height, width, 3), dtype=np.float32
+        )
         flame_seen = np.zeros((height, width), dtype=np.float32)
         temp_apparent = np.full(
             (height, width), float(ambient_c), dtype=np.float32
@@ -453,7 +458,12 @@ def volumetric_composite_torch(
             rays_per_chunk = max(1, max_points // n_steps)
 
             trans_hits = np.empty(hit_count, dtype=np.float32)
-            color_hits = np.empty((hit_count, 3), dtype=np.float32)
+            smoke_color_hits = np.empty(
+                (hit_count, 3), dtype=np.float32
+            )
+            flame_color_hits = np.empty(
+                (hit_count, 3), dtype=np.float32
+            )
             flame_hits = np.empty(hit_count, dtype=np.float32)
             temp_hits = np.empty(hit_count, dtype=np.float32)
 
@@ -512,6 +522,22 @@ def volumetric_composite_torch(
                     chunk_start[:, None, :] * (1.0 - ts[None, :, None])
                     + chunk_end[:, None, :] * ts[None, :, None]
                 )
+                ray_intensity_pattern = None
+                ray_color_pattern = None
+                if noise_strength > 0.0:
+                    ray_intensity_pattern = _fractal_noise(
+                        chunk_end,
+                        time_phase=noise_phase,
+                        seed=17,
+                        cache=cache,
+                    )
+                if color_jitter > 0.0:
+                    ray_color_pattern = _fractal_noise(
+                        chunk_end,
+                        time_phase=noise_phase * 0.7,
+                        seed=23,
+                        cache=cache,
+                    )
                 sampled = _sample_world_volume(
                     volume,
                     points,
@@ -550,19 +576,43 @@ def volumetric_composite_torch(
                         seed=1,
                         cache=cache,
                     )
+                    if ray_intensity_pattern is not None:
+                        intensity_pattern = torch.clamp(
+                            0.35 * intensity_pattern
+                            + 0.65 * ray_intensity_pattern[:, None],
+                            -1.0,
+                            1.0,
+                        )
                     flame_norm = torch.clamp(flame, 0.0, 1.0)
                     edge_weight = 4.0 * flame_norm * (1.0 - flame_norm)
-                    modulated = flame * (
-                        1.0
-                        + noise_strength * intensity_pattern
-                        + edge_break * edge_weight * intensity_pattern
+                    detail_weight = torch.clamp(
+                        noise_strength
+                        * (0.30 + 0.70 * edge_weight),
+                        0.0,
+                        0.95,
                     )
-                    # Matches the reference renderer for the common
-                    # one-chunk path. With tiled rendering the cap is local to
-                    # the tile, which only affects optional visual noise.
-                    flame = torch.minimum(
-                        torch.clamp(modulated, min=0.0),
-                        flame_norm.amax() * 1.2,
+                    density_texture = torch.clamp(
+                        0.55 + 0.95 * intensity_pattern,
+                        0.05,
+                        1.45,
+                    )
+                    edge_texture = torch.clamp(
+                        0.65 + edge_break * intensity_pattern,
+                        0.05,
+                        1.40,
+                    )
+                    core_detail = (
+                        (1.0 - detail_weight)
+                        + detail_weight * density_texture
+                    )
+                    silhouette_detail = (
+                        (1.0 - edge_weight)
+                        + edge_weight * edge_texture
+                    )
+                    flame = torch.clamp(
+                        flame * core_detail * silhouette_detail,
+                        0.0,
+                        1.2,
                     )
 
                 flame_used = torch.clamp(
@@ -575,6 +625,13 @@ def volumetric_composite_torch(
                         seed=5,
                         cache=cache,
                     )
+                    if ray_color_pattern is not None:
+                        color_pattern = torch.clamp(
+                            0.35 * color_pattern
+                            + 0.65 * ray_color_pattern[:, None],
+                            -1.0,
+                            1.0,
+                        )
                     lut_input = torch.clamp(
                         flame_used + color_jitter * color_pattern,
                         0.0,
@@ -583,12 +640,34 @@ def volumetric_composite_torch(
                 else:
                     lut_input = flame_used
 
+                displacement = float(
+                    np.clip(
+                        params.flame_smoke_displacement,
+                        0.0,
+                        1.0,
+                    )
+                )
+                flame_presence = torch.clamp(
+                    flame_used / 0.35, 0.0, 1.0
+                )
+                visible_smoke = smoke * (
+                    1.0 - displacement * flame_presence
+                )
+
                 step = chunk_step[:, None]
                 scene_step = torch.exp(
-                    -(smoke_k * smoke + flame_k * flame_used) * step
+                    -(
+                        smoke_k * visible_smoke
+                        + flame_k * flame_used
+                    )
+                    * step
                 )
                 flame_step = torch.exp(
-                    -(flame_smoke_k * smoke + flame_k * flame_used) * step
+                    -(
+                        flame_smoke_k * visible_smoke
+                        + flame_k * flame_used
+                    )
+                    * step
                 )
                 ones = torch.ones(
                     (finish - begin, 1),
@@ -613,11 +692,13 @@ def volumetric_composite_torch(
                 )
                 scatter = (
                     smoke_color[None, None, :]
-                    * (smoke * smoke_k * step)[..., None]
+                    * (visible_smoke * smoke_k * step)[..., None]
                 )
-                integrated_color = (
+                integrated_flame_color = (
                     flame_before[..., None] * emission
-                    + scene_before[..., None] * scatter
+                ).sum(dim=1)
+                integrated_smoke_color = (
+                    scene_before[..., None] * scatter
                 ).sum(dim=1)
 
                 excess = torch.clamp(
@@ -635,7 +716,12 @@ def volumetric_composite_torch(
                 trans_hits[begin:finish] = (
                     scene_step.prod(dim=1).cpu().numpy()
                 )
-                color_hits[begin:finish] = integrated_color.cpu().numpy()
+                smoke_color_hits[begin:finish] = (
+                    integrated_smoke_color.cpu().numpy()
+                )
+                flame_color_hits[begin:finish] = (
+                    integrated_flame_color.cpu().numpy()
+                )
                 flame_hits[begin:finish] = (
                     flame_used.amax(dim=1).cpu().numpy()
                 )
@@ -643,14 +729,16 @@ def volumetric_composite_torch(
 
             ray_hits_cpu = ray_hits.cpu().numpy()
             transmittance[ray_hits_cpu] = trans_hits
-            color_acc[ray_hits_cpu] = color_hits
+            smoke_color_acc[ray_hits_cpu] = smoke_color_hits
+            flame_color_acc[ray_hits_cpu] = flame_color_hits
             flame_seen[ray_hits_cpu] = flame_hits
             temp_apparent[ray_hits_cpu] = temp_hits
 
     return finalize_volumetric_outputs(
         rgb_clean=rgb_clean,
         transmittance=transmittance,
-        color_acc=color_acc,
+        smoke_color_acc=smoke_color_acc,
+        flame_color_acc=flame_color_acc,
         flame_seen=flame_seen,
         temp_apparent=temp_apparent,
         output_hw=(h_full, w_full),

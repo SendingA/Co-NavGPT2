@@ -18,6 +18,7 @@ import numpy as np
 from utils.fire_pipeline import step_fire_observation
 from utils.fire_sensors.sensors.voxel_smoke import VoxelSmokeSensor
 from utils.fire_sensors.suite import FireSensorSuite
+from utils.global_planners import low_risk_fallback_goal
 from utils.risk.runtime import RiskRuntime
 
 
@@ -117,12 +118,16 @@ class RiskPromptRegressionTests(unittest.TestCase):
                 num_agents=3,
             )
 
-    def test_main_selects_only_the_dedicated_risk_path(self) -> None:
+    def test_global_planner_selects_only_the_dedicated_risk_path(self) -> None:
         root = Path(__file__).resolve().parents[1]
         main_source = (root / "main.py").read_text(encoding="utf-8")
-        self.assertIn("chat_utils.risk_message_prepare(", main_source)
-        self.assertIn("system_prompt.risk_prompt,", main_source)
-        self.assertNotIn("system_prompt.risk_system_prompt", main_source)
+        gpt_source = (
+            root / "utils" / "global_planners" / "gpt.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("self._chat.risk_message_prepare(", gpt_source)
+        self.assertIn("self._prompts.risk_prompt,", gpt_source)
+        self.assertNotIn("risk_message_prepare(", main_source)
+        self.assertNotIn("risk_system_prompt", gpt_source)
 
 
 class SharedFireTimeTests(unittest.TestCase):
@@ -460,9 +465,6 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
 
 class LowRiskFallbackTests(unittest.TestCase):
     def test_fallback_prefers_low_risk_explored_and_non_hard_cell(self) -> None:
-        with mock.patch.object(sys, "argv", ["test_risk_integration"]):
-            main_module = importlib.import_module("main")
-
         shape = (9, 9)
         obstacle = np.zeros(shape, dtype=np.float32)
         explored = np.ones(shape, dtype=np.float32)
@@ -470,13 +472,13 @@ class LowRiskFallbackTests(unittest.TestCase):
         hard_unsafe = np.zeros(shape, dtype=bool)
         planning_risk[0, 0] = 0.01
         planning_risk[8, 8] = 0.20
-        selected = main_module._low_risk_fallback_goal(
+        selected = low_risk_fallback_goal(
             [4, 4], obstacle, explored, planning_risk, hard_unsafe
         )
         self.assertEqual(selected, [0, 0])
 
         hard_unsafe[0, 0] = True
-        selected_without_hard = main_module._low_risk_fallback_goal(
+        selected_without_hard = low_risk_fallback_goal(
             [4, 4], obstacle, explored, planning_risk, hard_unsafe
         )
         self.assertEqual(selected_without_hard, [8, 8])
@@ -490,7 +492,7 @@ class LowRiskFallbackTests(unittest.TestCase):
         planning_risk = np.full(larger, 0.4, dtype=np.float32)
         planning_risk[10, 18] = 0.0
         planning_risk[2, 2] = 0.1
-        selected_connected = main_module._low_risk_fallback_goal(
+        selected_connected = low_risk_fallback_goal(
             [10, 3],
             obstacle,
             explored,

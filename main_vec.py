@@ -17,14 +17,16 @@ from habitat.config.read_write import read_write
 
 from arguments import get_args, load_config, humanoid_kwargs, robot_model_kwargs
 from utils.shortest_path_follower import ShortestPathFollowerCompat
-from utils import chat_utils
-import system_prompt
 import utils.visualization as vu
 
 from agents.vlm_multi_agents import VLM_Agent
 from envs import RandomHumanoidWalker, RobotModelManager
 from utils.explored_map_utils import Global_Map_Proc
 from utils.fire_sensors import FireSensorSuite, FireSensorConfig
+from utils.global_planners import (
+    GlobalPlannerContext,
+    create_global_planner,
+)
 
 
 def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
@@ -62,6 +64,13 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
         agent.append(VLM_Agent(args, i, follower))
 
     map_process = Global_Map_Proc(args)
+    global_planner = create_global_planner(
+        args.nav_mode,
+        cost_utility_lambda=args.cost_utility_lambda,
+        random_seed=seed,
+        random_goal_min_distance_m=args.random_goal_min_distance_m,
+        map_resolution_cm=args.map_resolution,
+    )
 
     walker = RandomHumanoidWalker(
         sim=env.sim,
@@ -147,9 +156,11 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
         if fire_scene is not None:
             fire_scene.clock.start()
 
-        agent_state = env.sim.get_agent_state(0)
+        reset_agent_states = [
+            env.sim.get_agent_state(i) for i in range(num_agents)
+        ]
         for i in range(num_agents):
-            agent[i].reset(observations[i], agent_state)
+            agent[i].reset(observations[i], reset_agent_states[i])
             actions.append(0)
 
         count_steps = 0
@@ -202,9 +213,14 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                 point_sum, agent[0].camera_position[1], clean_diff
             )
 
+            pointnav_replan_requested = any(
+                bool(getattr(a, "pointnav_replan_requested", False))
+                for a in agent
+            )
             if (
                 agent[0].l_step % args.num_local_steps == args.num_local_steps - 1
                 or agent[0].l_step == 0
+                or pointnav_replan_requested
             ) and not found_goal:
                 goal_points.clear()
                 target_score, target_edge_map, target_point_list = (
@@ -230,128 +246,50 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                         map_process.Frontier_Det(threshold_point=8)
                     )
 
-                if args.nav_mode == "gpt":
-                    if len(target_point_list) > 0 and agent[0].l_step > 0:
-                        candidate_map_list = chat_utils.get_all_candidate_maps(
-                            target_edge_map, top_view_map, pose_pred
-                        )
-                        message = chat_utils.message_prepare(
-                            system_prompt.system_prompt,
-                            candidate_map_list,
-                            agent[i].goal_name,
-                        )
-                        goal_frontiers = chat_utils.chat_with_gpt4v(message)
-                        for i in range(num_agents):
-                            goal_points.append(
-                                target_point_list[
-                                    int(
-                                        goal_frontiers["robot_" + str(i)].split("_")[1]
-                                    )
-                                ]
-                            )
-                    else:
-                        for i in range(num_agents):
-                            action = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(action[0]), int(action[1])])
-
-                elif args.nav_mode == "nearest":
-                    if len(target_point_list) > 0:
-                        for i in range(num_agents):
-                            distances = [
-                                np.linalg.norm(
-                                    np.array(target_point_list[j])
-                                    - np.array(pose_pred[i][:2])
-                                )
-                                for j in range(len(target_point_list))
+                planner_result = global_planner.plan(
+                    GlobalPlannerContext(
+                        target_score=target_score,
+                        target_edge_map=target_edge_map,
+                        target_points=target_point_list,
+                        poses=pose_pred,
+                        agent_cells=[
+                            [
+                                int(a.current_grid_pose[0]),
+                                int(a.current_grid_pose[1]),
                             ]
-                            goal_points.append(
-                                target_point_list[np.argmin(distances)]
-                            )
-                    else:
-                        for i in range(num_agents):
-                            action = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(action[0]), int(action[1])])
+                            for a in agent
+                        ],
+                        obstacle_map=obstacle_map,
+                        explored_map=explored_map,
+                        top_view_map=top_view_map,
+                        goal_name=agent[0].goal_name,
+                        local_step=int(agent[0].l_step),
+                        navigation_step=int(agent[0].l_step),
+                        num_agents=num_agents,
+                        episode_index=count_episodes,
+                    )
+                )
+                goal_points.extend(planner_result.goal_points)
+                if (
+                    args.nav_mode == "gpt"
+                    and any(
+                        frontier_id is not None
+                        for frontier_id in (
+                            planner_result.frontier_assignments.values()
+                        )
+                    )
+                ):
+                    goal_frontiers = {
+                        f"robot_{robot_id}": f"frontier_{frontier_id}"
+                        for robot_id, frontier_id in (
+                            planner_result.frontier_assignments.items()
+                        )
+                        if frontier_id is not None
+                    }
 
-                elif args.nav_mode == "co_ut":
-                    if len(target_point_list) > 0:
-                        assigned_frontiers = set()
-                        for i in range(num_agents):
-                            best_idx = -1
-                            best_dist = float("inf")
-                            for j, frontier in enumerate(target_point_list):
-                                if j not in assigned_frontiers:
-                                    dist = np.linalg.norm(
-                                        np.array(frontier)
-                                        - np.array(pose_pred[i][:2])
-                                    )
-                                    if dist < best_dist:
-                                        best_dist = dist
-                                        best_idx = j
-                            if best_idx != -1:
-                                goal_points.append(target_point_list[best_idx])
-                                assigned_frontiers.add(best_idx)
-                            else:
-                                distances = [
-                                    np.linalg.norm(
-                                        np.array(target_point_list[j])
-                                        - np.array(pose_pred[i][:2])
-                                    )
-                                    for j in range(len(target_point_list))
-                                ]
-                                goal_points.append(
-                                    target_point_list[np.argmin(distances)]
-                                )
-                    else:
-                        for i in range(num_agents):
-                            action = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(action[0]), int(action[1])])
-
-                elif args.nav_mode == "fill":
-                    if len(target_point_list) > 0:
-                        for i in range(num_agents):
-                            best_idx = 0
-                            best_score = -1
-                            for j, frontier in enumerate(target_point_list):
-                                if target_score is not None and j < len(target_score):
-                                    score = target_score[j]
-                                else:
-                                    score = 1.0 / (
-                                        1.0
-                                        + np.linalg.norm(
-                                            np.array(frontier)
-                                            - np.array(pose_pred[i][:2])
-                                        )
-                                    )
-                                if score > best_score:
-                                    best_score = score
-                                    best_idx = j
-                            goal_points.append(target_point_list[best_idx])
-                    else:
-                        for i in range(num_agents):
-                            action = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(action[0]), int(action[1])])
-
-                else:
-                    for i in range(num_agents):
-                        if len(target_point_list) > 0:
-                            goal_points.append(
-                                target_point_list[
-                                    np.random.randint(0, len(target_point_list))
-                                ]
-                            )
-                        else:
-                            action = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(action[0]), int(action[1])])
+                if pointnav_replan_requested:
+                    for navigation_agent in agent:
+                        navigation_agent.acknowledge_pointnav_replan()
 
             goal_map = []
             for i in range(num_agents):
@@ -413,6 +351,16 @@ def _split_scenes_across_processes(scenes, num_processes):
 
 def main():
     args = get_args()
+    if int(getattr(args, "max_episodes", 0)) > 0:
+        raise RuntimeError(
+            "--max_episodes is supported by main.py only; the baseline "
+            "launcher intentionally uses the single-process entrypoint"
+        )
+    if (
+        int(getattr(args, "start_episode", 1)) != 1
+        or getattr(args, "resume_metrics_path", None) is not None
+    ):
+        raise RuntimeError("episode resume is supported by main.py only")
     if int(getattr(args, "risk_enabled", 0)):
         raise RuntimeError(
             "main_vec.py does not yet support RiskRuntime; run main.py for "

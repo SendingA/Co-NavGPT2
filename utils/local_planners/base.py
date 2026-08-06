@@ -77,6 +77,8 @@ class GridPlannerBase:
             self.base_traversible_mask & ~self.hard_unsafe_mask
         ).astype(np.float32)
         self.goal_map: Optional[np.ndarray] = None
+        self._goal_distance_cache: Optional[np.ndarray] = None
+        self.goal_distance_compute_count = 0
         self.last_path = []
 
     @staticmethod
@@ -115,6 +117,7 @@ class GridPlannerBase:
                 )
             )
         self.goal_map = goal == 1
+        self._goal_distance_cache = None
         # The caller filters unsafe dilated goals before this method.  Admit
         # those selected goal cells exactly as the historical FMM planner does.
         self.traversible[self.goal_map] = 1.0
@@ -210,10 +213,18 @@ class GridPlannerBase:
         return valid
 
     def goal_distance(self) -> np.ndarray:
-        if self.goal_map is None or not np.any(self.goal_map):
-            return np.full(self.traversible.shape, np.inf, dtype=np.float32)
-        return cv2.distanceTransform(
-            (~self.goal_map).astype(np.uint8),
-            cv2.DIST_L2,
-            cv2.DIST_MASK_PRECISE,
-        )
+        if self._goal_distance_cache is None:
+            self.goal_distance_compute_count += 1
+            if self.goal_map is None or not np.any(self.goal_map):
+                self._goal_distance_cache = np.full(
+                    self.traversible.shape,
+                    np.inf,
+                    dtype=np.float32,
+                )
+            else:
+                self._goal_distance_cache = cv2.distanceTransform(
+                    (~self.goal_map).astype(np.uint8),
+                    cv2.DIST_L2,
+                    cv2.DIST_MASK_PRECISE,
+                )
+        return self._goal_distance_cache

@@ -15,9 +15,17 @@ from habitat import Env
 
 # Co-NavGPT2 modules
 from utils.shortest_path_follower import ShortestPathFollowerCompat
-from utils import chat_utils
-import system_prompt
 from utils.explored_map_utils import Global_Map_Proc
+from utils.global_planners import (
+    GlobalPlannerContext,
+    RiskPlanningContext,
+    create_global_planner,
+)
+from utils.evaluation_resume import (
+    advance_episode_iterator,
+    load_metric_resume,
+    write_metric_resume,
+)
 
 from agents.vlm_agents import VLM_Agent
 import utils.visualization as vu
@@ -30,7 +38,6 @@ from utils.person_objectnav import (
     refresh_simulator_observations,
 )
 
-import cv2
 import open3d as o3d
 import open3d.visualization.gui as gui
 
@@ -42,114 +49,6 @@ warnings.filterwarnings("ignore", category=UserWarning, module="torch.nn.functio
 
 def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
-
-
-def _grid_line_cells(start, goal, shape) -> List[List[int]]:
-    """Return a clipped one-cell-wide route between two grid positions."""
-    canvas = np.zeros(shape, dtype=np.uint8)
-    start_row = int(np.clip(round(float(start[0])), 0, shape[0] - 1))
-    start_col = int(np.clip(round(float(start[1])), 0, shape[1] - 1))
-    goal_row = int(np.clip(round(float(goal[0])), 0, shape[0] - 1))
-    goal_col = int(np.clip(round(float(goal[1])), 0, shape[1] - 1))
-    cv2.line(
-        canvas,
-        (start_col, start_row),
-        (goal_col, goal_row),
-        color=1,
-        thickness=1,
-    )
-    return np.argwhere(canvas > 0).astype(int).tolist()
-
-
-def _low_risk_fallback_goal(
-    agent_cell,
-    obstacle_map,
-    explored_map,
-    planning_risk,
-    hard_unsafe,
-) -> List[int]:
-    """Select a nearby explored, navigable low-risk safety waypoint."""
-    shape = np.asarray(planning_risk).shape
-    obstacle = cv2.dilate(
-        (np.asarray(obstacle_map) > 0.5).astype(np.uint8),
-        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
-    ).astype(bool)
-    explored = np.asarray(explored_map) > 0.0
-    hard = np.asarray(hard_unsafe, dtype=bool)
-    start = np.asarray(agent_cell[:2], dtype=np.float64)
-    start_cell = (
-        int(np.clip(round(start[0]), 0, shape[0] - 1)),
-        int(np.clip(round(start[1]), 0, shape[1] - 1)),
-    )
-    free = ~obstacle & ~hard
-    if not free.any():
-        return [
-            start_cell[0],
-            start_cell[1],
-        ]
-
-    seed = start_cell
-    if not free[seed]:
-        free_cells = np.argwhere(free)
-        seed = tuple(free_cells[int(np.argmin(
-            np.linalg.norm(free_cells - start[None, :], axis=1)
-        ))])
-    _, labels = cv2.connectedComponents(free.astype(np.uint8), connectivity=8)
-    reachable = labels == labels[seed]
-    candidates = explored & reachable
-    if not candidates.any():
-        candidates = reachable
-
-    cells = np.argwhere(candidates)
-    distances = np.linalg.norm(cells - start[None, :], axis=1)
-    # Prefer an actual waypoint over the current cell when one is available.
-    nontrivial = distances >= 4.0
-    if nontrivial.any():
-        cells = cells[nontrivial]
-        distances = distances[nontrivial]
-    risk = np.asarray(planning_risk, dtype=np.float32)[cells[:, 0], cells[:, 1]]
-    distance_scale = max(float(distances.max()), 1.0)
-    score = risk + 0.08 * distances / distance_scale
-    best = cells[int(np.argmin(score))]
-    return [int(best[0]), int(best[1])]
-
-
-def _risk_utility_weights(nav_mode: str, args):
-    """Map legacy frontier policies onto a common safety-aware utility."""
-    from utils.risk.frontier import UtilityWeights
-
-    risk_weight = float(getattr(args, "risk_frontier_weight", 2.0))
-    if nav_mode == "nearest":
-        return UtilityWeights(
-            information_gain=0.0,
-            distance=1.0,
-            risk=risk_weight,
-            uncertainty=0.5,
-            redundancy=0.0,
-        )
-    if nav_mode == "co_ut":
-        return UtilityWeights(
-            information_gain=0.15,
-            distance=0.8,
-            risk=risk_weight,
-            uncertainty=0.5,
-            redundancy=1.0,
-        )
-    if nav_mode == "fill":
-        return UtilityWeights(
-            information_gain=1.0,
-            distance=0.25,
-            risk=risk_weight,
-            uncertainty=0.5,
-            redundancy=0.75,
-        )
-    return UtilityWeights(
-        information_gain=1.0,
-        distance=0.35,
-        risk=risk_weight,
-        uncertainty=0.5,
-        redundancy=0.75,
-    )
 
 
 def _flatten_risk_metrics(summary: Dict) -> Dict[str, float]:
@@ -261,8 +160,67 @@ def main(args, send_queue, receive_queue):
     # Environment + agents (robot navigation policies)
     # ------------------------------------------------------------------
     env = Env(config=config)
-    num_episodes = env.number_of_episodes
+    available_episodes = int(env.number_of_episodes)
+    episode_limit = int(getattr(args, "max_episodes", 0))
+    if episode_limit < 0:
+        raise ValueError("--max_episodes must be non-negative")
+    num_episodes = (
+        min(available_episodes, episode_limit)
+        if episode_limit > 0
+        else available_episodes
+    )
     assert num_episodes > 0, "num_episodes should be greater than 0"
+    start_episode = int(getattr(args, "start_episode", 1))
+    if start_episode < 1 or start_episode > num_episodes:
+        raise ValueError(
+            "--start_episode must be between 1 and the planned episode count"
+        )
+    completed_before = start_episode - 1
+    metric_precision = "exact"
+    resume_state = None
+    if completed_before:
+        resume_path = getattr(args, "resume_metrics_path", None)
+        if not resume_path:
+            raise ValueError(
+                "--start_episode above 1 requires --resume_metrics_path"
+            )
+        resume_state = load_metric_resume(resume_path)
+        if resume_state.episodes_completed != completed_before:
+            raise ValueError(
+                "resume metrics completed count does not match "
+                "--start_episode"
+            )
+        if resume_state.episodes_planned != num_episodes:
+            raise ValueError(
+                "resume metrics planned count does not match "
+                "--max_episodes"
+            )
+        agg_metrics.update(resume_state.metric_sums)
+        metric_precision = resume_state.precision
+    print(
+        "[evaluation] "
+        f"episodes={num_episodes}/{available_episodes} "
+        f"(max_episodes={episode_limit}, start_episode={start_episode})"
+    )
+    if completed_before:
+        last_completed_episode = advance_episode_iterator(
+            env,
+            completed_before,
+        )
+        if (
+            resume_state.last_episode_id is not None
+            and str(last_completed_episode.episode_id)
+            != resume_state.last_episode_id
+        ):
+            raise ValueError(
+                "resume episode order does not match the current dataset"
+            )
+        print(
+            "[evaluation] resuming after "
+            f"{completed_before} episodes from "
+            f"{args.resume_metrics_path} "
+            f"(precision={metric_precision})"
+        )
 
     num_agents = int(config.conav.num_robots)
     agent = []
@@ -271,6 +229,13 @@ def main(args, send_queue, receive_queue):
         agent.append(VLM_Agent(args, i, follower, receive_queue))
 
     map_process = Global_Map_Proc(args)
+    global_planner = create_global_planner(
+        args.nav_mode,
+        cost_utility_lambda=args.cost_utility_lambda,
+        random_seed=args.seed,
+        random_goal_min_distance_m=args.random_goal_min_distance_m,
+        map_resolution_cm=args.map_resolution,
+    )
 
     # ------------------------------------------------------------------
     # Humanoid pedestrians + visible robot URDF models (Habitat 3 only)
@@ -356,7 +321,7 @@ def main(args, send_queue, receive_queue):
     # ------------------------------------------------------------------
     # Episode loop
     # ------------------------------------------------------------------
-    count_episodes = 0
+    count_episodes = completed_before
     goal_points = []
     target_edge_map = None
     target_score = None
@@ -398,10 +363,12 @@ def main(args, send_queue, receive_queue):
         if fire_scene is not None:
             fire_scene.clock.start()
 
-        agent_state = env.sim.get_agent_state(0)
+        reset_agent_states = [
+            env.sim.get_agent_state(i) for i in range(num_agents)
+        ]
         actions = []
         for i in range(num_agents):
-            agent[i].reset(observations[i], agent_state)
+            agent[i].reset(observations[i], reset_agent_states[i])
             actions.append(0)
         # A detected object makes the frontier branch intentionally skip on
         # the first frame.  Keep a valid placeholder so act() never indexes an
@@ -518,256 +485,73 @@ def main(args, send_queue, receive_queue):
                     )
 
             # ---------- Global planner (frontier assignment) ----------
-            if (agent[0].l_step % args.num_local_steps == args.num_local_steps - 1
-                    or agent[0].l_step == 0) and not found_goal:
+            pointnav_replan_requested = any(
+                bool(getattr(a, "pointnav_replan_requested", False))
+                for a in agent
+            )
+            if (
+                agent[0].l_step % args.num_local_steps
+                == args.num_local_steps - 1
+                or agent[0].l_step == 0
+                or pointnav_replan_requested
+            ) and not found_goal:
                 goal_points.clear()
                 target_score, target_edge_map, target_point_list = (
                     map_process.Frontier_Det(threshold_point=8)
                 )
 
+                planner_risk = None
                 if (
                     risk_runtime is not None
                     and risk_runtime.planning_enabled
                     and risk_layers is not None
                     and planning_risk is not None
                 ):
-                    from utils.risk.frontier import (
-                        SeverityThresholds,
-                        assign_frontiers,
-                        build_frontier_risk_reports,
-                        guard_frontier_assignments,
-                        risk_context_payload,
-                    )
-
-                    risk_agent_cells = [
-                        [int(a.current_grid_pose[0]), int(a.current_grid_pose[1])]
-                        for a in agent
-                    ]
-                    route_cells = []
-                    for frontier in target_point_list:
-                        nearest_cell = min(
-                            risk_agent_cells,
-                            key=lambda cell: np.linalg.norm(
-                                np.asarray(cell) - np.asarray(frontier)
-                            ),
-                        )
-                        route_cells.append(
-                            _grid_line_cells(
-                                nearest_cell, frontier, planning_risk.shape
-                            )
-                        )
-
-                    danger_threshold = float(risk_config.danger_threshold)
-                    safe_threshold = min(0.25, danger_threshold)
-                    moderate_threshold = max(
-                        safe_threshold, danger_threshold
-                    )
-                    hard_threshold = float(np.clip(
-                        args.risk_hard_frontier_threshold,
-                        moderate_threshold,
-                        1.0,
-                    ))
-                    thresholds = SeverityThresholds(
-                        safe_max=safe_threshold,
-                        moderate_max=moderate_threshold,
-                        hard_max=hard_threshold,
-                    )
-                    risk_frontier_reports = build_frontier_risk_reports(
-                        target_edge_map,
-                        planning_risk,
-                        risk_layers.confidence,
-                        hard_unsafe_map=risk_layers.hard_unsafe,
-                        frontier_points=target_point_list,
-                        route_cells=route_cells,
-                        route_is_proxy=True,
-                        thresholds=thresholds,
-                    )
-                    risk_frontier_computed_step = navigation_step
-                    deterministic_assignments = assign_frontiers(
-                        risk_agent_cells,
-                        risk_frontier_reports,
-                        information_gain=target_score,
-                        weights=_risk_utility_weights(args.nav_mode, args),
-                        hard_risk_threshold=hard_threshold,
-                        allow_shared=(
-                            args.nav_mode != "co_ut"
-                            or len(risk_frontier_reports) < num_agents
+                    planner_risk = RiskPlanningContext(
+                        planning_risk=planning_risk,
+                        confidence=risk_layers.confidence,
+                        hard_unsafe=risk_layers.hard_unsafe,
+                        danger_threshold=float(risk_config.danger_threshold),
+                        hard_frontier_threshold=float(
+                            args.risk_hard_frontier_threshold
                         ),
-                        redundancy_radius_cells=(
-                            1.0 / (float(args.map_resolution) / 100.0)
-                        ),
+                        frontier_weight=float(args.risk_frontier_weight),
+                        map_resolution_cm=float(args.map_resolution),
                     )
 
-                    final_assignments = deterministic_assignments
-                    if (
-                        args.nav_mode == "gpt"
-                        and len(target_point_list) > 0
-                        and agent[0].l_step > 0
-                    ):
-                        candidate_map_list = chat_utils.get_all_candidate_maps(
-                            target_edge_map, top_view_map, pose_pred
-                        )
-                        message = chat_utils.risk_message_prepare(
-                            system_prompt.risk_prompt,
-                            candidate_map_list,
-                            agent[0].goal_name,
-                            risk_context=risk_context_payload(
-                                risk_frontier_reports
-                            ),
-                            num_agents=num_agents,
-                        )
-                        raw_assignments = chat_utils.chat_with_gpt4v(message)
-                        guarded = guard_frontier_assignments(
-                            raw_assignments,
-                            risk_frontier_reports,
-                            fallback_assignments=deterministic_assignments,
-                            expected_robot_ids=range(num_agents),
-                            hard_risk_threshold=hard_threshold,
-                        )
-                        final_assignments = guarded.assignments
-                        if guarded.rejected:
-                            logging.warning(
-                                "risk guard replaced VLM frontier choices: %s",
-                                guarded.rejected,
-                            )
-
-                    for i in range(num_agents):
-                        frontier_id = final_assignments.get(i)
-                        if (
-                            frontier_id is not None
-                            and 0 <= int(frontier_id) < len(target_point_list)
-                        ):
-                            goal_points.append(
-                                target_point_list[int(frontier_id)]
-                            )
-                        else:
-                            goal_points.append(
-                                _low_risk_fallback_goal(
-                                    risk_agent_cells[i],
-                                    obstacle_map,
-                                    explored_map,
-                                    planning_risk,
-                                    risk_layers.hard_unsafe,
-                                )
-                            )
-
-                elif args.nav_mode == "gpt":
-                    if len(target_point_list) > 0 and agent[0].l_step > 0:
-                        candidate_map_list = chat_utils.get_all_candidate_maps(
-                            target_edge_map, top_view_map, pose_pred
-                        )
-                        message = chat_utils.message_prepare(
-                            system_prompt.system_prompt,
-                            candidate_map_list,
-                            agent[i].goal_name,
-                            num_agents=num_agents,
-                        )
-                        goal_frontiers = chat_utils.chat_with_gpt4v(message)
-                        for i in range(num_agents):
-                            goal_points.append(
-                                target_point_list[
-                                    int(goal_frontiers["robot_" + str(i)].split("_")[1])
-                                ]
-                            )
-                    else:
-                        for i in range(num_agents):
-                            act_rand = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(act_rand[0]), int(act_rand[1])])
-
-                elif args.nav_mode == "nearest":
-                    if len(target_point_list) > 0:
-                        for i in range(num_agents):
-                            distances = [
-                                np.linalg.norm(
-                                    np.array(target_point_list[j]) - np.array(pose_pred[i][:2])
-                                )
-                                for j in range(len(target_point_list))
+                planner_result = global_planner.plan(
+                    GlobalPlannerContext(
+                        target_score=target_score,
+                        target_edge_map=target_edge_map,
+                        target_points=target_point_list,
+                        poses=pose_pred,
+                        agent_cells=[
+                            [
+                                int(a.current_grid_pose[0]),
+                                int(a.current_grid_pose[1]),
                             ]
-                            goal_points.append(target_point_list[np.argmin(distances)])
-                    else:
-                        for i in range(num_agents):
-                            act_rand = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(act_rand[0]), int(act_rand[1])])
+                            for a in agent
+                        ],
+                        obstacle_map=obstacle_map,
+                        explored_map=explored_map,
+                        top_view_map=top_view_map,
+                        goal_name=agent[0].goal_name,
+                        local_step=int(agent[0].l_step),
+                        navigation_step=navigation_step,
+                        num_agents=num_agents,
+                        risk=planner_risk,
+                        episode_index=count_episodes,
+                    )
+                )
+                goal_points.extend(planner_result.goal_points)
+                risk_frontier_reports = planner_result.frontier_reports
+                risk_frontier_computed_step = (
+                    planner_result.frontier_computed_step
+                )
 
-                elif args.nav_mode == "co_ut":
-                    if len(target_point_list) > 0:
-                        assigned_frontiers = set()
-                        for i in range(num_agents):
-                            best_idx = -1
-                            best_dist = float("inf")
-                            for j, frontier in enumerate(target_point_list):
-                                if j not in assigned_frontiers:
-                                    dist = np.linalg.norm(
-                                        np.array(frontier) - np.array(pose_pred[i][:2])
-                                    )
-                                    if dist < best_dist:
-                                        best_dist = dist
-                                        best_idx = j
-                            if best_idx != -1:
-                                goal_points.append(target_point_list[best_idx])
-                                assigned_frontiers.add(best_idx)
-                            else:
-                                distances = [
-                                    np.linalg.norm(
-                                        np.array(target_point_list[j])
-                                        - np.array(pose_pred[i][:2])
-                                    )
-                                    for j in range(len(target_point_list))
-                                ]
-                                goal_points.append(
-                                    target_point_list[np.argmin(distances)]
-                                )
-                    else:
-                        for i in range(num_agents):
-                            act_rand = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(act_rand[0]), int(act_rand[1])])
-
-                elif args.nav_mode == "fill":
-                    if len(target_point_list) > 0:
-                        for i in range(num_agents):
-                            best_idx = 0
-                            best_score = -1
-                            for j, frontier in enumerate(target_point_list):
-                                if target_score is not None and j < len(target_score):
-                                    score = target_score[j]
-                                else:
-                                    score = 1.0 / (
-                                        1.0
-                                        + np.linalg.norm(
-                                            np.array(frontier)
-                                            - np.array(pose_pred[i][:2])
-                                        )
-                                    )
-                                if score > best_score:
-                                    best_score = score
-                                    best_idx = j
-                            goal_points.append(target_point_list[best_idx])
-                    else:
-                        for i in range(num_agents):
-                            act_rand = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(act_rand[0]), int(act_rand[1])])
-
-                else:
-                    for i in range(num_agents):
-                        if len(target_point_list) > 0:
-                            goal_points.append(
-                                target_point_list[
-                                    np.random.randint(0, len(target_point_list))
-                                ]
-                            )
-                        else:
-                            act_rand = np.random.rand(1, 2).squeeze() * (
-                                obstacle_map.shape[0] - 1
-                            )
-                            goal_points.append([int(act_rand[0]), int(act_rand[1])])
+                if pointnav_replan_requested:
+                    for navigation_agent in agent:
+                        navigation_agent.acknowledge_pointnav_replan()
 
             if risk_runtime is not None:
                 risk_runtime.save_step(
@@ -904,6 +688,20 @@ def main(args, send_queue, receive_queue):
                 for k, v in agg_metrics.items()
             )
             + " ---({:.0f}/{:.0f})".format(count_episodes, num_episodes)
+        )
+        current_episode = env.current_episode
+        write_metric_resume(
+            os.path.join(
+                args.dump_location,
+                "metrics",
+                "resume_state.json",
+            ),
+            episodes_completed=count_episodes,
+            episodes_planned=num_episodes,
+            metric_sums=agg_metrics,
+            precision=metric_precision,
+            last_episode_id=getattr(current_episode, "episode_id", None),
+            last_scene_id=getattr(current_episode, "scene_id", None),
         )
         print(log)
         logging.info(log)

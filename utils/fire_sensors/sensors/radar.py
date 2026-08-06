@@ -31,7 +31,7 @@ import cv2
 import numpy as np
 
 from .base import BaseSensor
-from ..bev import points_to_bev, points_to_range_elevation
+from ..bev import add_metric_axes, points_to_bev, points_to_range_elevation
 
 
 # ---------------------------------------------------------------------------
@@ -125,7 +125,16 @@ class RadarSensor(BaseSensor):
             heat_az = np.clip(heat_az, 0.0, 1.0)
 
         u8_az = (heat_az * 255).astype(np.uint8)
-        image_az = cv2.applyColorMap(u8_az, cv2.COLORMAP_INFERNO)
+        image_az_raw = cv2.applyColorMap(u8_az, cv2.COLORMAP_INFERNO)
+        image_az = add_metric_axes(
+            image_az_raw,
+            x_label="Azimuth [deg]",
+            y_label="Range [m]",
+            x_limits=(-rcfg.az_fov_deg, rcfg.az_fov_deg),
+            # Range bins are stored from near (top) to far (bottom).
+            y_limits=(0.0, rcfg.max_range_m),
+            plot_size=(rcfg.bev_size_px, rcfg.bev_size_px),
+        )
 
         # ---------- 2) generate point cloud ----------
         if rcfg.mode == "raw":
@@ -166,21 +175,39 @@ class RadarSensor(BaseSensor):
                     pts3d = pts3d[idx]
 
         # ---------- 3) range-elevation heatmap from 3D points ----------
-        image_el = points_to_range_elevation(
+        image_el_raw = points_to_range_elevation(
             pts3d,
             range_bins=rcfg.range_bins,
             elev_bins=max(32, rcfg.az_bins),
             max_range_m=rcfg.max_range_m,
             elev_fov_deg=rcfg.elev_fov_deg,
         )
+        image_el = add_metric_axes(
+            image_el_raw,
+            x_label="Elevation [deg]",
+            y_label="Range [m]",
+            x_limits=(-rcfg.elev_fov_deg, rcfg.elev_fov_deg),
+            y_limits=(0.0, rcfg.max_range_m),
+            # Match the very wide full-width dashboard row so labels are not
+            # stretched horizontally by the final compositor.
+            plot_size=(rcfg.bev_size_px * 6, rcfg.bev_size_px // 2),
+        )
 
         # ---------- 4) BEV preview ----------
-        image_bev = points_to_bev(
+        image_bev_raw = points_to_bev(
             pts3d,
             size=rcfg.bev_size_px,
             extent_m=rcfg.max_range_m,
             z_range=(-1.0, 2.0),
             title=f"Radar 3D  {len(pts3d)} pts",
+        )
+        image_bev = add_metric_axes(
+            image_bev_raw,
+            x_label="Lateral Y [m]  (left +)",
+            y_label="Forward X [m]",
+            # Pixel-left is sensor-left (+Y); pixel-top is forward (+X).
+            x_limits=(rcfg.max_range_m, -rcfg.max_range_m),
+            y_limits=(rcfg.max_range_m, -rcfg.max_range_m),
         )
 
         return {

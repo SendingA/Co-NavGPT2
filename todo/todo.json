@@ -1,7 +1,7 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-07-28T13:55:03-04:00",
+    "updated_at": "2026-08-06T13:58:46-04:00",
     "owner": "copilot"
   },
   "items": [
@@ -2036,6 +2036,1849 @@
         "summary": "All 7 new Torch renderer tests pass, including physical-output parity, procedural noise, tiling, native-frame reuse, two-agent cache sharing, CLI wiring and CUDA fallback. Thermal, propagation, template and fire-sensor smoke tests pass. The full suite passes 98/99; only the pre-existing T252 risk-prompt wording regression fails. Syntax, CLI help, JSON and whitespace checks pass. Actual CUDA FPS/VRAM validation could not run because the current shell exposes no NVIDIA driver or CUDA device."
       },
       "last_updated": "2026-07-28T13:55:03-04:00"
+    },
+    {
+      "id": "T270",
+      "title": "Audit FireWorld ignition-count generation",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the intensity presets, four template implementations, planner CLI, deterministic plan identity and propagation scheduling semantics are traced before adding an override",
+      "notes": "The legacy preset controls total scheduled ignitions, while only the primary source starts at t=0. The new num_ignitions contract is intentionally different: it controls the number of initial t=0 sources, and each initial source owns a delayed local secondary cluster.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/fire_world/templates.py, planner.py, propagation.py and scripts/test_fire_planner.py",
+          "build all template/intensity combinations for Nfvxx8J5NCo with seed 7"
+        ],
+        "summary": "Verified the current requested ranges, delayed-secondary behavior, candidate filtering and all build_plan/plan_id/write_plan call sites."
+      },
+      "last_updated": "2026-07-29T11:53:34-04:00"
+    },
+    {
+      "id": "T271",
+      "title": "Add exact initial ignition-count planner override",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T270"],
+      "acceptance": "build_plan, write_plan and the planner CLI accept an optional positive num_ignitions value; omitted values preserve existing behavior, while explicit values produce exactly that many distinct initial ignition objects at t=0 or fail clearly",
+      "notes": "num_ignitions selects exactly N distinct initial template objects and marks all of them as initial sources at t=0. The interim omitted-flag compatibility behavior is superseded by T275 after the user explicitly requested removal of legacy mode.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count -v"
+        ],
+        "summary": "Seven focused tests confirm the exact initial count, all initial times at zero, default-mode compatibility and explicit failures for invalid or unavailable initial counts."
+      },
+      "last_updated": "2026-07-29T12:00:14-04:00"
+    },
+    {
+      "id": "T272",
+      "title": "Make explicit initial ignition count reproducible",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T271", "T274"],
+      "acceptance": "the requested initial count is recorded unambiguously in plan metadata and contributes to plan_id without changing legacy plan IDs when the override is omitted",
+      "notes": "Explicit mode records num_initial_ignitions_requested and ignition_cluster_version. The interim legacy-ID compatibility requirement is superseded by T276 because clustered generation now becomes the default and requires a template version bump.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count.FireIgnitionCountTests.test_count_is_deterministic_and_part_of_plan_id -v",
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count.FireIgnitionCountTests.test_omitted_override_preserves_legacy_plan_identity_and_schema -v"
+        ],
+        "summary": "Repeated explicit requests are byte-equivalent, different N values get different IDs, the clustered semantic version is hashed, and omitted mode preserves its legacy SHA1 input and fields."
+      },
+      "last_updated": "2026-07-29T12:01:29-04:00"
+    },
+    {
+      "id": "T273",
+      "title": "Test and document ignition-count override",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T271", "T272"],
+      "acceptance": "tests cover clustered defaults, exact t=0 initial counts, per-initial nearest secondary clusters, no duplicate objects, template delays, shortages, deterministic IDs and CLI output; documentation gives generation and timeline rebake commands",
+      "notes": "Seven focused ignition tests pass. The planner smoke script now validates every secondary against its own parent floor and retains the all-initial same-floor check only for multi_origin. Its round-trip plan is written under a temporary directory so validation leaves no scenes/ artifact.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count tests.test_fire_template_semantics tests.test_fire_propagation -v",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 python -m utils.fire_world.planner --scene Nfvxx8J5NCo --fire_type bedroom_textile --intensity severe --seed 7 --num_ignitions 4 --print_only",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 python -m py_compile utils/fire_world/templates.py utils/fire_world/planner.py tests/test_fire_ignition_count.py tests/test_fire_template_semantics.py scripts/test_fire_planner.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 15 focused tests, planner smoke, CLI generation, syntax, JSON and whitespace validation pass. The full suite passes 106/107; only the pre-existing T252 risk-prompt wording regression fails because risk_prompt lacks the unrelated literal 'global top-view'."
+      },
+      "last_updated": "2026-07-29T12:16:26-04:00"
+    },
+    {
+      "id": "T274",
+      "title": "Attach delayed nearest secondary clusters",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T270"],
+      "acceptance": "each explicit initial source selects a deterministic random count of one or two nearest eligible same-floor secondary objects, no object is reused, and every secondary is scheduled from the selected intensity template delay",
+      "notes": "Each initial source draws a deterministic random target count of one or two children. A nearest-first bipartite matching reserves one unique child per initial before optional second children are added. Secondary entries record parent_object_id and secondary_rank; shortages fail clearly.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count.FireIgnitionCountTests.test_secondaries_are_nearest_and_use_template_delay_batches -v",
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count.FireIgnitionCountTests.test_invalid_initial_and_secondary_shortages_fail_clearly -v"
+        ],
+        "summary": "Synthetic two-cluster tests prove nearest-object ordering, one-to-two children per parent, unique object use, parent links and per-rank template delay windows."
+      },
+      "last_updated": "2026-07-29T12:00:14-04:00"
+    },
+    {
+      "id": "T275",
+      "title": "Remove the legacy ignition-generation mode",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T271", "T274"],
+      "acceptance": "build_plan always generates t=0 initial-source clusters; an omitted num_ignitions draws the initial count from the intensity preset, while an explicit value uses exactly N; no planner branch invokes the old one-primary generator",
+      "notes": "The four one-primary generator functions were removed. build_plan and the TEMPLATES registry now both use clustered generation exclusively. Omitted counts draw from an availability-capped intensity range; multi_origin uses at least two initial sources.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count tests.test_fire_template_semantics tests.test_fire_propagation -v",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "build default plans for both installed inventories, all four templates, all three intensities and seeds 0-19"
+        ],
+        "summary": "All 15 focused tests and the planner smoke script pass. Clustered-only default generation completed 480/480 scene-template-intensity-seed combinations without failure."
+      },
+      "last_updated": "2026-07-29T12:12:06-04:00"
+    },
+    {
+      "id": "T276",
+      "title": "Version and document clustered-only FireWorld plans",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T275"],
+      "acceptance": "the template version and plan IDs change for the new default semantics, plans always record actual initial count and cluster version, explicit requests remain distinguishable, and tests/docs contain no legacy compatibility claim",
+      "notes": "Set PLAN_SCHEMA_VERSION=2. TEMPLATE_VERSION was initially 3 for clustered-only generation and is now 4 after T278 compact-flame tuning. Every new plan records num_initial_ignitions and ignition_cluster_version=1; explicit requests also record num_initial_ignitions_requested.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "generate Nfvxx8J5NCo bedroom_textile/severe/seed=7 with and without num_ignitions=4",
+          "verify template-v4 explicit plan_id=6166b6e4e1da and default plan_id=4876f3d4d3fb",
+          "verify explicit schema=2 template=3 initial=4 scheduled=9 and default schema=2 template=3 initial=3 scheduled=7",
+          "inspect docs/main_usage.md and docs/fire_world_pipeline.md for removed legacy-mode claims"
+        ],
+        "summary": "Default and explicit plans use the clustered-only identity and metadata. Documentation accurately distinguishes initial from scheduled counts and gives the current compact template-v4 propagation plan ID."
+      },
+      "last_updated": "2026-07-29T12:16:26-04:00"
+    },
+    {
+      "id": "T277",
+      "title": "Audit excessive FireWorld flame height and coverage",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the active plan, default propagation rules, floor envelope, flame-column projection and baked timeline path are traced before tuning",
+      "notes": "The active 83679a07b632 plan drives seven sustained sources, six 0.15 m flame-column layers with 0.75 geometric decay, a fallback 2.0 m floor envelope per source, 0.015 m/s floor growth, floor fuel 0.7, contact radius 2, radiative gain 600 and radius 6. The union of source envelopes plus tall flame projection explains the screen-filling result.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect scenes/Nfvxx8J5NCo/plans/83679a07b632.json",
+          "inspect utils/fire_world/templates.py and propagation.py",
+          "inspect outputs/fire_world/Nfvxx8J5NCo/83679a07b632/timeline_meta.json"
+        ],
+        "summary": "Confirmed runtime reads a 901-frame baked timeline whose metadata still uses floor speed 0.015 m/s and maximum radius 2.0 m; code or plan edits require a rebake."
+      },
+      "last_updated": "2026-07-29T14:02:51-04:00"
+    },
+    {
+      "id": "T278",
+      "title": "Tune compact FireWorld flame defaults and active plan",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T277"],
+      "acceptance": "new plans and active plan 83679a07b632 use shorter faster-decaying flame columns and slower, smaller, lower-intensity floor patches without disabling local hazard growth",
+      "notes": "Template v4 caps source radius at 0.6 m, uses 2-3 flame-column cells with 0.45-0.55 decay, floor envelopes of 0.85/1.0/1.1 m at 0.003/0.004/0.005 m/s, floor fuel 0.45 and lower seed brightness. Generic spread and radiation were reduced. Unsupported prior-frame column voxels are cleared before physics so visual columns cannot stack or radiatively amplify spread. Active plan 83679a07b632 receives the severe compact values.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation -v"
+        ],
+        "summary": "Five focused propagation tests pass, including multi-step non-stacking column height, gradual floor growth, compact default parameters and light/medium/severe envelopes."
+      },
+      "last_updated": "2026-07-29T14:09:08-04:00"
+    },
+    {
+      "id": "T279",
+      "title": "Add compact-flame propagation regressions and docs",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T278"],
+      "acceptance": "tests lock default flame height, decay and floor envelope values and prove mature floor flame remains within the configured compact radius; docs explain the new visual envelope",
+      "notes": "Added tests for compact fallback defaults, intensity-specific envelope values and non-stacking flame-column height over eight solver steps. Updated pipeline and Chinese usage docs with template v4 values, solver semantics and the new example plan id.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 python -m py_compile utils/fire_world/templates.py utils/fire_world/propagation.py utils/fire_world/planner.py tests/test_fire_propagation.py"
+        ],
+        "summary": "All 17 focused tests, planner smoke and syntax checks pass. Documentation now reports 0.30-0.45 m visual columns and 0.85-1.1 m floor envelopes."
+      },
+      "last_updated": "2026-07-29T14:10:49-04:00"
+    },
+    {
+      "id": "T280",
+      "title": "Rebake and validate the active compact-fire timeline",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T278", "T279"],
+      "acceptance": "the active timeline is rebuilt from the tuned plan and sampled statistics confirm lower flame height and bounded floor coverage without changing the requested scene or plan id",
+      "notes": "Rebaked all 901 frames for active plan 83679a07b632 after both compact propagation and final visible-flame envelope limiting. Previous timelines are backed up under /tmp/fire-world-previous-backup and /tmp/fire-world-pre-bounded-backup. The installed file is 334 MB with SHA256 0847a8d4e9fc67b5e4ff523d76c1c383956768ed42ff8ea54168c84ae5d503fd.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m utils.fire_world.propagation --scene Nfvxx8J5NCo --plan_id 83679a07b632 --voxel_m 0.15 --dt 0.5 --save_dt 1.0 --out_root /tmp/fire-world-compact-rebake",
+          "compare old and new flame, XZ and floor coverage at t=0,60,120,240,360,600,900",
+          "sha256sum temporary and installed timeline.npz",
+          "load installed timeline with allow_pickle=False and verify keys, shape, times and metadata",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "python -m json.tool todo/todo.json",
+          "python -m json.tool scenes/Nfvxx8J5NCo/plans/83679a07b632.json",
+          "git diff --check"
+        ],
+        "summary": "At t=900, active flame voxels fell 7344 to 1276 (-83%) and burning XZ coverage 1599 to 349 (-78%); the explicit source envelope is now enabled. Timeline checksum, schema, 0-900 s times and compact 0.005 m/s plus 1.1 m metadata validate. Full suite still has only the pre-existing unrelated T252 risk-prompt literal assertion failure."
+      },
+      "last_updated": "2026-07-29T14:15:58-04:00"
+    },
+    {
+      "id": "T281",
+      "title": "Constrain multi-origin ignition objects to low furniture",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T278"],
+      "acceptance": "multi_origin initial and delayed ignition sources both come from real, materialized low floor-furniture categories and secondary source cores are smaller than initial source cores",
+      "notes": "The first compact rebake exposed a remaining source-selection issue: multi_origin initial sources could include tall cabinets and delayed children could include lamps or wall-mounted objects. Both roles are now restricted to beds, seating, tables, rugs, desks and ottomans. Delayed source cores are capped at 0.40 m. Seeded proposal search retains spatial separation while reserving a unique low-furniture child for every initial source, including the eight-source severe case.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_template_semantics tests.test_fire_ignition_count tests.test_fire_propagation -v",
+          "generate Nfvxx8J5NCo multi_origin severe seed=7 num_ignitions=8 and medium seed=7 num_ignitions=4"
+        ],
+        "summary": "All 21 focused semantic, ignition-cluster and propagation tests pass. Tests verify both multi-origin roles use real materialized low-furniture categories, the exact eight-source case retains unique delayed children, and delayed source radius is at most 0.40 m."
+      },
+      "last_updated": "2026-07-29T14:51:30-04:00"
+    },
+    {
+      "id": "T282",
+      "title": "Regenerate and rebake compact multi-origin plans",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T281"],
+      "acceptance": "the current medium and severe multi-origin plans are regenerated from the low-furniture policy, their timelines are rebuilt, and sampled height and XZ coverage are reported",
+      "notes": "Regenerated template-v4 plan 9091e5dd818d (severe, 8 initial/17 total) and 262b437b2d6d (medium, 4 initial/11 total), then installed bounded timelines after backing up the preceding versions under /tmp/fire-world-pre-bounded-backup. Existing v3 plan JSON and earlier backups were preserved, but the v4 plan IDs are the supported low-furniture replacements.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "run utils.fire_world.propagation for 9091e5dd818d, 262b437b2d6d and 83679a07b632 at voxel_m=0.15, dt=0.5, save_dt=1.0",
+          "compare current and bounded final-frame flame voxel, XZ coverage and world-space maximum Y",
+          "load installed timelines with allow_pickle=False; verify times, plans and SHA256 checksums",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m json.tool on TODO and all three installed plans",
+          "git diff --check"
+        ],
+        "summary": "Severe multi-origin final flame fell from 35756 to 8865 voxels (-75%) and XZ coverage from 3767 to 1047 (-72%); medium fell from 31506 to 4474 (-86%) and 3401 to 603 (-82%). Both maximum visible heights fell from about 3.1 m to 1.76 m. Installed checksums are severe 207c64ad..., medium f3abe263..., active 0847a8d4.... Planner, sensors, syntax, JSON and diff checks pass. Full suite passes 112/113; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-29T14:51:30-04:00"
+    },
+    {
+      "id": "T283",
+      "title": "Model continuous Gaussian fire spread between ignition clusters",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T282"],
+      "acceptance": "visible floor fire grows with a soft Gaussian radial profile and forms a continuous advancing connection from each initial source toward its delayed secondary instead of appearing as disconnected source islands",
+      "notes": "Current hard union of independent source circles fixed room filling but clipped all connecting flame. Implemented Gaussian radial influence plus a smoothstep parent-child front whose centreline follows A* over floor cells and avoids structural wall columns. The front reaches the child at ignite_time_s and leaves a narrow burning trail. multi_origin matching now requires the same HM3D region_id, preventing cross-wall bed-to-table and desk-to-chair pairs. Template version is 5.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v",
+          "130 s medium and 70 s severe preview propagation at voxel_m=0.15, dt=0.5, save_dt=1.0",
+          "8-connected XZ flame-component check at every secondary ignite_time_s",
+          "render /tmp/fire-continuous-preview/medium_spread.png at t=0,20,...,120 s"
+        ],
+        "summary": "Nine propagation tests and 15 planner/semantic tests pass. Medium active XZ coverage grows 160,190,242,312,382,450,493 cells at 0-120 s and all 6/6 parent-child pairs are connected at delay. Severe grows 276 to 914 cells over 0-70 s and all 9/9 pairs are connected. Visual inspection confirms bright Gaussian cores, dim edges and monotonic outward growth."
+      },
+      "last_updated": "2026-07-30T17:36:33-04:00"
+    },
+    {
+      "id": "T284",
+      "title": "Rebake and validate continuous-spread FireWorld timelines",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T283"],
+      "acceptance": "the supported template-v5 medium and severe timelines are rebaked; sampled frames prove gradual coverage growth, parent-child connectivity by delay, bounded final coverage and retained compact height",
+      "notes": "Installed new template-v5 plan/timeline pairs 35113770d839 (medium, four initial sources) and 6659710a500a (severe, eight initial sources). Documentation and teleoperation examples now use 35113770d839. The manual legacy plan 83679a07b632 remains available for historical comparison but is no longer the recommended example because it has no explicit parent-child metadata.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "run utils.fire_world.propagation for 35113770d839 (600 s) and 6659710a500a (900 s) at voxel_m=0.15, dt=0.5, save_dt=1.0",
+          "sample active XZ, flame voxels, connected components and world maximum Y at 10-180 s intervals and final frame",
+          "verify every explicit parent-child pair is 8-connected at its ignite_time_s",
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "python -m py_compile, python -m json.tool, timeline readability and git diff --check"
+        ],
+        "summary": "Medium XZ coverage grows 160 at t=0 to 493 at 120 s, stabilising near 533 at 600 s; all 6/6 links are connected and max visible Y is 1.61 m. Severe grows 276 to 999 at 90 s and stabilises near 1113 at 900 s; all 9/9 links are connected and max Y is 1.76 m. SHA256: medium 5524de4e..., severe a10b2c915.... All 25 focused tests pass. Full suite passes 116/117; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-30T17:42:37-04:00"
+    },
+    {
+      "id": "T285",
+      "title": "Restore the FireWorld planner to initial-only ignition selection",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T284"],
+      "acceptance": "every generated plan contains exactly the selected t=0 initial ignition objects and contains no planner-scheduled secondary objects, delays, parent links or propagation corridors",
+      "notes": "Template v6 and plan schema v3 restore the boundary: templates select only real t=0 furniture instances, while later object ignition is an emergent result of voxel heat, radiation, contact, fuel and geometry. Removed secondary category pools, delay presets, parent metadata, A* corridor generation and link-specific propagation parameters.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m py_compile utils/fire_world/templates.py utils/fire_world/planner.py utils/fire_world/propagation.py tests/test_fire_ignition_count.py tests/test_fire_template_semantics.py tests/test_fire_propagation.py scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_ignition_count tests.test_fire_template_semantics tests.test_fire_propagation -v",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "generate Nfvxx8J5NCo template-v6 plans 76fcb4cdd890 and 2ea25f46c4ca"
+        ],
+        "summary": "All 23 focused tests and planner smoke checks pass. Generated medium plan contains exactly four t=0 initial objects and severe contains exactly eight; neither plan contains a delayed, parent or secondary entry."
+      },
+      "last_updated": "2026-07-30T18:26:48-04:00"
+    },
+    {
+      "id": "T286",
+      "title": "Rebake and validate solver-driven FireWorld spread",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T285"],
+      "acceptance": "new supported timelines are baked from initial-only plans; sampled frames show bounded gradual floor growth and at least one non-initial furniture object can ignite through the propagation solver without planner scheduling",
+      "notes": "Installed template-v6 timelines 76fcb4cdd890 (medium, four initial objects) and 2ea25f46c4ca (severe, eight initial objects). A wider dynamic object-reaction domain (medium 1.25 m, severe 1.4 m) lets the solver ignite local real furniture but prevents coarse overlapping AABBs from cascading across the room. Object flame receives only one extra height cell beyond the compact plume. The earlier unbounded preview was replaced by these final timelines.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "run utils.fire_world.propagation for 76fcb4cdd890 (600 s) and 2ea25f46c4ca (900 s) at voxel_m=0.15, dt=0.5, save_dt=1.0",
+          "reconstruct object_id_field and sample per-frame non-initial burning object IDs, flame XZ coverage, floor coverage and maximum world Y",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m py_compile, python -m json.tool, timeline schema/time checks, sha256sum and git diff --check"
+        ],
+        "summary": "Medium has nine genuinely later non-initial ignitions at t=13-104 s, grows from 160 to 683 flame XZ cells, and caps at 1.756 m. Severe has 20 later ignitions at t=1-148 s, grows from 280 to 1511 cells, and also caps at 1.756 m. Timelines have 601/901 readable frames and SHA256 8e251f9c.../5361572b.... All 23 focused tests, planner and sensor checks pass. Full suite passes 114/115; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-30T18:41:26-04:00"
+    },
+    {
+      "id": "T287",
+      "title": "Increase bounded floor and object fire growth",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T286"],
+      "acceptance": "floor and object propagation grow visibly faster and farther than template v6 while retaining explicit local maximum radii and compact flame-height limits",
+      "notes": "Template v7 conservatively raises medium floor growth from 0.004 m/s and 1.0 m to 0.0044 m/s and 1.10 m; the object ignition domain rises from 0.006 m/s and 1.25 m to 0.0066 m/s and 1.35 m. Light and severe retain intensity-scaled bounded variants. Compact column height is unchanged.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation -v"
+        ],
+        "summary": "Ten focused propagation tests pass, including exact light/medium/severe values and retained hard envelope bounds."
+      },
+      "last_updated": "2026-07-31T00:45:59-04:00"
+    },
+    {
+      "id": "T288",
+      "title": "Add gradual burning-object Bounding Box fill",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T287"],
+      "acceptance": "after solver ignition, flame advances gradually through voxels belonging to that exact object ID until its Bounding Box voxel mask is occupied, without planner-scheduled targets or crossing object IDs",
+      "notes": "Implemented a deterministic six-connected front at medium 0.008 m/s. A state is created only after the solver observes a hot flame voxel on a real object inside the local object-ignition domain; after ignition, the front may finish that exact object mask but cannot cross into another object ID or start an external object. Local sliced masks keep runtime cost bounded.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation -v",
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v"
+        ],
+        "summary": "All 10 propagation tests and all 24 combined propagation, ignition-count and template-semantic tests pass. The regression fixture proves an ignited object fills its complete exact object mask over time while an adjacent object remains unlit."
+      },
+      "last_updated": "2026-07-31T00:45:59-04:00"
+    },
+    {
+      "id": "T289",
+      "title": "Rebake and quantify moderately expanded FireWorld timelines",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T288"],
+      "acceptance": "template-v7 medium and severe timelines are baked from initial-only plans; sampled frames confirm moderately larger floor coverage, gradual object fill, unchanged compact height and readable metadata",
+      "notes": "Installed template-v7 timelines dc6b4ce317fe (medium, four initial objects) and 021be03d8a84 (severe, eight initial objects). The 180 s preview was tuned down from the first proposal. Relative to template v6, non-object XZ coverage at 180 s rises from 375 to 459 cells for medium and 890 to 1034 for severe, while maximum visible Y remains 1.756 m. Over the full run, the bounded floor stabilises near 499/1044 cells and later growth is primarily exact-mask furniture fill.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m utils.fire_world.propagation --scene Nfvxx8J5NCo --plan_id dc6b4ce317fe --voxel_m 0.15 --dt 0.5 --save_dt 1.0 --out_root outputs/fire_world",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m utils.fire_world.propagation --scene Nfvxx8J5NCo --plan_id 021be03d8a84 --voxel_m 0.15 --dt 0.5 --save_dt 1.0 --out_root outputs/fire_world",
+          "reconstruct object_id_field and sample flame XZ, non-object XZ, initial-object fill, later object ignitions and maximum world Y",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m py_compile, python -m json.tool, timeline schema/time/metadata assertions, sha256sum and git diff --check"
+        ],
+        "summary": "Medium has 601 frames over 600 s and reaches 499 bounded non-object XZ cells; severe has 901 frames over 900 s and reaches 1044. Initial furniture masks fill gradually to 92.9-100% for medium and 93.9-100% for severe, while 12/27 non-initial objects ignite later through the solver. Both stay capped at 1.756 m. SHA256: medium 1ac00f14..., severe 3629c0d8.... All 24 focused tests, planner, sensors, syntax, JSON, timeline metadata and whitespace checks pass. Full suite passes 116/117; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-31T00:49:51-04:00"
+    },
+    {
+      "id": "T290",
+      "title": "Improve flame texture and reveal burning furniture",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T289"],
+      "acceptance": "RGB fire rendering shows non-uniform orange/yellow flame structure instead of a clipped white blob, preserves recognizable clean-RGB furniture texture through burning regions, and remains consistent between NumPy and Torch backends",
+      "notes": "Separated smoke scatter from flame radiance, reduced emission/self-extinction/glow, added flame-local smoke displacement, peak-preserving highlight compression, a bounded 26% clean-surface reveal, and surface-anchored noise blended with 3-D turbulence. Pretty-mode texture defaults are stronger while fire_fast keeps the zero-noise benchmark path. Propagation, timeline, thermal temperature, thermal masks and risk fields are unchanged.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "render and inspect outputs/fire_flame_visual_validation.png with the production volumetric compositor",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_torch_render tests.test_thermal_sensor tests.test_keyboard_teleop_full -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile arguments.py scripts/keyboard_teleop_full.py utils/fire_sensors/config.py utils/fire_sensors/sensors/voxel_smoke.py utils/fire_sensors/voxel_render.py utils/fire_sensors/voxel_render_torch.py tests/test_fire_torch_render.py",
+          "python -m json.tool todo/todo.json; git diff --check"
+        ],
+        "summary": "The deterministic comparison raises clean-surface texture correlation inside flame pixels from -0.188 to 0.572, mean RGB chroma from 74.6 to 78.3, and mean scene transmittance from 0.167 to 0.275. Visual inspection confirms the furniture proxy's textile bands, seams and frame remain visible beneath structured orange/yellow flame. All 18 focused renderer/thermal/teleop tests, the FireSensor smoke script, syntax, JSON and whitespace checks pass. Full suite passes 118/119; only the pre-existing unrelated T252 risk-prompt literal assertion fails. A real Habitat off-screen validation frame could not be captured in this session because EGL could not create a context without an available CUDA driver; the user's normal interactive Habitat environment should be used for the final live visual check."
+      },
+      "last_updated": "2026-07-31T01:45:10-04:00"
+    },
+    {
+      "id": "T291",
+      "title": "Rebalance flame opacity after texture reveal",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T290"],
+      "acceptance": "burning furniture remains recognizable but the flame reads as a denser foreground volume than T290, without restoring clipped white blobs or changing FireWorld propagation, thermal or risk semantics",
+      "notes": "Scanned three denser settings and selected the middle denser preset: clean-surface reveal 0.26 to 0.13, flame-local smoke displacement 0.72 to 0.52, and flame self-extinction 0.35 to 0.50. Highlight compression, structured flame noise, propagation, thermal and risk semantics remain unchanged.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "render and inspect outputs/fire_flame_opacity_validation.png with T290 and T291 parameters",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_torch_render tests.test_thermal_sensor tests.test_keyboard_teleop_full -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/fire_sensors/config.py utils/fire_sensors/voxel_render.py tests/test_fire_torch_render.py",
+          "python -m json.tool todo/todo.json; git diff --check"
+        ],
+        "summary": "On the deterministic burning-furniture proxy, mean flame-region transmittance falls from 0.275 to 0.236 (-14.2%) and clean-texture correlation falls from 0.539 to 0.240 while mean RGB chroma remains effectively unchanged at 77.8. Visual inspection confirms a denser foreground flame with still-recognizable seams and furniture edges. All 18 focused tests, FireSensor smoke checks, syntax, JSON and whitespace checks pass. Full suite passes 118/119; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-31T17:12:08-04:00"
+    },
+    {
+      "id": "T292",
+      "title": "Restore richer continuous propagation inside bounded fire envelopes",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T291"],
+      "acceptance": "the solver recovers the pasted version's locally continuous reaction, conduction, radiation and contact-front character while keeping initial-only plans, bounded floor/object spread, gradual exact-object Bounding Box fill and compact flame height",
+      "notes": "Template v8 selectively restores the supplied solver's 0.12 m/s local surface transport, 200 C/s four-cell radiative preheat and two-cell floor contact ignition. A smooth preheat-to-reaction floor edge and fractional six-connected object shell remove hard temporal jumps. The v7 source radii, maximum floor/object envelopes, initial-only planner, exact object-ID fill, non-stacking 2-3-cell columns and 1.756 m scene cap remain intact. Installed medium plan/timeline 6df964ec1f4c and severe db5f5338e1b9; archived plans were retained.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "structured diff of supplied pasted-text propagation.py against utils/fire_world/propagation.py",
+          "180 s medium/severe template-v8 preview at voxel_m=0.15, dt=0.5, save_dt=1.0",
+          "compare v7/v8 flame XZ coverage, mass, per-frame field-delta variation, initial-object fill, later object ignition and maximum height",
+          "render and inspect outputs/fire_propagation_v8_validation.png and outputs/fire_propagation_v8_closeup.png",
+          "run full 600 s plan 6df964ec1f4c and 900 s plan db5f5338e1b9 propagation timelines",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_planner.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m py_compile, python -m json.tool, timeline schema/readability checks, sha256sum and git diff --check"
+        ],
+        "summary": "All 25 focused tests, planner/sensor smoke checks, syntax, JSON, timeline and whitespace validations pass. In the 180 s preview, v8 field-delta CV drops from 0.620 to 0.443 for medium and 0.397 to 0.258 for severe; active XZ rises only 8.4%/4.5%. At full duration, active XZ is only 2.1%/0.4% above v7, maximum visible Y remains 1.756 m, and burning floor stays within 1.098/1.207 m against 1.10/1.21 m caps. Medium/severe timelines contain 601/901 readable frames and SHA256 ed92ecea.../2d53b412.... Full suite passes 118/119; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-31T17:46:32-04:00"
+    },
+    {
+      "id": "T293",
+      "title": "Implement reusable FireWorld asset pipeline runner",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T292"],
+      "acceptance": "one reusable module performs semantic preflight, inventory generation, deterministic planning, atomic propagation, timeline validation, checksums and resumable status reporting without changing runtime asset paths",
+      "notes": "Implemented discovery, inventory reuse/build, deterministic scenario matrices, plan writing, compressed NPY-header validation, size/memory estimates, staging, atomic install, replacement quarantine, plan locks, SHA256, manifests and scene indices without changing canonical runtime paths.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_world_pipeline_runner -v",
+          "python -m py_compile utils/fire_world/pipeline_runner.py"
+        ],
+        "summary": "Four focused runner tests pass."
+      },
+      "last_updated": "2026-07-31T23:25:45-04:00"
+    },
+    {
+      "id": "T294",
+      "title": "Add single-scene FireWorld asset preparation CLI",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T293"],
+      "acceptance": "the CLI prepares inventory, structural masks, plan JSON and validated timeline assets for a selected scene across configurable template/intensity/seed combinations and supports dry-run, resume and force",
+      "notes": "Implemented all/subset template and intensity selectors, multiple seeds, dry-run, resume, force, force-scan, checksum controls, strict mode and per-run logs/manifest/summary.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "prepare_fire_world_scene.py Nfvxx8J5NCo bedroom_textile/light dry-run",
+          "prepare_fire_world_scene.py Nfvxx8J5NCo bedroom_textile/light production",
+          "repeat the same scene command to verify resume"
+        ],
+        "summary": "Generated and validated plan/timeline 1c0b7227f5c3 in 29.5 s; the second run resumed it in 0.004 s."
+      },
+      "last_updated": "2026-07-31T23:25:45-04:00"
+    },
+    {
+      "id": "T295",
+      "title": "Add dataset-scale FireWorld asset preparation CLI",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T293", "T294"],
+      "acceptance": "the CLI discovers complete/incomplete dataset scenes, preflights the complete scenario matrix, estimates storage, executes with bounded concurrency and resume, isolates scenario failures, and writes run manifests, logs and summaries",
+      "notes": "Implemented complete/incomplete scene discovery, exact planning preflight, conservative disk check, memory-capped ProcessPool workers, per-task failure isolation, progress output, run provenance, logs and final scene indices.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "prepare_fire_world_dataset.py --splits val --max-scenes 1 --dry-run"
+        ],
+        "summary": "The batch dry-run discovered 100 val folders, classified 64 incomplete, planned all 12 scenarios for the selected complete scene, and estimated 8.76 GiB without writing assets."
+      },
+      "last_updated": "2026-07-31T23:25:45-04:00"
+    },
+    {
+      "id": "T296",
+      "title": "Test and document FireWorld asset preparation",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T294", "T295"],
+      "acceptance": "focused tests cover discovery, task matrices, validation, resume and failure isolation; documentation provides verified single-scene, dry-run and full-dataset commands",
+      "notes": "Added four runner regressions and documented verified single-scene, read-only dry-run, production, resume, canonical asset, run-record, staging and lock behavior in both FireWorld docs.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_world_pipeline_runner tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_template_semantics -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib python -m unittest discover -s tests -v",
+          "python -m py_compile; python -m json.tool; git diff --check"
+        ],
+        "summary": "All 29 focused tests and syntax/JSON/whitespace checks pass. Full suite passes 122/123; only the pre-existing unrelated T252 risk-prompt literal assertion fails."
+      },
+      "last_updated": "2026-07-31T23:26:54-04:00"
+    },
+    {
+      "id": "T297",
+      "title": "Execute and audit the 36-scene FireWorld dataset pipeline",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T296"],
+      "acceptance": "all 36 complete semantic scenes are scanned and every feasible four-template by three-intensity scenario has a valid canonical plan/timeline; infeasible scenarios and incomplete dataset folders are explicitly accounted for in the final manifest",
+      "notes": "Paused when the user superseded this task. Production propagation never started: preflight found 36 complete scenes, 398 feasible scenarios and 34 infeasible scenarios, then stopped because the conservative raw timeline estimate was 808.86 GiB with 624.85 GiB free. Inventories/plans and one existing light timeline remain resumable.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "Pending dry-run, production execution and final asset audit."
+      },
+      "last_updated": "2026-07-31T23:48:19-04:00"
+    },
+    {
+      "id": "T298",
+      "title": "Define the Habitat PointNav adapter contract",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the implementation has an explicit checkpoint-derived camera, observation, action and point-goal schema and does not reuse the map-PPO observation contract",
+      "notes": "Implemented a separate PointNav contract rather than reusing map-PPO. Embedded configs are authoritative; known official weights-only filenames select their published architecture/visual profile plus Habitat-Baselines ddppo_pointnav.yaml; unknown weights-only files require explicit config and observation mode.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect habitat-lab-0.3.3/test/test_pointnav_resnet_policy.py and habitat/tasks/nav/nav.py",
+          "load_pointnav_runtime_spec(data/ddppo-models/gibson-2plus-resnet50.pth)",
+          "PointNav Hydra schema smoke with two ObjectNav agents"
+        ],
+        "summary": "Verified the official depth contract: 256x256 normalized depth, polar pointgoal_with_gps_compass, ResNet50 plus two-layer LSTM512, four actions, 0.25 m forward and 10 degree turns. Each agent now receives separate checkpoint-exact policy sensors while the ObjectNav mapping RGB-D schema remains unchanged."
+      },
+      "last_updated": "2026-08-01T00:42:18-04:00"
+    },
+    {
+      "id": "T299",
+      "title": "Implement checkpoint-exact PointNav policy inference",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T298"],
+      "acceptance": "a pretrained PointNav policy loads strictly, receives checkpoint-shaped RGB/depth and point-goal or GPS/compass observations, applies configured transforms and emits mapped Habitat actions",
+      "notes": "Installed Habitat-Baselines 0.3.3 from the matching local checkout and downloaded Meta Habitat's official Gibson 2+ depth ResNet50 checkpoint to the ignored data asset path. Strict state loading strips only the official actor_critic/module wrapper prefix and applies configured Habitat observation transforms.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m pip install -e /home/liushe10/habitat-lab-0.3.3/habitat-baselines",
+          "sha256sum data/ddppo-models/gibson-2plus-resnet50.pth",
+          "load_pointnav_policy_adapter(..., device=cpu, deterministic=True) and one synthetic 256x256 depth action"
+        ],
+        "summary": "The 49,853,716-byte official checkpoint strictly loads as PointNavResNetPolicy and executes a CPU action with hidden-state shape (1,4,512). SHA-256 is a6a600277efacf5fd98e293267221185d843eb3012aeff62fabfeee24c2bcdad."
+      },
+      "last_updated": "2026-08-01T00:42:18-04:00"
+    },
+    {
+      "id": "T300",
+      "title": "Maintain independent recurrent PointNav state per robot",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T299"],
+      "acceptance": "each robot has isolated hidden state, masks, previous action and local goal; episode reset and frontier changes reset only the relevant robot state",
+      "notes": "One shared frozen policy owns isolated hidden tensors, previous actions, masks, world goals and generation counters keyed by robot ID. Episode reset, frontier replacement and local STOP reset only the affected robot.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m unittest tests.test_pointnav_local_planner.PointNavRecurrentStateTests -v"
+        ],
+        "summary": "Regression tests prove interleaved robot states remain independent and a changed frontier resets only one robot."
+      },
+      "last_updated": "2026-08-01T00:42:18-04:00"
+    },
+    {
+      "id": "T301",
+      "title": "Integrate PointNav into navigation and replanning",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T299", "T300"],
+      "acceptance": "--local_planner pointnav follows global frontiers, policy STOP requests global replanning without emitting task STOP, and only the existing detected-object navigation path may terminate ObjectNav",
+      "notes": "Added --local_planner pointnav to both agent variants and both main loops. Frontier goals use the existing grid/Open3D/Habitat transform before exact point-goal conversion. Local STOP becomes a turn observation plus immediate global replanning request. Detected-object navigation explicitly falls back to the existing navmesh-first/FMM completion path. Risk-enabled runs retain risk-aware global frontier assignment and add a local hard-hazard action shield without changing the checkpoint observation schema.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "python -m unittest tests.test_pointnav_local_planner.AgentStopInterceptionTests -v",
+          "PointNav Hydra schema smoke with --num_agents 2",
+          "python -m py_compile arguments.py main.py main_vec.py agents/vlm_agents.py agents/vlm_multi_agents.py utils/local_planners/*.py"
+        ],
+        "summary": "Both agent variants intercept policy STOP without producing ObjectNav action 0, and the full two-agent task config composes with checkpoint cameras and action mapping. A live multi-step Habitat episode was not launched because it also initializes the project's external perception/VLM stack; that remains the recommended first pilot check."
+      },
+      "last_updated": "2026-08-01T00:42:18-04:00"
+    },
+    {
+      "id": "T302",
+      "title": "Test and document the PointNav baseline",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T301"],
+      "acceptance": "regressions cover coordinate convention, schema checks, recurrent isolation, goal reset, STOP interception and both agent variants; setup and benchmark commands are documented",
+      "notes": "Documented dependency installation, official URL/hash, exact schema, commands, sampling mode, recurrent/STOP contract and risk-blind versus +shield benchmark labels. The 48 MiB checkpoint is intentionally ignored by git under data/ddppo-models.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib python -m unittest tests.test_pointnav_local_planner tests.test_local_planner_baselines -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib python -m unittest discover -s tests -v",
+          "python -m py_compile arguments.py main.py main_vec.py agents/vlm_agents.py agents/vlm_multi_agents.py utils/local_planners/*.py tests/test_pointnav_local_planner.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- <PointNav implementation and documentation files>"
+        ],
+        "summary": "All 26 PointNav/local-planner tests pass, including strict loading and one CPU action from the official checkpoint plus official RGB-profile registry spelling. Syntax, JSON and targeted whitespace checks pass. The full suite run before the final profile-only regression contained 135 tests: all PointNav tests passed, while 16 unrelated FireWorld template feasibility cases errored and the previously known risk-prompt literal test failed."
+      },
+      "last_updated": "2026-08-01T00:42:18-04:00"
+    },
+    {
+      "id": "T303",
+      "title": "Make PointNav visualization resolution-independent",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T302"],
+      "acceptance": "--print_images and --visualize accept the checkpoint's 256x256 RGB observation without changing the tensor passed to PointNav or crashing the legacy 640x480 dashboard panel",
+      "notes": "The initial hotfix made the fixed dashboard slice accept arbitrary image sizes. T304 subsequently separates policy and mapping cameras, so normal PointNav dashboards again display the original 640x480 mapping RGB without letterboxing; the helper remains as a resolution-independent guard.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib python -m unittest tests.test_pointnav_local_planner -v",
+          "python -m py_compile utils/visualization.py agents/vlm_agents.py agents/vlm_multi_agents.py tests/test_pointnav_local_planner.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- utils/visualization.py agents/vlm_agents.py agents/vlm_multi_agents.py tests/test_pointnav_local_planner.py todo/todo.json"
+        ],
+        "summary": "All 14 PointNav adapter tests pass. The 256x256 RGB frame produces a 480x640 panel with a centered 480x480 image and 80-pixel side letterboxes, so both dashboard assignments have the exact legacy slice shape."
+      },
+      "last_updated": "2026-08-01T12:36:33-04:00"
+    },
+    {
+      "id": "T304",
+      "title": "Decouple PointNav policy cameras from mapping cameras",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T303"],
+      "acceptance": "ObjectNav mapping, detection and dashboards retain their configured 640x480 RGB-D stream while PointNav consumes separate checkpoint-exact 256x256 policy sensors with no resizing or FOV distortion",
+      "notes": "Each robot now keeps its original rgb/depth sensors for mapping, detection, VLM, FireWorld and dashboards. The config adds only the visual fields required by the checkpoint under pointnav_* UUIDs, and the adapter prefers those policy sensors while retaining direct-field fallback for isolated tests/checkpoints. Motion and action schemas remain checkpoint-exact.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib python -m unittest tests.test_pointnav_local_planner tests.test_local_planner_baselines -v",
+          "compose a two-agent PointNav Hydra config and instantiate each dynamic pointnav_depth Habitat sensor through the registry",
+          "python -m py_compile arguments.py utils/local_planners/pointnav.py utils/visualization.py agents/vlm_agents.py agents/vlm_multi_agents.py tests/test_pointnav_local_planner.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- <T304 implementation, tests and docs>"
+        ],
+        "summary": "All 28 PointNav/local-planner tests pass, including a real official-checkpoint action using pointnav_depth. The two-agent config preserves 640x480/HFOV79 mapping cameras, creates 256x256/HFOV90 normalized pointnav_depth sensors with the expected UUID and observation space, and retains 0.25 m/10 degree checkpoint motion."
+      },
+      "last_updated": "2026-08-01T12:50:08-04:00"
+    },
+    {
+      "id": "T305",
+      "title": "Define the global planner interface contract",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the frontier candidates, shared map state, agent poses, optional risk state and planner outputs are represented by explicit interfaces without importing main.py",
+      "notes": "Defined an explicit request/result boundary: main retains cadence and Frontier_Det, while planners receive candidates, map/pose state, goal metadata and an optional risk context. Results return goals, frontier ids and risk-report persistence fields.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "audit main.py lines 522-784, main_vec.py lines 207-365, utils/explored_map_utils.py Frontier_Det and utils/risk/frontier.py"
+        ],
+        "summary": "Captured normal, GPT, risk-aware, first-step, empty-frontier, random-fallback and PointNav replan behavior before extraction."
+      },
+      "last_updated": "2026-08-01T12:59:42-04:00"
+    },
+    {
+      "id": "T306",
+      "title": "Extract global planner implementations",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T305"],
+      "acceptance": "nearest, co_ut, fill, GPT and shared risk-aware planning implementations live under utils/global_planners and are selected through one factory",
+      "notes": "Added utils/global_planners with explicit nearest, co_ut, fill and GPT implementations, one factory, and a shared risk-aware decorator. GPT dependencies are lazy and injectable; classical modes no longer import the chat stack.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile utils/global_planners/*.py",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_risk_frontier -v"
+        ],
+        "summary": "All 21 interface, planner and frontier-risk tests pass."
+      },
+      "last_updated": "2026-08-01T13:05:59-04:00"
+    },
+    {
+      "id": "T307",
+      "title": "Wire main.py to the global planner interface",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T306"],
+      "acceptance": "main.py owns replanning cadence and frontier detection but delegates every frontier assignment branch to a single planner.plan call and consumes its result",
+      "notes": "Both main.py and main_vec.py now instantiate through create_global_planner and make one plan call per replan. Cadence, Frontier_Det, PointNav acknowledgement, risk report persistence, visualization inputs and main_vec fill-mode bookkeeping remain in their entrypoints.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile main.py main_vec.py",
+          "tests.test_global_planners.MainGlobalPlannerBoundaryTests"
+        ],
+        "summary": "Both entrypoints compile and the source boundary regression confirms they contain no per-mode frontier assignment branches."
+      },
+      "last_updated": "2026-08-01T13:05:59-04:00"
+    },
+    {
+      "id": "T308",
+      "title": "Add global planner regression coverage",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T306", "T307"],
+      "acceptance": "headless tests cover all normal planners, first-step and empty-frontier fallback, risk-aware assignment, GPT guard behavior and factory validation",
+      "notes": "Added fully headless tests with injected GPT fakes for normal and risk prompts. Existing low-risk fallback coverage now imports the extracted implementation instead of main.py.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_risk_frontier -v"
+        ],
+        "summary": "21/21 tests pass for classical assignments, GPT, first-step behavior, empty-frontier RNG, factory errors, risk reports, hard-risk guard and entrypoint delegation."
+      },
+      "last_updated": "2026-08-01T13:05:59-04:00"
+    },
+    {
+      "id": "T309",
+      "title": "Document and validate the global planner architecture",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T307", "T308"],
+      "acceptance": "developer documentation identifies the interface, implementations, factory and main-loop boundary; focused tests, syntax, JSON and whitespace checks pass",
+      "notes": "Documented the interface/factory/implementation boundary in main_usage and the benchmark plan. CLI flags, nav_mode labels, replanning cadence and risk-aware benchmark naming are unchanged.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_risk_frontier tests.test_local_planner_baselines tests.test_pointnav_local_planner -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --help",
+          "python -m py_compile main.py main_vec.py utils/global_planners/*.py tests/test_global_planners.py tests/test_risk_integration.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- <global-planner tracked files>; trailing-whitespace scan for new files"
+        ],
+        "summary": "All 49 focused global/risk/local/PointNav tests pass, both entrypoints compile, CLI help renders, documentation paths resolve, and JSON/whitespace checks pass. The full suite runs 148 tests; the new global-planner tests all pass, while 16 pre-existing FireWorld template-feasibility errors and the known risk-prompt literal assertion remain unrelated to this refactor."
+      },
+      "last_updated": "2026-08-01T13:08:25-04:00"
+    },
+    {
+      "id": "T310",
+      "title": "Define the normal and person baseline run matrix",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the launcher has explicit dataset definitions and can generate either the controlled global/local benchmark blocks or a full Cartesian planner matrix without duplicate runs",
+      "notes": "Implemented a duplicate-free controlled matrix with four global-plus-FMM rows and co_ut-plus-three-local rows (six baselines per dataset), plus an explicit Cartesian mode. Dataset and seed dimensions are separate RunSpec fields.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "tests.test_baseline_benchmark_launcher.BaselineMatrixTests",
+          "run_baseline_benchmarks.py --dry-run --matrix cartesian ... | count commands"
+        ],
+        "summary": "Controlled defaults produce 12 runs across objectnav/person; a one-dataset four-by-three Cartesian dry-run produces exactly 12 planner pairs."
+      },
+      "last_updated": "2026-08-02T01:01:35-04:00"
+    },
+    {
+      "id": "T311",
+      "title": "Add an explicit per-run episode limit",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T310"],
+      "acceptance": "main.py accepts a validated episode cap and evaluates at most that many dataset episodes while retaining all-episode behavior when the cap is zero",
+      "notes": "Added --max_episodes to arguments.py and capped main.py at min(dataset size, requested cap), with zero preserving all episodes and negatives rejected. main_vec.py fails clearly instead of silently ignoring the single-process-only cap.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "tests.test_baseline_benchmark_launcher.MainEpisodeLimitBoundaryTests",
+          "python -m py_compile arguments.py main.py main_vec.py"
+        ],
+        "summary": "The launcher-generated commands carry --max_episodes 200 and the main loop applies the validated cap."
+      },
+      "last_updated": "2026-08-02T01:01:35-04:00"
+    },
+    {
+      "id": "T312",
+      "title": "Implement the resumable baseline benchmark launcher",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T310", "T311"],
+      "acceptance": "one script preflights datasets and planner assets, launches each selected run with isolated outputs, streams logs, records manifests/status/commands and safely resumes completed runs",
+      "notes": "Added scripts/run_baseline_benchmarks.py with dataset/checkpoint/key preflight, isolated run IDs, exact commands, atomic JSON manifests/status, streamed logs, aggregate parsing, episode-count completion checks, retry history, completed-run resume, dry-run and completeness reports.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python scripts/run_baseline_benchmarks.py --dry-run --episodes 200 --output-root /tmp/conav-benchmark-dry-run",
+          "test ! -e /tmp/conav-benchmark-dry-run",
+          "tests.test_baseline_benchmark_launcher.ExecutionAndResumeTests"
+        ],
+        "summary": "Real dataset preflight finds enough objectnav/person episodes and the official PointNav asset; the 12 commands are correct, dry-run writes nothing, fake executions prove exact-count completion, failed-count detection and resume."
+      },
+      "last_updated": "2026-08-02T01:01:35-04:00"
+    },
+    {
+      "id": "T313",
+      "title": "Add launcher and episode-limit regressions",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T311", "T312"],
+      "acceptance": "tests cover controlled and Cartesian matrices, both dataset commands, planner prerequisites, 200-episode propagation, dry-run behavior, execution status and resume",
+      "notes": "The launcher tests use fake subprocess output and temporary directories; they do not invoke Habitat navigation, OpenAI or a GPU.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -W error::ResourceWarning -m unittest tests.test_baseline_benchmark_launcher -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_local_planner_baselines tests.test_pointnav_local_planner tests.test_navigation_steps_metric -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_person_objectnav -v"
+        ],
+        "summary": "All 11 launcher tests, 40 planner/PointNav/metric regressions and 13 person ObjectNav regressions pass."
+      },
+      "last_updated": "2026-08-02T01:09:49-04:00"
+    },
+    {
+      "id": "T314",
+      "title": "Document and validate baseline launcher usage",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T312", "T313"],
+      "acceptance": "documentation provides verified 200-episode dry-run, controlled-block, Cartesian and checkpoint-specific commands; focused tests, syntax, JSON and whitespace checks pass",
+      "notes": "README.md, docs/main_usage.md and docs/benchmark_experiment_plan.md document the matrix, output layout, resume rules, GPT key requirement, PointNav defaults and explicit map-RL checkpoint gating. The full repository suite still has 16 unrelated FireWorld template-feasibility errors and one pre-existing risk-prompt literal assertion.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/run_baseline_benchmarks.py --episodes 200 --dry-run --output-root /tmp/conav-baseline-final-validation-20260802",
+          "test ! -e /tmp/conav-baseline-final-validation-20260802",
+          "python scripts/run_baseline_benchmarks.py --help",
+          "python -m py_compile scripts/run_baseline_benchmarks.py arguments.py main.py main_vec.py",
+          "python -m json.tool todo/todo.json",
+          "rg -n \"[[:blank:]]+$\" scripts/run_baseline_benchmarks.py tests/test_baseline_benchmark_launcher.py arguments.py main.py main_vec.py docs/main_usage.md docs/benchmark_experiment_plan.md README.md",
+          "git diff --check -- README.md arguments.py main.py main_vec.py docs/main_usage.md docs/benchmark_experiment_plan.md todo/todo.json scripts/run_baseline_benchmarks.py tests/test_baseline_benchmark_launcher.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v"
+        ],
+        "summary": "The real-data dry-run finds objectnav=1000 and person=662 episodes, expands the controlled default to 12 independent 200-episode commands and creates no output. Help, compilation, JSON and whitespace/diff checks pass. The full suite runs 159 tests; every test related to this launcher passes, while the 16 existing FireWorld feasibility errors and one existing risk-prompt assertion remain."
+      },
+      "last_updated": "2026-08-02T01:09:49-04:00"
+    },
+    {
+      "id": "T315",
+      "title": "Trace empty scene point clouds to their depth conditions",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the exact depth preprocessing and Open3D call path that emits KDTreeFlann no-data warnings is reproduced and documented",
+      "notes": "Audit normalized Habitat depth, LOOK actions, valid-pixel filtering, voxel downsampling and DBSCAN independently of the selected local planner.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "rg -n \"normalize_depth|MIN_DEPTH|MAX_DEPTH\" configs/multi_objectnav_hm3d.yaml",
+          "inspect agents/vlm_agents.py::_preprocess_depth and utils/explored_map_utils.py::build_full_scene_pcd",
+          "call build_full_scene_pcd with an all-zero normalized depth frame"
+        ],
+        "summary": "The sensor emits normalized depth with max_depth=5 m; preprocessing converts values above 0.99 to no-return zeros, and an all-no-return frame reaches unconditional empty-cloud DBSCAN, reproducing the exact KDTreeFlann warning."
+      },
+      "last_updated": "2026-08-03T09:02:52-04:00"
+    },
+    {
+      "id": "T316",
+      "title": "Short-circuit empty point-cloud processing",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T315"],
+      "acceptance": "empty or fully invalid depth returns an empty Open3D point cloud without voxel/DBSCAN/KD-tree warnings, while non-empty behavior remains unchanged",
+      "notes": "build_full_scene_pcd now filters non-finite/non-positive depth and returns before downsampling or DBSCAN when no points exist. Generic object-point-cloud processing also returns before DBSCAN for empty inputs.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_astar_pointcloud_optimizations.EmptyPointCloudTests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/explored_map_utils.py utils/mapping.py"
+        ],
+        "summary": "An all-no-return depth frame and an explicitly empty Open3D cloud both return empty without emitting KDTreeFlann::SetRawData."
+      },
+      "last_updated": "2026-08-03T09:16:59-04:00"
+    },
+    {
+      "id": "T317",
+      "title": "Run A star once per robot navigation step",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "one A-star search produces the short-term goal and visualization path; the agent no longer invokes get_short_term_goal eleven times for a fixed map and goal",
+      "notes": "AStarPlanner.plan returns one full path, STG, STOP and replan result. Both agent implementations derive their STG and up to ten visualization waypoints from that result instead of performing ten additional searches.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_astar_pointcloud_optimizations tests.test_local_planner_baselines -v"
+        ],
+        "summary": "The single-process and vector agents each perform exactly one A-star search on a new map/goal, and all visualization waypoints come from that same path."
+      },
+      "last_updated": "2026-08-03T09:16:59-04:00"
+    },
+    {
+      "id": "T318",
+      "title": "Cache A star heuristics and unchanged optimal paths",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T317"],
+      "acceptance": "goal distance is computed at most once per goal update and an optimal path suffix is reused only when traversibility, goals and risk costs are unchanged",
+      "notes": "Goal-distance transforms are cached per goal. Strict path-suffix reuse was selected instead of an arbitrary rectangular ROI because a fixed crop can remove the globally optimal obstacle or risk detour. Reuse requires exact traversibility, goal, risk-map and risk-alpha equality and the current start to remain on the cached path.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_astar_pointcloud_optimizations.AStarOptimizationTests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_risk_core tests.test_global_planners tests.test_local_planner_baselines -v"
+        ],
+        "summary": "Unchanged steps use zero new searches and zero new distance transforms. Traversibility, goal or risk changes invalidate the path; a map-only change reuses only the goal heuristic and performs a fresh A-star search."
+      },
+      "last_updated": "2026-08-03T09:16:59-04:00"
+    },
+    {
+      "id": "T319",
+      "title": "Add empty-point-cloud and optimized A-star regressions",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T316", "T317", "T318"],
+      "acceptance": "tests prove no empty-cloud warning, one search per agent step, heuristic and exact-path reuse, cache invalidation, risk detours and a material synthetic speedup",
+      "notes": "Focused regressions were run without disturbing the active PointNav benchmark. The current long-running PointNav process loaded the pre-fix Python modules and must be restarted before its console stops showing the historical empty-cloud warnings.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_astar_pointcloud_optimizations tests.test_local_planner_baselines tests.test_risk_core tests.test_global_planners tests.test_pointnav_local_planner tests.test_person_objectnav -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/explored_map_utils.py utils/mapping.py utils/local_planners/base.py utils/local_planners/astar.py agents/vlm_agents.py agents/vlm_multi_agents.py tests/test_astar_pointcloud_optimizations.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m json.tool todo/todo.json",
+          "git diff --check -- utils/explored_map_utils.py utils/mapping.py utils/local_planners/base.py utils/local_planners/astar.py utils/local_planners/__init__.py agents/vlm_agents.py agents/vlm_multi_agents.py tests/test_astar_pointcloud_optimizations.py todo/todo.json",
+          "synthetic 121x121 maze benchmark comparing eleven searches with one plan plus path sampling"
+        ],
+        "summary": "All 65 focused tests pass, including reuse of the goal heuristic after a no-path result. The synthetic median improves from 0.871883 s for eleven searches to 0.089104 s for one search plus sampling, a 9.78x speedup. Compilation, JSON and diff checks pass. The full suite runs 165 tests; all new and planner-related tests pass, while the same 16 unrelated FireWorld feasibility errors and one pre-existing risk-prompt literal assertion remain."
+      },
+      "last_updated": "2026-08-03T09:16:59-04:00"
+    },
+    {
+      "id": "T320",
+      "title": "Audit teleoperation sensor saving and LiDAR acquisition",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the active teleoperation render, key/mouse event, sensor-output and Habitat LiDAR injection paths are identified",
+      "notes": "keyboard_teleop_full currently auto-saves only the composed dashboard. True 360-degree stitching exists, but this entrypoint never installs its four yaw-rotated depth sensors and therefore uses the forward-depth fallback.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect scripts/keyboard_teleop_full.py, utils/fire_sensors/suite.py, utils/fire_sensors/lidar_360.py and utils/fire_sensors/sensors/lidar.py",
+          "rg -n \"install_lidar_depth_sensors|save-frames-to|save_step\" scripts utils main.py"
+        ],
+        "summary": "The missing teleop config injection and dashboard-only save behavior are confirmed at their runtime call sites."
+      },
+      "last_updated": "2026-08-03T15:01:27-04:00"
+    },
+    {
+      "id": "T321",
+      "title": "Add an all-sensor snapshot button to teleoperation",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T320"],
+      "acceptance": "a visible clickable button and V shortcut save clean/smoke RGB-D, thermal, LiDAR, three radar products and the dashboard into one structured snapshot directory",
+      "notes": "Added a visible SAVE SENSOR PANELS button with resized-window click mapping and a V shortcut. Each click creates a timestamped scene/agent/step directory with up to nine individual panels, the displayed dashboard and a manifest that records saved/missing products and whether LiDAR was truly 360 degrees.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_keyboard_teleop_full.TeleopDashboardLayoutTests -v"
+        ],
+        "summary": "The click hitbox, resized-window coordinate mapping, all ten PNG outputs, RGB channel encoding and JSON manifest pass headless tests. Manual snapshots are independent from --save-frames-to automatic dashboard dumps."
+      },
+      "last_updated": "2026-08-03T15:09:16-04:00"
+    },
+    {
+      "id": "T322",
+      "title": "Enable true 360-degree LiDAR in full teleoperation",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T320"],
+      "acceptance": "teleoperation installs all four 90-degree depth sensors before Env construction, labels a scan as 360 degrees only when all four inputs exist and drops normalized no-return pixels",
+      "notes": "Full teleoperation now defaults to --lidar-360 1, injects four yaw slices before Env construction, and keeps the sensor suite active without a fire plan. Complete four-slice input is required for the 360 label; partial input uses forward depth. Normalized max-depth no-return pixels are removed before back-projection.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_lidar_360 -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/keyboard_teleop_full.py --help"
+        ],
+        "summary": "Four sensors are installed on every configured agent, the stitched point cloud covers all horizontal quadrants, no-return frames produce no false range ring, partial input reports forward fallback, and the standalone sensor smoke test passes."
+      },
+      "last_updated": "2026-08-03T15:09:16-04:00"
+    },
+    {
+      "id": "T323",
+      "title": "Validate and document teleoperation snapshots and LiDAR",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T321", "T322"],
+      "acceptance": "headless tests cover snapshot files, click hit testing, four-direction config injection, quadrant coverage, partial-input fallback and no-return filtering; usage docs match the CLI and controls",
+      "notes": "README.md, docs/main_usage.md and docs/vulcan_reproduction.md now document default 360-degree LiDAR, resolution/disable flags, the visible button, V shortcut and snapshot directory structure.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_keyboard_teleop_full tests.test_lidar_360 tests.test_risk_integration.SharedFireTimeTests tests.test_fire_torch_render -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile scripts/keyboard_teleop_full.py utils/fire_sensors/lidar_360.py utils/fire_sensors/sensors/lidar.py utils/fire_sensors/suite.py utils/fire_sensors/config.py tests/test_keyboard_teleop_full.py tests/test_lidar_360.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m json.tool todo/todo.json",
+          "git diff --check -- scripts/keyboard_teleop_full.py utils/fire_sensors/lidar_360.py utils/fire_sensors/sensors/lidar.py utils/fire_sensors/suite.py utils/fire_sensors/config.py tests/test_keyboard_teleop_full.py tests/test_lidar_360.py README.md docs/main_usage.md docs/vulcan_reproduction.md todo/todo.json"
+        ],
+        "summary": "All 21 focused integration/render tests pass, as do compilation, CLI help, JSON and diff checks. The full suite runs 171 tests; every teleoperation/LiDAR test passes, while the same 16 unrelated FireWorld template-feasibility errors and one pre-existing risk-prompt literal assertion remain."
+      },
+      "last_updated": "2026-08-03T15:09:16-04:00"
+    },
+    {
+      "id": "T324",
+      "title": "Verify nearest PointNav result and target benchmark study",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the source run is complete for exactly 200 episodes and its run ID, dataset, checkpoint, seed and condition match the planned target study",
+      "notes": "Source objectnav__normal__G-nearest__L-pointnav__s-1__n-200 completed attempt 2 with 200/200 episodes. The destination study manifest already plans the identical run ID.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect source and destination study_manifest.json, run manifest.json, status.json and metrics/aggregate.json"
+        ],
+        "summary": "The completed run uses objectnav normal, seed 1, two agents and the official checkpoint SHA-256 already recorded by the target study; SR=0.445 and SPL=0.235."
+      },
+      "last_updated": "2026-08-04T00:20:35-04:00"
+    },
+    {
+      "id": "T325",
+      "title": "Merge nearest PointNav artifacts into the baseline study",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T324"],
+      "acceptance": "the completed run directory exists under normal_planner_baselines_200ep/runs, source provenance is preserved and completeness reports the imported run as complete",
+      "notes": "Moved the exact completed run into normal_planner_baselines_200ep/runs. The former source study manifest, environment, launcher log and report are preserved under target/imports/pointnav_first_objectnav_nearest_200ep.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "validate exact source exists and destination/import archive are absent before mv",
+          "python -m json.tool outputs/benchmarks/normal_planner_baselines_200ep/reports/completeness.json",
+          "inspect imported status and aggregate for exact 200/200 completion"
+        ],
+        "summary": "The consolidated study now reports two completed runs, including nearest+pointnav with 200 observed episodes; source provenance remains recoverable inside the study."
+      },
+      "last_updated": "2026-08-04T00:21:20-04:00"
+    },
+    {
+      "id": "T326",
+      "title": "Run objectnav co_ut with all three local planners",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T325"],
+      "acceptance": "co_ut+fmm, co_ut+astar and co_ut+pointnav each run 200 normal objectnav episodes with seed 1 and write isolated launcher-compatible artifacts into the existing study",
+      "notes": "Sequential GPU-backed run completed. FMM attempt 2, A-star attempt 1 and PointNav attempt 1 each reported exactly 200/200 episodes. The first sandboxed FMM attempt failed before episode 1 because EGL could not see cuda:0 and remains preserved in status history.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect outputs/benchmarks/normal_planner_baselines_200ep/runs/objectnav__normal__G-co_ut__L-{fmm,astar,pointnav}__s-1__n-200/status.json",
+          "inspect outputs/benchmarks/normal_planner_baselines_200ep/runs/objectnav__normal__G-co_ut__L-{fmm,astar,pointnav}__s-1__n-200/metrics/aggregate.json"
+        ],
+        "summary": "All three co_ut local-planner rows completed successfully with observed_episodes=200 and readable aggregate metrics."
+      },
+      "last_updated": "2026-08-05T10:42:52-04:00"
+    },
+    {
+      "id": "T327",
+      "title": "Refresh and verify consolidated benchmark completeness",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T326"],
+      "acceptance": "the target completeness report reflects every existing run status and every completed aggregate reports exactly 200 episodes",
+      "notes": "Kept all unstarted rows in the original 24-run Cartesian manifest unchanged. The report now reflects five completed runs, the earlier interrupted nearest+A-star attempt, and eighteen unstarted runs.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m json.tool outputs/benchmarks/normal_planner_baselines_200ep/reports/completeness.json"
+        ],
+        "summary": "Completeness is valid JSON and records the exact terminal status for every planned run."
+      },
+      "last_updated": "2026-08-05T10:42:52-04:00"
+    },
+    {
+      "id": "T328",
+      "title": "Audit shared radar visualization coordinates",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the shared navigation/teleoperation radar render path and every image-to-physical-coordinate convention are identified before editing",
+      "notes": "Both dashboards consume RadarSensor image_bev/image_az/image_el. BEV uses X forward and Y left over plus/minus max_range_m; range-angle rows increase from zero to max range, while columns span the configured azimuth or elevation FOV.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/fire_sensors/sensors/radar.py, utils/fire_sensors/bev.py, utils/fire_sensors/suite.py and utils/fire_sensors/dashboard.py"
+        ],
+        "summary": "Confirmed that adding axes at RadarSensor output generation updates navigation, teleoperation and saved individual radar panels without duplicating dashboard logic."
+      },
+      "last_updated": "2026-08-04T10:57:45-04:00"
+    },
+    {
+      "id": "T329",
+      "title": "Add physical axes to all mmWave radar products",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T328"],
+      "acceptance": "radar BEV, range-azimuth and range-elevation images show readable horizontal and vertical labels plus physical tick values in metres or degrees",
+      "notes": "Added one shared metric-axis compositor and applied it only inside RadarSensor. BEV labels lateral Y and forward X in metres; range-angle panels label azimuth/elevation in degrees and range in metres. Raw heatmap and point-cloud outputs are untouched.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_radar_axes -v"
+        ],
+        "summary": "All three initial axis renderer and RadarSensor contract tests pass."
+      },
+      "last_updated": "2026-08-04T11:01:08-04:00"
+    },
+    {
+      "id": "T330",
+      "title": "Add radar-axis regression tests and visual sample",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T329"],
+      "acceptance": "tests verify labels, tick values, physical orientation and unchanged raw sensor arrays; a generated dashboard sample is visually inspected",
+      "notes": "Added direct axis-order and RadarSensor contract regressions. The wide range-elevation preview now matches the dashboard strip aspect ratio, preventing stretched labels.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_radar_axes tests.test_keyboard_teleop_full tests.test_lidar_360 tests.test_risk_integration.SharedFireTimeTests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "view_image outputs/fire_sensors_smoke_test_360/ep_0000/agent_0/step_00000_dashboard.png"
+        ],
+        "summary": "All 15 focused tests and both sensor smoke scenarios pass. Visual inspection confirms readable BEV, range-azimuth and range-elevation axes after dashboard scaling."
+      },
+      "last_updated": "2026-08-04T11:02:15-04:00"
+    },
+    {
+      "id": "T331",
+      "title": "Validate shared teleoperation and navigation radar panels",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T330"],
+      "acceptance": "focused sensor and teleoperation tests, smoke rendering, syntax, JSON and whitespace checks pass",
+      "notes": "The shared FireSensorSuite path feeds both navigation and teleoperation, so focused suite/teleop coverage validates both consumers. Documentation now records the coordinate conventions and confirms that axes are preview-only.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_radar_axes tests.test_keyboard_teleop_full tests.test_lidar_360 tests.test_risk_integration.SharedFireTimeTests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/fire_sensors/bev.py utils/fire_sensors/sensors/radar.py tests/test_radar_axes.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_sensors.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- utils/fire_sensors/bev.py utils/fire_sensors/sensors/radar.py tests/test_radar_axes.py docs/fire_world_pipeline.md todo/todo.json"
+        ],
+        "summary": "All 15 focused tests, compilation, forward/360 sensor smoke rendering, JSON and scoped whitespace checks pass. The full suite runs 174 tests; all three new radar tests pass, with only the same 16 unrelated FireWorld feasibility errors and one pre-existing risk-prompt literal failure."
+      },
+      "last_updated": "2026-08-04T11:03:29-04:00"
+    },
+    {
+      "id": "T332",
+      "title": "Audit radial floor spread and duration semantics",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the current radius formula, intensity presets, timeline bake boundary and plan-version implications are identified before editing",
+      "notes": "The solver already uses a source-centred Gaussian field with r(t)=min(max_radius, source_radius+speed*age), but current plans cap light/medium/severe near 0.935/1.10/1.21 m and have no duration deadline. Runtime only reads baked timeline.npz, and propagation-rule changes require a template-version bump to avoid plan-ID collisions.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/fire_world/propagation.py, utils/fire_world/templates.py, utils/fire_world/planner.py, tests/test_fire_propagation.py and active plans/timelines"
+        ],
+        "summary": "Confirmed that the change belongs in the radial radius helper plus template presets, with run_propagation supplying duration and old plans retaining their fixed-speed behavior."
+      },
+      "last_updated": "2026-08-04T15:19:48-04:00"
+    },
+    {
+      "id": "T333",
+      "title": "Implement duration-aware expanded radial spread",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T332"],
+      "acceptance": "new plans use larger bounded radial floor envelopes and a constant effective speed that reaches each target radius before the source's remaining simulation duration expires",
+      "notes": "Implemented a shared per-source radius helper. New template-v9 plans use light/medium/severe caps 1.43/2.20/2.97 m, Gaussian sigma fraction 0.58 and reach fraction 0.90. The effective speed is max(preset speed, deadline-required speed); archived plans without the field retain legacy fixed speed.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation -v"
+        ],
+        "summary": "All 16 focused propagation tests pass after implementation."
+      },
+      "last_updated": "2026-08-04T15:24:59-04:00"
+    },
+    {
+      "id": "T334",
+      "title": "Test radial growth deadline and compatibility",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T333"],
+      "acceptance": "tests prove circular growth, monotonic radius, enlarged intensity caps, deadline arrival, per-source scaling and unchanged legacy speed behavior",
+      "notes": "Added tests for XZ rotational symmetry, monotonic constant-speed growth, duration deadline arrival, delayed/scaled sources, configured-speed lower bound, legacy compatibility, enlarged presets and timeline metadata.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation -v"
+        ],
+        "summary": "All new radial/deadline/compatibility assertions pass, including a four-second in-memory timeline smoke bake."
+      },
+      "last_updated": "2026-08-04T15:24:59-04:00"
+    },
+    {
+      "id": "T335",
+      "title": "Document and generate a new radial-spread plan asset",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T333"],
+      "acceptance": "documentation states the new radius/deadline formula and a versioned Nfvxx8J5NCo plan can be generated without overwriting historical plans",
+      "notes": "Documented the v9 formula and presets. Generated Nfvxx8J5NCo multi_origin medium seed-7 four-source plan a4d02187f25f without touching historical plan IDs. Its sources reach 2.20 m in about 364-398 s, before the 600 s duration. Full-resolution timeline baking was intentionally not run concurrently with the active planner benchmark.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m utils.fire_world.planner --scene Nfvxx8J5NCo --fire_type multi_origin --intensity medium --seed 7 --num_ignitions 4",
+          "python -m json.tool scenes/Nfvxx8J5NCo/plans/a4d02187f25f.json",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_planner.py"
+        ],
+        "summary": "The new versioned plan is readable and records template v9, 2.20 m radius, 0.90 reach fraction and four deterministic t=0 ignitions; all planner smoke checks pass."
+      },
+      "last_updated": "2026-08-04T15:26:01-04:00"
+    },
+    {
+      "id": "T336",
+      "title": "Validate FireWorld radial spread changes",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T334", "T335"],
+      "acceptance": "focused propagation/planner tests, a small timeline smoke bake, syntax, JSON and whitespace checks pass and unrelated full-suite failures are recorded",
+      "notes": "A full-resolution a4d02187f25f timeline was not baked concurrently because the user's long-running co_ut benchmark is still active. The new plan, code, documented command and a small in-memory timeline bake are complete; runtime will require the documented bake after benchmark resource contention clears.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_world_pipeline_runner -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/fire_world/propagation.py utils/fire_world/templates.py tests/test_fire_propagation.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_planner.py",
+          "python -m json.tool todo/todo.json",
+          "python -m json.tool scenes/Nfvxx8J5NCo/plans/a4d02187f25f.json",
+          "git diff --check -- utils/fire_world/propagation.py utils/fire_world/templates.py tests/test_fire_propagation.py docs/main_usage.md docs/fire_world_pipeline.md todo/todo.json"
+        ],
+        "summary": "All 27 focused propagation/planner/pipeline tests, planner smoke tests, compilation, plan/TODO JSON and scoped whitespace checks pass. The full suite runs 179 tests; every new radial-spread test passes, with only the same 16 unrelated template-feasibility errors and one pre-existing risk-prompt literal failure."
+      },
+      "last_updated": "2026-08-04T15:26:56-04:00"
+    },
+    {
+      "id": "T337",
+      "title": "Audit excessive vertical flame propagation",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "all code paths that can raise visible flame height during propagation are identified before editing",
+      "notes": "Visible height is raised independently by the cell-count flame column and by six-connected filling of the full voxelized object bounding box. The final visible cap also grants one extra object-flame layer.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect FirePropagation._advance_object_bbox_fill and flame-column/final-cap logic in utils/fire_world/propagation.py"
+        ],
+        "summary": "Confirmed that both the free flame column and tall-object internal fill require independent vertical bounds; temperature and smoke transport need not be restricted."
+      },
+      "last_updated": "2026-08-04T16:42:12-04:00"
+    },
+    {
+      "id": "T338",
+      "title": "Implement metric vertical flame limits",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T337"],
+      "acceptance": "new plans limit free flame-column height in metres and prevent internal object BBox flame fill from climbing above a configured vertical extent",
+      "notes": "Added max_flame_column_height_m and object_bbox_max_vertical_spread_m as zero-disabled, legacy-compatible controls. The first converts metres to a non-exceeding effective voxel-layer count; the second clips the deterministic object fill mask relative to the object's lowest occupied voxel. Heat and smoke remain unrestricted.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation -v"
+        ],
+        "summary": "All 18 focused propagation tests pass, including integrated visible-column and tall-object limits."
+      },
+      "last_updated": "2026-08-04T16:46:34-04:00"
+    },
+    {
+      "id": "T339",
+      "title": "Version and generate vertically bounded fire plan",
+      "status": "done",
+      "priority": "P1",
+      "depends_on": ["T338"],
+      "acceptance": "template presets expose conservative light, medium and severe vertical bounds and a new versioned sample plan is generated without overwriting historical assets",
+      "notes": "Bumped TEMPLATE_VERSION to 10. Light/medium/severe use metric column caps 0.20/0.30/0.35 m and object-fill caps 0.55/0.75/0.90 m, with no extra object layer. Generated deterministic Nfvxx8J5NCo plan 0641161af604 without modifying historical plans.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m utils.fire_world.planner --scene Nfvxx8J5NCo --fire_type multi_origin --intensity medium --seed 7 --num_ignitions 4",
+          "python -m json.tool scenes/Nfvxx8J5NCo/plans/0641161af604.json"
+        ],
+        "summary": "The new four-source medium plan is valid JSON and records template v10 plus both vertical bounds."
+      },
+      "last_updated": "2026-08-04T16:46:34-04:00"
+    },
+    {
+      "id": "T340",
+      "title": "Add vertical propagation regression tests",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T338"],
+      "acceptance": "tests prove metre-based resolution-aware flame-column limits, bounded tall-object fill and legacy compatibility",
+      "notes": "Added tests for zero-field legacy behavior, resolution-aware metre-to-layer conversion, actual rendered column height, tall-object fill clipping, v10 presets and timeline metadata.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation -v"
+        ],
+        "summary": "All 18 focused tests pass."
+      },
+      "last_updated": "2026-08-04T16:46:34-04:00"
+    },
+    {
+      "id": "T341",
+      "title": "Document and validate vertical flame limits",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T339", "T340"],
+      "acceptance": "documentation, focused tests, planner smoke checks, syntax, JSON and whitespace validation pass; any deferred full-resolution bake is recorded",
+      "notes": "Documented v10 parameters and generated/baked sample assets. The 600 s timeline is readable and its final frame has visible flame from world y=-0.194 to 1.456 m, well below the 3.39 m world ceiling. Historical plans/timelines were not overwritten.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_fire_propagation tests.test_fire_ignition_count tests.test_fire_world_pipeline_runner -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/test_fire_planner.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/fire_world/propagation.py utils/fire_world/templates.py tests/test_fire_propagation.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m utils.fire_world.propagation --scene Nfvxx8J5NCo --plan_id 0641161af604 --voxel_m 0.15 --dt 0.5 --save_dt 1.0",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m json.tool todo/todo.json",
+          "python -m json.tool scenes/Nfvxx8J5NCo/plans/0641161af604.json",
+          "python -m json.tool outputs/fire_world/Nfvxx8J5NCo/0641161af604/timeline_meta.json",
+          "git diff --check -- utils/fire_world/propagation.py utils/fire_world/templates.py tests/test_fire_propagation.py docs/main_usage.md docs/fire_world_pipeline.md todo/todo.json scenes/Nfvxx8J5NCo/plans/0641161af604.json"
+        ],
+        "summary": "All 29 focused propagation/planner/pipeline tests, planner smoke tests, compilation, 600 s timeline bake/readback, JSON and scoped whitespace checks pass. The full suite runs 181 tests; all vertical-limit tests pass, with only the same 16 unrelated template-feasibility errors and one pre-existing risk-prompt literal failure."
+      },
+      "last_updated": "2026-08-04T16:50:10-04:00"
+    },
+    {
+      "id": "T342",
+      "title": "Audit GPT local-planner benchmark prerequisites and order",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T327"],
+      "acceptance": "the target study, dataset, episode count, run IDs, completed state, checkpoint, API credential availability and requested local-planner order are verified before launching",
+      "notes": "Target is the existing normal_planner_baselines_200ep Cartesian study, objectnav normal condition, seed 1, two agents, 200 episodes per run. The requested execution order is GPT+FMM, GPT+PointNav, then GPT+A-star. All three target run IDs are currently not_started; the official PointNav checkpoint is present. OPENAI_API_KEY is absent from the Codex process environment.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect outputs/benchmarks/normal_planner_baselines_200ep/study_manifest.json and reports/completeness.json",
+          "test OPENAI_API_KEY presence without printing its value",
+          "inspect scripts/run_baseline_benchmarks.py preflight, build_command and execute_run"
+        ],
+        "summary": "Run scope and order are unambiguous, existing completed artifacts will be preserved, but GPT cannot start without the required API credential."
+      },
+      "last_updated": "2026-08-05T10:42:52-04:00"
+    },
+    {
+      "id": "T343",
+      "title": "Run objectnav GPT with FMM PointNav then A-star",
+      "status": "blocked",
+      "priority": "P0",
+      "depends_on": ["T342"],
+      "acceptance": "GPT+fmm, GPT+pointnav and GPT+astar each complete exactly 200 normal objectnav episodes in that order, with A-star last, and write launcher-compatible isolated artifacts into the existing study",
+      "notes": "The user launched a separate normal_gpt_local_planners_200ep study after providing credentials locally. Later audit found that its best GPT+FMM attempt completed 117/200 episodes. T352 supersedes the earlier restart decision: the launcher now resumes this run at episode 118, then preserves the requested fmm, pointnav, astar order. Never print or store the key in repository artifacts.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "The attempted GPT+FMM run is incomplete and unsuitable for the benchmark because VLM failures silently changed the policy."
+      },
+      "last_updated": "2026-08-05T10:42:52-04:00"
+    },
+    {
+      "id": "T344",
+      "title": "Refresh GPT benchmark completeness and aggregates",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T343"],
+      "acceptance": "the consolidated completeness report records all three GPT rows as completed and every aggregate reports exactly 200 episodes",
+      "notes": "Preserve the original 24-run study manifest and all non-GPT run statuses.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "Pending GPT execution."
+      },
+      "last_updated": "2026-08-05T10:42:52-04:00"
+    },
+    {
+      "id": "T345",
+      "title": "Audit GPT null responses and fallback semantics",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the exact null-response code path, API status evidence, benchmark impact, OpenAI SDK response fields and normal/risk co_ut integration points are identified before editing",
+      "notes": "HTTP calls returned 200 but message.content was nullable. ast.literal_eval(None) raised ValueError and printed the same None twice; five exhausted retries silently returned both robots to frontier_0. The code discarded finish_reason, refusal, response/request IDs and usage. GPT normal planning can call CooperativeGlobalPlanner directly; risk-aware fallback must make the decorator's deterministic policy use co_ut weights and no-sharing behavior.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/chat_utils.py, utils/global_planners/{gpt,co_ut,risk_aware}.py and GPT run stdout/status",
+          "inspect OpenAI Python 2.44.0 ChatCompletion choice/message fields and create signature",
+          "consult official OpenAI Structured Outputs response/refusal guidance"
+        ],
+        "summary": "Confirmed a local response-handling bug rather than authentication, connection or rate-limit failure; current run stopped at 94/200 and is not active."
+      },
+      "last_updated": "2026-08-05T14:03:43-04:00"
+    },
+    {
+      "id": "T346",
+      "title": "Implement auditable strict GPT response handling",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T345"],
+      "acceptance": "GPT requests use a strict robot/frontier JSON Schema and a larger output budget; every attempt records response/request IDs, model, finish reason, refusal, content state, usage and validation outcome without logging credentials or image payloads",
+      "notes": "Implemented dynamic robot/frontier enums, json.loads, max_completion_tokens=300, one credential-free machine-readable status line per attempt, explicit refusal/content_filter handling and a typed terminal failure instead of a frontier_0 payload.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_gpt_response_handling -v"
+        ],
+        "summary": "Four focused tests verify strict request schema and token budget, complete response-state logging, empty-content retry, refusal handling and content-filter handling."
+      },
+      "last_updated": "2026-08-05T14:09:53-04:00"
+    },
+    {
+      "id": "T347",
+      "title": "Fallback failed GPT planning to co_ut",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T346"],
+      "acceptance": "normal GPT failures return CooperativeGlobalPlanner goals and risk-aware GPT failures return the risk-aware co_ut deterministic assignment, with a machine-readable fallback log",
+      "notes": "GPTGlobalPlanner catches only GPTResponseError. Normal failures call CooperativeGlobalPlanner directly; risk failures return the decorator's risk-aware co_ut assignment. Both paths emit a machine-readable fallback record and never synthesize frontier_0.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners -v"
+        ],
+        "summary": "Normal and risk-aware GPT failures match co_ut assignments; the risk path is verified to select co_ut utility weights."
+      },
+      "last_updated": "2026-08-05T14:09:53-04:00"
+    },
+    {
+      "id": "T348",
+      "title": "Add GPT response and co_ut fallback regressions",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T346", "T347"],
+      "acceptance": "tests cover strict schema construction, larger token budget, response-state logging, valid parsing, refusal/content_filter termination and normal/risk co_ut fallback",
+      "notes": "Added a dedicated mocked OpenAI response suite and extended global-planner tests for request dimensions, normal fallback, risk-aware fallback and fallback log fields.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_gpt_response_handling tests.test_global_planners -v"
+        ],
+        "summary": "All 17 focused GPT/global-planner tests pass, including five consecutive null responses becoming a typed terminal failure."
+      },
+      "last_updated": "2026-08-05T14:09:53-04:00"
+    },
+    {
+      "id": "T349",
+      "title": "Document and validate GPT failure handling",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T348"],
+      "acceptance": "documentation states strict response and co_ut fallback semantics; focused/full tests, compilation, JSON and whitespace checks are recorded before benchmark restart",
+      "notes": "Updated main usage and benchmark experiment documentation with strict response, status log and co_ut fallback semantics. No live paid API request was made during validation; mocked SDK responses cover the response-state branches deterministically.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/chat_utils.py utils/global_planners/errors.py utils/global_planners/gpt.py utils/global_planners/risk_aware.py tests/test_gpt_response_handling.py tests/test_global_planners.py",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_gpt_response_handling tests.test_global_planners -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_risk_integration tests.test_global_planners tests.test_gpt_response_handling -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- utils/chat_utils.py utils/global_planners/errors.py utils/global_planners/gpt.py utils/global_planners/risk_aware.py tests/test_gpt_response_handling.py tests/test_global_planners.py docs/main_usage.md docs/benchmark_experiment_plan.md todo/todo.json"
+        ],
+        "summary": "Compilation, TODO JSON and whitespace checks pass. All 17 focused GPT/global-planner tests pass. The final full suite runs 188 tests and every new test passes; its only failures are the same 16 unrelated FireWorld template-feasibility errors and one pre-existing risk-prompt literal assertion."
+      },
+      "last_updated": "2026-08-05T14:12:30-04:00"
+    },
+    {
+      "id": "T350",
+      "title": "Move GPT response audit records out of benchmark stdout",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T349"],
+      "acceptance": "GPT attempts retain complete machine-readable response records in the run artifact tree but no successful or retry attempt prints a gpt-response-status line to the console; fallback failures remain concise and visible",
+      "notes": "Each attempt appends status metadata as plain JSON to <dump_location>/logs/gpt/gpt_response_status.jsonl (rank-suffixed for nonzero vector ranks), including process and log timestamps. Per-request status metadata never enters stdout; T353 restores only the historical response label and non-empty JSON body.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_gpt_response_handling tests.test_global_planners -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/chat_utils.py tests/test_gpt_response_handling.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- utils/chat_utils.py tests/test_gpt_response_handling.py docs/main_usage.md docs/benchmark_experiment_plan.md todo/todo.json"
+        ],
+        "summary": "All 17 focused tests pass. They verify that gpt-response-status metadata never enters stdout while complete JSONL records remain readable; T353 separately restores only the historical response label and body. Compilation, JSON and whitespace checks pass."
+      },
+      "last_updated": "2026-08-05T14:56:49-04:00"
+    },
+    {
+      "id": "T351",
+      "title": "Audit interrupted GPT benchmark resume point",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T350"],
+      "acceptance": "the completed episode count, surviving metrics, active process state and exact reason retries restart at episode one are verified before changing resume semantics",
+      "notes": "Attempt 1 completed 117/200 and was interrupted; attempt 2 completed no episode; attempt 3 reached 2/200 and is no longer active although status is stale running. main.py always initializes count_episodes=0 and the launcher overwrites stdout.log, so retries previously had no episode cursor. The canonical aggregate from attempt 1 still contains six 3-decimal averages for 117 episodes.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect status.json, status_history.jsonl, stdout.log and metrics/aggregate.json for objectnav__normal__G-gpt__L-fmm__s-1__n-200",
+          "inspect main.py episode loop and scripts/run_baseline_benchmarks.py execute_run"
+        ],
+        "summary": "Confirmed episode 118 is the correct continuation and no navigation process is currently active."
+      },
+      "last_updated": "2026-08-05T15:10:22-04:00"
+    },
+    {
+      "id": "T352",
+      "title": "Add exact per-episode evaluation checkpoints and resume",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T351"],
+      "acceptance": "main.py can deterministically advance to a one-based start episode, seed prior metric sums, and atomically save exact progress after every episode; the launcher automatically resumes the highest valid incomplete checkpoint without changing the run identity",
+      "notes": "main.py accepts a one-based start_episode plus resume metrics, advances the seeded Habitat iterator without running completed episodes, verifies exact checkpoint episode identity, seeds cumulative sums and atomically writes resume_state.json before each progress line. The launcher selects the most advanced valid checkpoint, archives prior stdout and protects better aggregates from shorter retries. The existing run resolves to start_episode=118 from its 117-episode legacy aggregate. Its first 117 episode step history was inspected against Habitat's iterator: four natural scene changes and zero step-triggered forced switches, so ordinal advancement lands on the original episode 118.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_evaluation_resume tests.test_baseline_benchmark_launcher tests.test_gpt_response_handling tests.test_global_planners -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest discover -s tests -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/run_baseline_benchmarks.py --help",
+          "resolve _resume_candidate for objectnav__normal__G-gpt__L-fmm__s-1__n-200",
+          "reconstruct 117 per-episode step counts from output.log and replay Habitat EpisodeIterator scene-switch thresholds",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile utils/evaluation_resume.py utils/chat_utils.py arguments.py main.py main_vec.py scripts/run_baseline_benchmarks.py tests/test_evaluation_resume.py tests/test_baseline_benchmark_launcher.py tests/test_gpt_response_handling.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check"
+        ],
+        "summary": "All 33 focused resume/GPT/planner tests pass; the active run deterministically resolves to episode 118 and legacy_3_decimal_average. The full suite runs 193 tests and every new test passes; only the same 16 unrelated FireWorld template-feasibility errors and one pre-existing risk-prompt assertion remain."
+      },
+      "last_updated": "2026-08-05T15:28:00-04:00"
+    },
+    {
+      "id": "T353",
+      "title": "Restore concise GPT response console output",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T350"],
+      "acceptance": "valid non-empty GPT content prints only the historical gpt-4o response label and JSON body while detailed metadata remains JSONL-only",
+      "notes": "Non-empty content prints exactly the historical gpt-4o response label followed by the JSON body. Empty, refusal and content-filter responses add no response text; all status metadata remains JSONL-only.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_gpt_response_handling -v"
+        ],
+        "summary": "Five response tests pass and assert the exact concise stdout for valid/retried content plus no duplicate None/status output for terminal failures."
+      },
+      "last_updated": "2026-08-05T15:28:00-04:00"
+    },
+    {
+      "id": "T354",
+      "title": "Audit GPT artifact migration and fill run scope",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "source and destination manifests, GPT run status, active process state, destination conflicts and exact fill run IDs are verified before moving artifacts or launching navigation",
+      "notes": "normal_gpt_local_planners_200ep contains completed GPT+FMM at 200/200 and interrupted GPT+PointNav at 33/200 with an exact checkpoint; GPT+A* is not started. No active navigation process was visible. The destination 24-run master manifest already includes all objectnav GPT and fill run IDs and has no conflicting destination GPT directories.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect both study_manifest.json and reports/completeness.json files",
+          "inspect every GPT status.json, aggregate.json and resume_state.json",
+          "check active main.py and run_baseline_benchmarks.py processes"
+        ],
+        "summary": "The two existing GPT run directories can be migrated without collision; the requested fill scope is exactly objectnav normal seed 1 with FMM, PointNav and A-star for 200 episodes each."
+      },
+      "last_updated": "2026-08-05T22:25:19-04:00"
+    },
+    {
+      "id": "T355",
+      "title": "Add safe existing-study subset execution",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T354"],
+      "acceptance": "the benchmark launcher can execute explicitly selected run IDs already present in an existing master study without replacing its manifest, while preserving normal resume and completeness behavior",
+      "notes": "Added --only-run-ids. It reads and validates the existing master run_ids, executes the selected order, preserves the study manifest, seeds completeness from every existing status and performs preflight only for selected datasets/assets. This avoids using --force with a three-run matrix, which would replace the unified 24-run study manifest.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_baseline_benchmark_launcher -v",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/run_baseline_benchmarks.py --study-id normal_planner_baselines_200ep --only-run-ids objectnav__normal__G-fill__L-fmm__s-1__n-200 objectnav__normal__G-fill__L-pointnav__s-1__n-200 objectnav__normal__G-fill__L-astar__s-1__n-200 --dry-run",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile scripts/run_baseline_benchmarks.py tests/test_baseline_benchmark_launcher.py",
+          "git diff --check -- scripts/run_baseline_benchmarks.py tests/test_baseline_benchmark_launcher.py docs/main_usage.md todo/todo.json"
+        ],
+        "summary": "All 16 launcher tests pass. The real master study dry-run selects exactly the three fill runs in FMM, PointNav, A-star order, uses destination paths and leaves the 24-run manifest unchanged."
+      },
+      "last_updated": "2026-08-05T22:32:00-04:00"
+    },
+    {
+      "id": "T356",
+      "title": "Migrate normal GPT run artifacts into unified study",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T355"],
+      "acceptance": "completed and interrupted objectnav GPT runs reside under normal_planner_baselines_200ep/runs with runnable paths rebased, preserved logs/checkpoints and refreshed unified completeness",
+      "notes": "Moved GPT+FMM and GPT+PointNav run directories into normal_planner_baselines_200ep/runs. Rebased live manifest, command and status paths and recomputed run fingerprints. Historical stdout remains unchanged as provenance. The source study retains migration.json pointing to the unified destination.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "validate source runs directory is empty and both destination run directories exist",
+          "recompute and verify master and migrated run manifest fingerprints",
+          "verify GPT+FMM status/aggregate/resume are completed/200/200",
+          "verify GPT+PointNav status/aggregate/resume are interrupted/33/33",
+          "python -m json.tool outputs/benchmarks/normal_gpt_local_planners_200ep/migration.json",
+          "python -m json.tool outputs/benchmarks/normal_planner_baselines_200ep/reports/completeness.json"
+        ],
+        "summary": "Migration is internally consistent. The unified completeness now reports 6 completed, 2 interrupted/failed and 16 not-started runs across the unchanged 24-run master scope."
+      },
+      "last_updated": "2026-08-05T22:34:00-04:00"
+    },
+    {
+      "id": "T357",
+      "title": "Run normal ObjectNav fill planner baselines",
+      "status": "in_progress",
+      "priority": "P0",
+      "depends_on": ["T356"],
+      "acceptance": "fill+FMM, fill+PointNav and fill+A-star each run 200 normal ObjectNav episodes in that order and write isolated artifacts into the unified study",
+      "notes": "The current single 8 GB GPU permits one navigation process at a time; runs remain sequential and resumable. The subset launcher is active in FMM, PointNav, A-star order. Fill+FMM is running under the Codex tool session and reached exact checkpoint 37/200 at 23:17; host GPU process 2476105 uses about 4.0 GB.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/run_baseline_benchmarks.py --study-id normal_planner_baselines_200ep --only-run-ids objectnav__normal__G-fill__L-fmm__s-1__n-200 objectnav__normal__G-fill__L-pointnav__s-1__n-200 objectnav__normal__G-fill__L-astar__s-1__n-200",
+          "inspect fill+FMM status.json, stdout.log and navigation/metrics/resume_state.json after episode 1"
+        ],
+        "summary": "Execution is active. The latest exact checkpoint is 37/200 and stdout continues updating in the unified destination; the host GPU process is present."
+      },
+      "last_updated": "2026-08-05T23:18:00-04:00"
+    },
+    {
+      "id": "T358",
+      "title": "Validate unified GPT and fill benchmark outputs",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T356", "T357"],
+      "acceptance": "the master manifest remains unchanged in scope, completeness reflects migrated GPT and executed fill statuses, and every completed aggregate reports exactly 200 episodes",
+      "notes": "Validation must include JSON parsing, destination path checks, focused launcher tests and aggregate/checkpoint inspection.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "Pending migration and runs."
+      },
+      "last_updated": "2026-08-05T22:25:19-04:00"
+    },
+    {
+      "id": "T359",
+      "title": "Audit Cost-Utility and random global-planner contracts",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "current co_ut behavior, frontier score and distance units, planner factory, risk wrapper, launcher and focused tests are traced before implementation",
+      "notes": "Confirmed co_ut was nearest-unassigned and never consumed target_score. Frontier_Det supplies connected-component cell counts and grid-cell centroids; robot poses use the same grid coordinate convention. nearest remains the existing greedy baseline and no separate greedy planner will be added.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/global_planners, arguments.py, main.py, main_vec.py, utils/explored_map_utils.py, scripts/run_baseline_benchmarks.py and focused tests",
+          "inspect git history for the pre-interface co_ut branch"
+        ],
+        "summary": "The implementation gap and all integration points were identified without changing frontier extraction or active benchmark artifacts."
+      },
+      "last_updated": "2026-08-06T13:13:04-04:00"
+    },
+    {
+      "id": "T360",
+      "title": "Implement true Cost-Utility global planning",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T359"],
+      "acceptance": "co_ut independently maximizes frontier_size minus lambda times robot grid distance for every robot, with a validated configurable lambda and a compatible GPT fallback",
+      "notes": "Normal co_ut now independently maximizes the unnormalised benchmark formula for each robot. Missing scores are recovered from labelled frontier cell counts, lambda is validated, and GPT fallback uses the corrected implementation.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_baseline_benchmark_launcher -v"
+        ],
+        "summary": "All 33 focused global-planner and launcher tests pass, including exact formula, lambda-zero and invalid-lambda cases."
+      },
+      "last_updated": "2026-08-06T13:20:27-04:00"
+    },
+    {
+      "id": "T361",
+      "title": "Add reproducible random long-term goal sampling",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T359"],
+      "acceptance": "nav_mode=random deterministically samples sufficiently distant goals from each robot's reachable explored free map using the experiment seed, and excludes hard or dangerous cells when risk awareness is enabled",
+      "notes": "Sampling is stateless per episode and replan step, restricted to each robot's connected explored free component, prefers goals at least the configured metric distance away, avoids duplicate team goals when possible, and excludes dangerous/hard cells when risk awareness is active.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_baseline_benchmark_launcher -v"
+        ],
+        "summary": "Focused tests confirm same-seed reproducibility, different-seed variation, valid free-space goals, distinct team samples and factory/launcher exposure."
+      },
+      "last_updated": "2026-08-06T13:20:27-04:00"
+    },
+    {
+      "id": "T362",
+      "title": "Integrate and validate global-planner baselines",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T360", "T361"],
+      "acceptance": "CLI entrypoints, risk-aware wrapper, benchmark launcher, docs and focused tests all expose the corrected co_ut and new random modes without introducing a greedy alias",
+      "notes": "CLI, main/main_vec, risk wrapper, GPT fallback, launcher run IDs/default matrix and documentation are synchronized. No greedy alias was added; Frontier_Det and existing benchmark manifests were not changed. Historical co_ut artifacts are explicitly marked incompatible with corrected runs.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_baseline_benchmark_launcher tests.test_gpt_response_handling -v",
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_baseline_benchmark_launcher tests.test_gpt_response_handling tests.test_risk_frontier tests.test_risk_planner tests.test_risk_integration -v",
+          "PYTHONDONTWRITEBYTECODE=1 /home/liushe10/miniconda3/envs/co-nav3/bin/python -m py_compile arguments.py main.py main_vec.py scripts/run_baseline_benchmarks.py utils/global_planners/base.py utils/global_planners/co_ut.py utils/global_planners/factory.py utils/global_planners/gpt.py utils/global_planners/random.py utils/global_planners/risk_aware.py tests/test_global_planners.py tests/test_baseline_benchmark_launcher.py",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --help",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/run_baseline_benchmarks.py --datasets objectnav --global-planners random --local-planners fmm --matrix cartesian --episodes 2 --study-id random_planner_smoke --dry-run",
+          "test ! -e outputs/benchmarks/random_planner_smoke",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- arguments.py main.py main_vec.py scripts/run_baseline_benchmarks.py utils/global_planners tests/test_global_planners.py tests/test_baseline_benchmark_launcher.py docs/main_usage.md docs/benchmark_experiment_plan.md docs/risk_assessment.md docs/vulcan_reproduction.md README.md todo/todo.json"
+        ],
+        "summary": "All 41 focused planner/launcher/GPT tests pass, compilation and both CLI smoke checks pass, the random dry-run creates no artifacts, and JSON/whitespace checks pass. The wider 66-test risk run passes every affected test; its sole failure is the already-existing unrelated risk-prompt literal assertion."
+      },
+      "last_updated": "2026-08-06T13:20:27-04:00"
+    },
+    {
+      "id": "T363",
+      "title": "Audit push scope and remote branch state",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "current branch, upstream divergence, modified/untracked files, ignored outputs, large files and secret patterns are inspected before staging",
+      "notes": "vulcan is synchronized with origin/vulcan after fetch. outputs, weights, model/checkpoint and NumPy timeline extensions are already ignored. No OpenAI project-key pattern was found outside ignored datasets/artifacts. New scene inventory/plan JSON assets total about 17 MB and have no individual file above 1.2 MB.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "git fetch origin",
+          "git rev-list --left-right --count origin/vulcan...HEAD",
+          "git status --short",
+          "find repository files larger than 20 MiB",
+          "git check-ignore -v outputs/fire_world/Nfvxx8J5NCo/83679a07b632/timeline.npz weights/clip/ViT-B-32.pt data/ddppo-models/gibson-2plus-resnet50.pth",
+          "scan non-artifact files for sk-proj key patterns"
+        ],
+        "summary": "Remote divergence is 0/0. Large generated assets are ignored and no tracked output files or candidate secret files were found."
+      },
+      "last_updated": "2026-08-06T13:58:46-04:00"
+    },
+    {
+      "id": "T364",
+      "title": "Stage source and lightweight reproducibility assets only",
+      "status": "in_progress",
+      "priority": "P0",
+      "depends_on": ["T363"],
+      "acceptance": "staging contains intended source, tests, docs and lightweight scene JSON assets while excluding outputs, generated screenshots and every new file above 20 MiB",
+      "notes": "Use a conservative 20 MiB staging audit in addition to GitHub's larger hard limit. Preserve local generated files; ignore rather than delete them.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "Staging pending."
+      },
+      "last_updated": "2026-08-06T13:58:46-04:00"
+    },
+    {
+      "id": "T365",
+      "title": "Validate staged repository changes",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T364"],
+      "acceptance": "staged diff passes whitespace, JSON, focused regression tests, secret scan and large-file/output exclusion checks",
+      "notes": "Known unrelated test failures, if any, must be recorded rather than hidden.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "Validation pending."
+      },
+      "last_updated": "2026-08-06T13:58:46-04:00"
+    },
+    {
+      "id": "T366",
+      "title": "Commit and push vulcan changes",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T365"],
+      "acceptance": "validated changes are committed on vulcan and origin/vulcan resolves to the final local commit with a clean tracked worktree",
+      "notes": "Do not force-push, delete local artifacts or include ignored large files.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": "Commit and push pending."
+      },
+      "last_updated": "2026-08-06T13:58:46-04:00"
     }
   ]
 }

@@ -172,9 +172,15 @@ def stitch_lidar_360(
 
     clouds = []
     for uuid in found:
-        depth = np.asarray(obs[uuid])
+        depth = np.asarray(obs[uuid], dtype=np.float32)
         if normalize_depth:
+            # Habitat encodes no-return rays at the normalized upper bound.
+            # Converting those 1.0 values to metric depth before filtering
+            # creates an artificial ring at the camera's max depth.
+            no_return = ~np.isfinite(depth) | (depth >= 1.0 - 1e-6)
             depth = depth * span + float(min_depth_m)
+            depth = depth.copy()
+            depth[no_return] = 0.0
         local = _depth_to_local_xyz(
             depth, hfov_deg=90.0, max_range_m=max_range_m, stride=stride
         )

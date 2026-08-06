@@ -26,7 +26,7 @@
         4.911938667297363
       ],
       "ignite_time_s": 0.0,
-      "source_radius_m": 0.8,
+      "source_radius_m": 0.6,
       "source_temp_c": 938.0,
       "fuel_kg": 12.0,
       "smoke_yield": 0.8
@@ -119,25 +119,31 @@
   "propagation_rules": {
     "flammable_threshold": 0.4,
     "ignition_temp_c": 200.0,
-    "spread_speed_m_per_s": 0.27,
+    "spread_speed_m_per_s": 0.15,
     "spread_kernel": "gaussian",
     "ceiling_jet_speed_m_per_s": 0.42,
     "buoyancy_v_m_per_s": 0.65,
     "thermal_diffusivity": 0.05,
     "ambient_temp_c": 25.0,
-    "radiative_gain_c": 600.0,
-    "radiative_radius_cells": 6,
+    "radiative_gain_c": 270.0,
+    "radiative_radius_cells": 3,
     "floor_thermal_attenuation": 0.20,
     "flame_through_floors": 1,
     "fuel_neighborhood_cells": 2,
     "fuel_abundance_min": 0.5,
     "fuel_abundance_max": 2.5,
     "floor_ignite_temp_c": 250.0,
-    "floor_fuel_value": 0.7,
-    "floor_ignite_radius_cells": 2,
-    "floor_flame_contact_thresh": 0.2,
+    "floor_fuel_value": 0.45,
+    "floor_ignite_radius_cells": 1,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_spread_speed_m_per_s": 0.005,
+    "floor_max_spread_radius_m": 1.1,
+    "secondary_floor_spread_scale": 0.5,
+    "limit_flame_to_source_envelope": 1,
+    "floor_seed_flame_min": 0.1,
+    "floor_seed_flame_max": 0.5,
     "inextinguishable_sources": 1,
-    "flame_column_cells": 6,
-    "flame_column_decay": 0.75
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55
   }
 }

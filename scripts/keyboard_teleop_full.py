@@ -39,17 +39,22 @@ Controls (window must have focus):
   1..N       : jump to robot N-1 as the active robot
   P          : pause/resume the fire wall-clock (only in wallclock mode)
   R          : reset the episode (rewind fire, respawn humans + robots)
+  V          : save every sensor panel and the dashboard
+  Mouse      : click "SAVE SENSOR PANELS" in the top-right corner
   ESC        : quit
 """
 from __future__ import annotations
 
 import argparse
+from datetime import datetime
+import json
 import os
+import re
 import sys
 import traceback
 from pathlib import Path
 from types import SimpleNamespace
-from typing import List, Optional
+from typing import Dict, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -143,12 +148,37 @@ def parse_args() -> argparse.Namespace:
                    help="1: write Habitat's clean depth back into obs even "
                         "when the fire suite computed a smoky one.")
     p.add_argument("--use-thermal", type=int, default=1)
+    p.add_argument(
+        "--lidar-360",
+        "--lidar_360",
+        dest="lidar_360",
+        type=int,
+        choices=(0, 1),
+        default=1,
+        help="1: install four 90-degree depth sensors and stitch a true "
+             "360-degree LiDAR scan (default: 1).",
+    )
+    p.add_argument(
+        "--lidar-resolution",
+        "--lidar_resolution",
+        dest="lidar_resolution",
+        type=int,
+        default=320,
+        help="Width and height of each of the four LiDAR depth slices.",
+    )
 
     # misc
     p.add_argument("--gpu-id", type=int, default=0)
     p.add_argument("--seed", type=int, default=7)
     p.add_argument("--save-frames-to", default=None,
                    help="Optional per-step PNG dump directory.")
+    p.add_argument(
+        "--snapshot-dir",
+        default=None,
+        help="Directory for manual all-sensor snapshots. Defaults to "
+             "--save-frames-to when set, otherwise "
+             "outputs/teleop_sensor_snapshots.",
+    )
     return p.parse_args()
 
 
@@ -247,27 +277,194 @@ def compose_view(*,
     )
 
 
+SNAPSHOT_BUTTON_LABEL = "SAVE SENSOR PANELS  [V]"
+
+
+def snapshot_button_rect(image_shape) -> Tuple[int, int, int, int]:
+    """Return the clickable snapshot-button rectangle as x1, y1, x2, y2."""
+
+    height, width = image_shape[:2]
+    margin = max(8, min(16, width // 100))
+    button_width = min(340, max(180, width // 4))
+    button_height = min(42, max(30, height // 24))
+    return (
+        max(0, width - button_width - margin),
+        margin,
+        max(0, width - margin),
+        min(height - 1, margin + button_height),
+    )
+
+
+def point_in_rect(
+    x: int,
+    y: int,
+    rect: Tuple[int, int, int, int],
+) -> bool:
+    x1, y1, x2, y2 = rect
+    return x1 <= int(x) <= x2 and y1 <= int(y) <= y2
+
+
+def window_point_to_image(
+    x: int,
+    y: int,
+    *,
+    window_size: Tuple[int, int],
+    image_shape,
+) -> Tuple[int, int]:
+    """Map a click from a resized OpenCV window back to image pixels."""
+
+    window_width, window_height = window_size
+    image_height, image_width = image_shape[:2]
+    if window_width <= 0 or window_height <= 0:
+        return int(x), int(y)
+    return (
+        int(round(float(x) * image_width / window_width)),
+        int(round(float(y) * image_height / window_height)),
+    )
+
+
+def draw_snapshot_button(
+    dashboard: np.ndarray,
+) -> Tuple[np.ndarray, Tuple[int, int, int, int]]:
+    """Draw the mouse-accessible save button without changing panel layout."""
+
+    rendered = np.asarray(dashboard).copy()
+    rect = snapshot_button_rect(rendered.shape)
+    x1, y1, x2, y2 = rect
+    cv2.rectangle(rendered, (x1, y1), (x2, y2), (35, 112, 62), -1)
+    cv2.rectangle(rendered, (x1, y1), (x2, y2), (120, 255, 165), 2)
+    font_scale = 0.55 if (x2 - x1) >= 280 else 0.42
+    cv2.putText(
+        rendered,
+        SNAPSHOT_BUTTON_LABEL,
+        (x1 + 12, y1 + int((y2 - y1) * 0.68)),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        font_scale,
+        (255, 255, 255),
+        1,
+        cv2.LINE_AA,
+    )
+    return rendered, rect
+
+
+def _snapshot_scene_name(scene_id: Optional[str]) -> str:
+    if scene_id is None:
+        return "unknown_scene"
+    name = Path(str(scene_id)).stem.replace(".basis", "")
+    cleaned = re.sub(r"[^A-Za-z0-9_.-]+", "_", name).strip("._")
+    return cleaned or "unknown_scene"
+
+
+def save_sensor_snapshot(
+    *,
+    root_dir: Path,
+    scene_id: Optional[str],
+    agent_id: int,
+    robot_step: int,
+    rgb_clean: np.ndarray,
+    rgb_smoke: np.ndarray,
+    depth_clean: np.ndarray,
+    depth_smoke: np.ndarray,
+    thermal: Optional[np.ndarray],
+    lidar: Optional[np.ndarray],
+    radar_bev: Optional[np.ndarray],
+    radar_az: Optional[np.ndarray],
+    radar_el: Optional[np.ndarray],
+    dashboard: np.ndarray,
+    max_depth_m: float,
+    lidar_is_360: bool,
+) -> Path:
+    """Save each currently displayed sensor product into one directory."""
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    snapshot_dir = (
+        Path(root_dir)
+        / _snapshot_scene_name(scene_id)
+        / f"agent_{int(agent_id)}"
+        / f"step_{int(robot_step):05d}_{timestamp}"
+    )
+    snapshot_dir.mkdir(parents=True, exist_ok=False)
+
+    def metric_depth(depth: np.ndarray) -> np.ndarray:
+        arr = np.asarray(depth)
+        if arr.ndim == 3:
+            arr = arr[..., 0]
+        arr = arr.astype(np.float32, copy=False)
+        finite = arr[np.isfinite(arr)]
+        if finite.size and float(finite.max()) <= 1.0 + 1e-3:
+            arr = arr * float(max_depth_m)
+        return arr
+
+    products: Dict[str, Optional[np.ndarray]] = {
+        "rgb_clean.png": cv2.cvtColor(
+            np.ascontiguousarray(np.asarray(rgb_clean)[..., :3]),
+            cv2.COLOR_RGB2BGR,
+        ),
+        "depth_clean.png": dashboard_colorize_depth(
+            metric_depth(depth_clean), float(max_depth_m)
+        ),
+        "thermal.png": thermal,
+        "lidar_bev.png": lidar,
+        "rgb_smoke.png": cv2.cvtColor(
+            np.ascontiguousarray(np.asarray(rgb_smoke)[..., :3]),
+            cv2.COLOR_RGB2BGR,
+        ),
+        "depth_smoke.png": dashboard_colorize_depth(
+            metric_depth(depth_smoke), float(max_depth_m)
+        ),
+        "radar_bev.png": radar_bev,
+        "radar_range_azimuth.png": radar_az,
+        "radar_range_elevation.png": radar_el,
+        "dashboard.png": dashboard,
+    }
+
+    saved = []
+    missing = []
+    for filename, image in products.items():
+        if image is None:
+            missing.append(filename)
+            continue
+        path = snapshot_dir / filename
+        if not cv2.imwrite(str(path), np.asarray(image)):
+            raise RuntimeError(f"failed to write sensor snapshot {path}")
+        saved.append(filename)
+
+    manifest = {
+        "scene_id": None if scene_id is None else str(scene_id),
+        "agent_id": int(agent_id),
+        "robot_step": int(robot_step),
+        "captured_at": datetime.now().astimezone().isoformat(),
+        "lidar_is_360": bool(lidar_is_360),
+        "saved_files": saved,
+        "missing_files": missing,
+    }
+    (snapshot_dir / "manifest.json").write_text(
+        json.dumps(manifest, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return snapshot_dir
+
+
 # ---------------------------------------------------------------------------
-# Fire suite setup
+# Fire/sensor suite setup
 # ---------------------------------------------------------------------------
 def maybe_build_fire(args: argparse.Namespace, config, num_agents: int):
-    if not args.plan_id:
-        return None, None
-
-    fw_args = SimpleNamespace(
-        fire_world=1,
-        fire_world_plan_id=args.plan_id,
-        fire_world_scenes_root=args.scenes_root,
-        fire_world_out_root=args.out_root,
-        fire_clock_mode=args.clock_mode,
-        fire_speedup=args.speedup,
-        fire_steps_per_unit=args.steps_per_unit,
-        fire_seconds_per_unit=args.seconds_per_unit,
-        fire_world_smoke_k_ext=args.smoke_k_ext,
-        fire_world_n_steps=args.n_steps,
-    )
-    scene = FireScene.from_args(fw_args, config)
-    print(f"[fire_world] {scene.describe()}")
+    scene = None
+    if args.plan_id:
+        fw_args = SimpleNamespace(
+            fire_world=1,
+            fire_world_plan_id=args.plan_id,
+            fire_world_scenes_root=args.scenes_root,
+            fire_world_out_root=args.out_root,
+            fire_clock_mode=args.clock_mode,
+            fire_speedup=args.speedup,
+            fire_steps_per_unit=args.steps_per_unit,
+            fire_seconds_per_unit=args.seconds_per_unit,
+            fire_world_smoke_k_ext=args.smoke_k_ext,
+            fire_world_n_steps=args.n_steps,
+        )
+        scene = FireScene.from_args(fw_args, config)
+        print(f"[fire_world] {scene.describe()}")
 
     main_agent = config.habitat.simulator.agents_order[0]
     depth_cfg = config.habitat.simulator.agents[main_agent].sim_sensors.depth_sensor
@@ -276,7 +473,9 @@ def maybe_build_fire(args: argparse.Namespace, config, num_agents: int):
     suite_cfg = FireSensorConfig(
         max_depth_m=float(depth_cfg.max_depth),
         hfov_deg=float(depth_cfg.hfov),
-        smoke_density=float(args.smoke_density),
+        smoke_density=(
+            float(args.smoke_density) if scene is not None else 0.0
+        ),
         save_npz=False,
         voxel=VoxelSmokeConfig(
             n_steps=(min(int(args.n_steps), 10) if int(args.fast)
@@ -286,10 +485,10 @@ def maybe_build_fire(args: argparse.Namespace, config, num_agents: int):
                           else float(args.render_scale)),
             flame_smoke_passthrough=float(args.flame_smoke_passthrough),
             thermal_color_blend=0.85,
-            flame_noise_strength=(0.0 if int(args.fast) else 0.55),
-            flame_edge_break=(0.0 if int(args.fast) else 0.8),
-            flame_color_jitter=(0.0 if int(args.fast) else 0.25),
-            smoke_noise_strength=(0.0 if int(args.fast) else 0.30),
+            flame_noise_strength=(0.0 if int(args.fast) else 0.75),
+            flame_edge_break=(0.0 if int(args.fast) else 1.05),
+            flame_color_jitter=(0.0 if int(args.fast) else 0.32),
+            smoke_noise_strength=(0.0 if int(args.fast) else 0.24),
         ),
     )
     K = get_camera_K(int(rgb_cfg.width), int(rgb_cfg.height), float(rgb_cfg.hfov))
@@ -315,6 +514,25 @@ def maybe_build_fire(args: argparse.Namespace, config, num_agents: int):
 def main() -> None:
     args = parse_args()
     config = load_teleop_config(args)
+    if int(args.lidar_resolution) <= 0:
+        raise ValueError("--lidar-resolution must be positive")
+
+    if int(args.lidar_360):
+        from utils.fire_sensors.lidar_360 import (
+            LIDAR_DEPTH_UUIDS,
+            install_lidar_depth_sensors,
+        )
+
+        with habitat.config.read_write(config):
+            install_lidar_depth_sensors(
+                config,
+                resolution=int(args.lidar_resolution),
+                num_agents=int(args.num_agents),
+            )
+        print(
+            "[lidar_360] installed four surround sensors per agent: "
+            f"{LIDAR_DEPTH_UUIDS}"
+        )
 
     # ---------- env ----------
     env = Env(config=config)
@@ -357,6 +575,37 @@ def main() -> None:
     # ---------- window setup ----------
     main_window = "Co-NavGPT2 Teleop - Unified Sensor Dashboard"
     cv2.namedWindow(main_window, cv2.WINDOW_NORMAL)
+    ui_state = {
+        "snapshot_requested": False,
+        "snapshot_button_rect": None,
+        "dashboard_shape": None,
+    }
+
+    def on_mouse(event, x, y, flags, userdata):
+        del flags, userdata
+        rect = ui_state["snapshot_button_rect"]
+        image_shape = ui_state["dashboard_shape"]
+        try:
+            _, _, window_width, window_height = cv2.getWindowImageRect(
+                main_window
+            )
+            image_x, image_y = window_point_to_image(
+                x,
+                y,
+                window_size=(window_width, window_height),
+                image_shape=image_shape,
+            )
+        except (cv2.error, TypeError):
+            image_x, image_y = int(x), int(y)
+        if (
+            event == cv2.EVENT_LBUTTONUP
+            and rect is not None
+            and image_shape is not None
+            and point_in_rect(image_x, image_y, rect)
+        ):
+            ui_state["snapshot_requested"] = True
+
+    cv2.setMouseCallback(main_window, on_mouse)
 
     # ---------- action map ----------
     # Habitat-Lab 0.3.3 uses lowercase HabitatSimActions singleton values;
@@ -394,11 +643,14 @@ def main() -> None:
             obs = [obs]
         return obs
 
-    print("Controls:  W/A/D move/turn  S/SPACE stop  Q/E look  Tab switch  P pause  R reset  ESC quit")
+    print(
+        "Controls:  W/A/D move/turn  S/SPACE stop  Q/E look  Tab switch  "
+        "P pause  R reset  V save sensors  ESC quit"
+    )
 
     observations = reset_episode()
 
-    # ---------- fire (built after first reset so scene id is right) ----------
+    # ---------- sensors/fire (built after reset so scene id is right) --------
     fire_scene, fire_suites = maybe_build_fire(args, config, num_agents)
     if fire_scene is not None:
         # First-frame observation was captured before the fire clock
@@ -410,6 +662,11 @@ def main() -> None:
     robot_step = 0
     POLL_MS = 50   # ~20 Hz redraw so wallclock fire visibly evolves
     save_dir = Path(args.save_frames_to) if args.save_frames_to else None
+    snapshot_dir = Path(
+        args.snapshot_dir
+        or args.save_frames_to
+        or "outputs/teleop_sensor_snapshots"
+    )
     last_saved_step = -1
     if save_dir is not None:
         save_dir.mkdir(parents=True, exist_ok=True)
@@ -484,7 +741,7 @@ def main() -> None:
                 pause_key = ""
             status_lines.append(
                 "Controls: W/A/D=move/turn  S/Space=stop  Q/E=look  "
-                f"Tab/1-9=switch{pause_key}  R=reset  Esc=quit"
+                f"Tab/1-9=switch{pause_key}  R=reset  V=save  Esc=quit"
             )
 
             grid = compose_view(
@@ -510,6 +767,9 @@ def main() -> None:
                 ),
             )
 
+            grid, button_rect = draw_snapshot_button(grid)
+            ui_state["snapshot_button_rect"] = button_rect
+            ui_state["dashboard_shape"] = grid.shape
             cv2.imshow(main_window, grid)
 
             # Save the frame after it is rendered for this exact step.  The
@@ -521,6 +781,38 @@ def main() -> None:
 
             # ------ key handling ------
             key = cv2.waitKey(POLL_MS) & 0xFF
+            snapshot_requested = bool(ui_state["snapshot_requested"])
+            ui_state["snapshot_requested"] = False
+            if key in (ord("v"), ord("V")):
+                snapshot_requested = True
+            if snapshot_requested:
+                current_scene = getattr(
+                    getattr(env, "current_episode", None),
+                    "scene_id",
+                    args.scene_id,
+                )
+                saved_to = save_sensor_snapshot(
+                    root_dir=snapshot_dir,
+                    scene_id=current_scene,
+                    agent_id=active_agent,
+                    robot_step=robot_step,
+                    rgb_clean=rgb_clean,
+                    rgb_smoke=rgb_smoke,
+                    depth_clean=depth_clean_raw,
+                    depth_smoke=depth_smoke,
+                    thermal=therm_bgr,
+                    lidar=lidar_img,
+                    radar_bev=radar_bev,
+                    radar_az=radar_az,
+                    radar_el=radar_el,
+                    dashboard=grid,
+                    max_depth_m=max_d,
+                    lidar_is_360=bool(
+                        sensors.get("lidar_is_360", False)
+                    ) if sensors else False,
+                )
+                print(f"[teleop] saved sensor panels -> {saved_to}")
+                continue
             if key == 0xFF:
                 continue
             if key == 27:  # ESC

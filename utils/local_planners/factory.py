@@ -1,14 +1,18 @@
-"""Factory for the formal FMM, A* and RL local-planner baselines."""
+"""Factory for FMM, A*, map-RL and pretrained PointNav local planners."""
 from __future__ import annotations
 
 from utils.fmm_planner import FMMPlanner
 from utils.risk.config import RiskConfig
 
 from .astar import AStarPlanner
+from .pointnav import (
+    load_pointnav_policy_adapter,
+    load_pointnav_runtime_spec,
+)
 from .rl import RLGridPlanner, load_rl_policy
 
 
-LOCAL_PLANNERS = ("fmm", "astar", "rl")
+LOCAL_PLANNERS = ("fmm", "astar", "rl", "pointnav")
 
 
 def validate_local_planner_config(args):
@@ -39,12 +43,20 @@ def validate_local_planner_config(args):
             expected_risk_aware=aware,
             expected_crop_size=crop_size,
         )
+    if planner_name == "pointnav":
+        if float(getattr(args, "pointnav_goal_tolerance", 0.05)) < 0.0:
+            raise ValueError("--pointnav_goal_tolerance must be non-negative")
+        load_pointnav_runtime_spec(
+            getattr(args, "pointnav_checkpoint", None),
+            getattr(args, "pointnav_config", None),
+            getattr(args, "pointnav_observation_mode", "auto"),
+        )
     return aware
 
 
 def create_local_planner(
     name,
-    traversible,
+    traversible=None,
     *,
     risk_map=None,
     risk_alpha=0.0,
@@ -55,8 +67,31 @@ def create_local_planner(
     rl_crop_size=31,
     rl_rollout_steps=5,
     risk_aware=False,
+    pointnav_checkpoint=None,
+    pointnav_config=None,
+    pointnav_device="cpu",
+    pointnav_deterministic=True,
+    pointnav_goal_tolerance=0.05,
+    pointnav_env_action_map=None,
+    pointnav_observation_mode="auto",
 ):
     planner_name = str(name).strip().lower()
+    if planner_name == "pointnav":
+        return load_pointnav_policy_adapter(
+            pointnav_checkpoint,
+            config_path=pointnav_config,
+            device=pointnav_device,
+            deterministic=pointnav_deterministic,
+            goal_tolerance_m=pointnav_goal_tolerance,
+            env_action_map=pointnav_env_action_map,
+            observation_mode=pointnav_observation_mode,
+        )
+    if traversible is None:
+        raise ValueError(
+            "{} local planner requires a traversible grid".format(
+                planner_name
+            )
+        )
     common = {
         "risk_map": risk_map,
         "risk_alpha": risk_alpha,
