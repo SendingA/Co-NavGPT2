@@ -27,7 +27,7 @@ class SmokeConfig:
     """
 
     smoke_density: float = 0.6  # [0,1] dimensionless control
-    smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
+    smoke_color_rgb: Tuple[int, int, int] = (72, 72, 72)
     smoke_k_max: float = 2.3  # density=1 -> V ≈ 1 m
 
 
@@ -110,7 +110,7 @@ class VoxelSmokeConfig:
 
     n_steps: int = 16                  # ray-march samples per pixel
     smoke_k_ext: float = 4.0           # extinction coefficient on smoke voxels (1/m)
-    smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
+    smoke_color_rgb: Tuple[int, int, int] = (72, 72, 72)
     # Trilinear-friendly cutoff: propagation pins flame source voxels at
     # ~0.6, but trilinear interpolation bleeds the boundary down to
     # 0.05-0.30. The previous default 0.20 zeroed everything except the

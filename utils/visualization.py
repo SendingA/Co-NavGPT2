@@ -71,11 +71,15 @@ def vis_result_fast(
     color: Union[Color, ColorPalette] = ColorPalette.default(),
     instance_random_color: bool = False,
     draw_bbox: bool = True,
+    mask_exclude_classes: Iterable[str] = ("fire",),
 ) -> np.ndarray:
-    '''
-    Annotate the image with the detection results. 
-    This is fast but of the same resolution of the input image, thus can be blurry. 
-    '''
+    """Annotate detections without hiding rendered fire texture.
+
+    FireWorld supplies a smoke-invariant thermal fire mask for perception.
+    Filling that mask with a semantic palette color makes ``--print_images``
+    show a flat green blob instead of the underlying volumetric flame. Keep
+    its bounding box and label, but reserve mask fills for the other classes.
+    """
     # Annotators
     bounding_box_annotator = sv.BoundingBoxAnnotator(
         color=color,
@@ -96,6 +100,22 @@ def vis_result_fast(
         for _, _, confidence, class_id, _, _
         in detections
     ]
+    mask_detections = detections
+    excluded_names = {
+        str(name).casefold()
+        for name in mask_exclude_classes
+    }
+    excluded_ids = {
+        class_id
+        for class_id, class_name in enumerate(classes)
+        if class_name.casefold() in excluded_names
+    }
+    if excluded_ids and detections.class_id is not None:
+        keep_mask = ~np.isin(
+            np.asarray(detections.class_id),
+            np.fromiter(excluded_ids, dtype=np.int64),
+        )
+        mask_detections = detections[keep_mask]
     
     if instance_random_color:
         # Generate random colors for each instance
@@ -103,7 +123,12 @@ def vis_result_fast(
         detections.class_id = np.arange(len(detections))
         
     # Apply mask annotations
-    annotated_image = mask_annotator.annotate(scene=image.copy(), detections=detections)
+    annotated_image = image.copy()
+    if len(mask_detections) > 0 and mask_detections.mask is not None:
+        annotated_image = mask_annotator.annotate(
+            scene=annotated_image,
+            detections=mask_detections,
+        )
     
     # Apply bounding box annotations
     if draw_bbox:

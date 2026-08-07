@@ -341,7 +341,7 @@ class VoxelRenderParams:
     max_depth_m: float = 5.0
     n_steps: int = 16
     smoke_k_ext: float = 1.5
-    smoke_color_rgb: Tuple[int, int, int] = (180, 180, 180)
+    smoke_color_rgb: Tuple[int, int, int] = (72, 72, 72)
     # Cut-off applied to interpolated flame samples. Values above 0.1
     # were too aggressive: the propagation pins source voxels at ~0.6,
     # but trilinear interpolation bleeds the boundary down to 0.05-0.30,

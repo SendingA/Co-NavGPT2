@@ -137,6 +137,13 @@ RGB 火焰使用独立的烟雾散射/火焰辐射积分：高温火焰会局部
 变化只影响 RGB 可视化，不会改变 timeline、thermal temperature、风险地图
 或 benchmark ground truth。
 
+烟雾散射色默认为灰黑色 `(72, 72, 72)`。`--print_images 1` 的检测图仍显示
+`fire` 的 bounding box 和置信度，但不会再用绿色语义 mask 覆盖体积火焰。
+如果需要与 teleoperation 相同的火舌纹理、边缘扰动和时间闪烁，请在导航命令
+中使用 `--fire_fast 0`；默认的 `--fire_world_n_steps 24` 和
+`--fire_world_render_scale 0.5` 会保留完整采样设置。benchmark 默认的
+`--fire_fast 1` 优先速度。
+
 ### 2.8 生成 plan 时指定点火源数量
 
 `utils.fire_world.planner` 支持 `--num_ignitions N`，用于严格指定 plan
