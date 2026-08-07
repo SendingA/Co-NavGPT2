@@ -14,6 +14,9 @@ yolov8l-world.pt
 .history
 exp_*
 
+# Local task tracking.
+todo/
+
 # Heavy artifacts that should never be committed.
 outputs/
 weights/
