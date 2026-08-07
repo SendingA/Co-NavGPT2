@@ -1,7 +1,7 @@
 {
   "meta": {
     "project": "Co-NavGPT2",
-    "updated_at": "2026-08-06T14:40:12-04:00",
+    "updated_at": "2026-08-07T17:09:12-04:00",
     "owner": "copilot"
   },
   "items": [
@@ -3707,7 +3707,7 @@
     {
       "id": "T357",
       "title": "Run normal ObjectNav fill planner baselines",
-      "status": "in_progress",
+      "status": "done",
       "priority": "P0",
       "depends_on": ["T356"],
       "acceptance": "fill+FMM, fill+PointNav and fill+A-star each run 200 normal ObjectNav episodes in that order and write isolated artifacts into the unified study",
@@ -3878,7 +3878,7 @@
     {
       "id": "T366",
       "title": "Commit and push vulcan changes",
-      "status": "in_progress",
+      "status": "done",
       "priority": "P0",
       "depends_on": ["T365"],
       "acceptance": "validated changes are committed on vulcan and origin/vulcan resolves to the final local commit with a clean tracked worktree",
@@ -3889,6 +3889,344 @@
         "summary": "Source commit complete; generated-asset ignore-rule commit and verified push are pending."
       },
       "last_updated": "2026-08-06T14:40:12-04:00"
+    },
+    {
+      "id": "T367",
+      "title": "Verify static-person FireWorld benchmark path",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the person dataset, episode reset path and humanoid step logic prove that the benchmark person is placed at a dataset goal and remains fixed during each episode",
+      "notes": "person_objectnav_hm3d.yaml enables static_person_goal. main.py extracts the current episode person goal and calls walker.reset(..., static=True); RandomHumanoidWalker.step skips static states. Fire plan 83679a07b632 restricts the run to Nfvxx8J5NCo, whose person shard contains 20 episodes sharing one fixed goal position.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect configs/person_objectnav_hm3d.yaml, main.py, utils/person_objectnav.py and envs/random_humanoid.py",
+          "gzip -cd data/datasets/objectnav_hm3d_person_v1/val/content/Nfvxx8J5NCo.json.gz | jq person episode and goal summary",
+          "verify scenes/Nfvxx8J5NCo/plans/83679a07b632.json and outputs/fire_world/Nfvxx8J5NCo/83679a07b632/timeline.npz"
+        ],
+        "summary": "All 20 Nfvxx8J5NCo episodes target person and share the finite goal [-5.2247, 0.180857, -2.59347]; the runtime places a static humanoid there and does not advance it."
+      },
+      "last_updated": "2026-08-06T16:59:31-04:00"
+    },
+    {
+      "id": "T368",
+      "title": "Run person FireWorld GPT plus FMM benchmark with images",
+      "status": "blocked",
+      "priority": "P0",
+      "depends_on": ["T367"],
+      "acceptance": "all 20 available Nfvxx8J5NCo person episodes run with GPT global planning, FMM local planning, sensed risk, FireWorld plan 83679a07b632 and print_images=1 in an isolated output directory",
+      "notes": "The current Codex execution environment has no OPENAI_API_KEY and cannot communicate with the NVIDIA driver. Starting here would exercise GPT failure fallback rather than the requested GPT baseline. Run the validated command in the user's authenticated GPU terminal.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "check OPENAI_API_KEY presence without printing its value",
+          "nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu --format=csv,noheader",
+          "/home/liushe10/miniconda3/envs/co-nav3/bin/python main.py --help"
+        ],
+        "summary": "CLI and all required dataset/fire assets are valid; execution is blocked only by missing API credentials and unavailable GPU access in this process environment."
+      },
+      "last_updated": "2026-08-06T16:59:31-04:00"
+    },
+    {
+      "id": "T369",
+      "title": "Audit FireWorld plan-id rename dependencies",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "all plan files, baked timeline directories, metadata, manifests, runtime lookups, docs and tests affected by plan-id changes are identified before migration",
+      "notes": "Found 417 plans across 36 scenes and 18 baked timelines. The stable semantic format is <scene_id>_<fire_type>_<intensity>_<12hex_hash>, preserving deterministic uniqueness while making every component meaningful.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inventory scenes/*/plans/*.json and outputs/fire_world timelines",
+          "inspect utils/fire_world/planner.py, runtime.py and pipeline_runner.py",
+          "search source, tests and docs for 12-hex plan-id assumptions"
+        ],
+        "summary": "The rename must update filenames and JSON plan_id fields, output directories, sidecar/manifests and future ID generation; embedded timeline metadata can remain backward-compatible if validation prefers migrated sidecars."
+      },
+      "last_updated": "2026-08-06T17:23:42-04:00"
+    },
+    {
+      "id": "T370",
+      "title": "Implement semantic FireWorld plan identifiers",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T369"],
+      "acceptance": "new plans use deterministic scene_type_intensity_hash identifiers and retain the underlying 12-hex plan_hash in schema version 4",
+      "notes": "Keep runtime CLI compatibility with arbitrary string plan IDs and avoid unstable ordinal numbering.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile utils/fire_world/plan_ids.py utils/fire_world/planner.py utils/fire_world/pipeline_runner.py scripts/migrate_fire_plan_ids.py",
+          "python -m unittest tests.test_fire_plan_naming tests.test_fire_ignition_count tests.test_fire_world_pipeline_runner -v",
+          "python scripts/migrate_fire_plan_ids.py"
+        ],
+        "summary": "All 14 focused tests pass. The real-data dry-run discovers 417 collision-free pending plan renames and 18 matching timeline directories."
+      },
+      "last_updated": "2026-08-06T17:27:52-04:00"
+    },
+    {
+      "id": "T371",
+      "title": "Migrate existing plans and baked assets",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T370"],
+      "acceptance": "all 417 plan files and all 18 existing timeline directories use semantic IDs, with metadata/manifests updated and a reversible migration map saved",
+      "notes": "Do not recompute multi-gigabyte voxel arrays; preserve local output contents and update sidecar metadata atomically.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python scripts/migrate_fire_plan_ids.py --apply",
+          "python scripts/migrate_fire_plan_ids.py",
+          "validate every plan filename against JSON plan_id/schema_version/plan_hash",
+          "validate every timeline directory against timeline_meta.json plan_id"
+        ],
+        "summary": "Migrated 417 plans, 18 timeline directories, 7 metadata files and 2 historical output paths. A second dry-run reports pending=0; no legacy 12-hex-only plan or timeline directory names remain."
+      },
+      "last_updated": "2026-08-06T17:29:59-04:00"
+    },
+    {
+      "id": "T372",
+      "title": "Update references and validate semantic plan loading",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T371"],
+      "acceptance": "docs/examples use semantic names, focused tests pass, no old plan filenames remain and representative migrated timelines load successfully",
+      "notes": "All naming-related validation passes. The broader semantic matrix still reports the same 16 pre-existing template-feasibility errors for scenes lacking enough severe kitchen/electric candidates; this is unrelated to plan naming and was already documented in prior tasks.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m unittest tests.test_fire_plan_naming tests.test_fire_ignition_count tests.test_fire_world_pipeline_runner tests.test_fire_propagation plus six feasible semantic-template tests -v",
+          "python scripts/test_fire_planner.py",
+          "validate_timeline for all 18 migrated timelines",
+          "FireWorld.load('TEEsavR23oF', 'TEEsavR23oF_kitchen_grease_fire_medium_d4f8b9c253ab')",
+          "python scripts/migrate_fire_plan_ids.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check",
+          "python main.py --help"
+        ],
+        "summary": "All 38 focused unit tests and the standalone planner smoke suite pass. All 18 timelines validate, a migrated legacy timeline loads successfully, dry-run reports pending=0, CLI help renders, and JSON/whitespace checks pass."
+      },
+      "last_updated": "2026-08-06T17:33:46-04:00"
+    },
+    {
+      "id": "T373",
+      "title": "Audit automatic FireWorld plan readiness",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "the person dataset scene inventory, medium plan candidates, baked timeline availability and current per-episode FireScene lifecycle are confirmed before implementation",
+      "notes": "All 36 person scenes have medium plans, but only Nfvxx8J5NCo and TEEsavR23oF currently have runnable medium timelines. Automatic runs must prefilter to timeline-ready scenes and rebuild the FireScene when the Habitat episode changes scene.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect main.py, arguments.py, utils/fire_world/scene.py and utils/risk/runtime.py",
+          "inventory scenes/*/plans/*_medium_*.json and outputs/fire_world/*/*/timeline.npz",
+          "count data/datasets/objectnav_hm3d_person_v1/val/content/*.json.gz"
+        ],
+        "summary": "The existing runtime requires one explicit plan and constructs FireScene only once. There are 36 person shards and 662 episodes, while exactly two scenes currently have at least one baked medium timeline."
+      },
+      "last_updated": "2026-08-06T18:27:04-04:00"
+    },
+    {
+      "id": "T374",
+      "title": "Implement scene-aware FireWorld plan selection",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T373"],
+      "acceptance": "--fire_world=1 without an explicit plan defaults to medium, filters the dataset to runnable scenes, deterministically selects a plan for each active episode scene and propagates its active ID to risk outputs",
+      "notes": "Explicit plan IDs remain supported. Auto selection prioritizes multi_origin, then kitchen_grease_fire, bedroom_textile and living_room_electric; within a type it selects the highest template_version and requires timeline.npz.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile arguments.py main.py utils/fire_world/scene.py utils/fire_world/plan_selection.py utils/risk/runtime.py tests/test_fire_plan_selection.py",
+          "python -m unittest tests.test_fire_plan_selection -v",
+          "git diff --check -- arguments.py main.py utils/fire_world/scene.py utils/fire_world/plan_selection.py utils/risk/runtime.py tests/test_fire_plan_selection.py todo/todo.json"
+        ],
+        "summary": "Five focused tests pass for multi-origin priority, latest-template selection, type fallback, missing-timeline exclusion, exact explicit selection, runnable-scene discovery and active risk-report plan IDs. Changed Python files compile and whitespace checks pass."
+      },
+      "last_updated": "2026-08-06T18:34:16-04:00"
+    },
+    {
+      "id": "T375",
+      "title": "Test and document automatic medium FireWorld runs",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T374"],
+      "acceptance": "focused tests cover deterministic selection, fallback, scene discovery and active-plan reporting; CLI help and docs show the person GPT plus FMM command",
+      "notes": "",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m unittest tests.test_fire_plan_selection -v",
+          "python main.py --help",
+          "load person_objectnav_hm3d.yaml, filter by discovered runnable scenes and deserialize ObjectNav-v1 dataset",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- arguments.py main.py utils/fire_world/scene.py utils/fire_world/plan_selection.py utils/risk/runtime.py tests/test_fire_plan_selection.py docs/main_usage.md todo/todo.json"
+        ],
+        "summary": "The five new tests pass, CLI help exposes the three selector flags, documentation includes the GPT plus FMM command, and live dataset deserialization confirms exactly 40 runnable person episodes: 20 each for Nfvxx8J5NCo and TEEsavR23oF. The broader risk integration run has one known unrelated prompt-literal failure expecting 'global top-view' while the current prompt says 'candidate top-view'."
+      },
+      "last_updated": "2026-08-06T18:38:12-04:00"
+    },
+    {
+      "id": "T376",
+      "title": "Run person FireWorld GPT plus FMM episodes",
+      "status": "blocked",
+      "priority": "P0",
+      "depends_on": ["T375"],
+      "acceptance": "a one-episode person smoke run proves automatic medium plan association under GPT plus FMM with print_images=1, and the runnable episode scope or external blocker is reported",
+      "notes": "The current Codex process has no OPENAI_API_KEY, nvidia-smi cannot communicate with the driver, and torch reports zero CUDA devices. Starting here would either fail or exercise GPT-to-co_ut fallback rather than the requested GPT baseline. Run the documented command from the user's authenticated GPU terminal.",
+      "validation": {
+        "status": "partial",
+        "commands": [
+          "check OPENAI_API_KEY presence without printing its value",
+          "nvidia-smi --query-gpu=index,name,memory.total,memory.used,utilization.gpu --format=csv,noheader",
+          "python -c \"import torch; print(torch.cuda.is_available(), torch.cuda.device_count())\""
+        ],
+        "summary": "Automatic asset and episode selection is ready and validated, but the requested GPT/GPU episode cannot be truthfully executed in this process because the API key is unset and no CUDA device is available."
+      },
+      "last_updated": "2026-08-06T18:38:12-04:00"
+    },
+    {
+      "id": "T377",
+      "title": "Define composable shared risk-awareness contract",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "nearest, co_ut, fill and random retain their normal-mode policy semantics while a planner-independent module owns hazard reporting, hard filtering and soft risk penalties",
+      "notes": "The requested nearest/co_ut/fill/random modes are global planners. Actual local planners remain fmm/astar/rl/pointnav and continue consuming the same synchronized risk map independently of nav_mode.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "inspect utils/global_planners, utils/risk/frontier.py, main.py and focused planner tests"
+        ],
+        "summary": "The current decorator was shared structurally but replaced each classical normal policy with mode-specific reimplemented weights. The new contract will consume each base planner's own preferences and add one common safety adjustment."
+      },
+      "last_updated": "2026-08-07T16:47:41-04:00"
+    },
+    {
+      "id": "T378",
+      "title": "Implement shared composable global risk-awareness module",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T377"],
+      "acceptance": "a standalone risk-awareness component combines normalized base-policy preferences with identical risk and uncertainty penalties and hard safety filtering for every classical frontier planner",
+      "notes": "Keep GPT's dedicated risk prompt and deterministic co_ut fallback, and preserve reproducible random map-goal sampling through the same safety-domain helper.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "python -m py_compile utils/global_planners/*.py",
+          "python -m unittest tests.test_global_planners tests.test_risk_frontier"
+        ],
+        "summary": "SharedRiskAwareness now owns hazard reports, hard filtering, common soft risk/uncertainty penalties, low-risk fallback and the safe random-sampling domain. Classical planners expose their unchanged normal preferences; GPT uses normal co_ut as its guarded deterministic base."
+      },
+      "last_updated": "2026-08-07T16:54:14-04:00"
+    },
+    {
+      "id": "T379",
+      "title": "Add normal-policy preservation and shared-risk regressions",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T378"],
+      "acceptance": "zero-risk assignments match each normal classical planner, hazards consistently override unsafe choices, random goals remain reproducible and safe, and GPT fallback remains guarded",
+      "notes": "Include both single-robot policy preservation and multi-robot behavior where relevant.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_global_planners tests.test_risk_frontier -v"
+        ],
+        "summary": "32 focused tests pass. New regressions prove zero-risk equivalence for nearest/co_ut/fill/random and identical soft-risk override semantics for nearest/co_ut/fill; random safety and GPT fallback/guard regressions also pass."
+      },
+      "last_updated": "2026-08-07T16:54:14-04:00"
+    },
+    {
+      "id": "T380",
+      "title": "Validate and document risk-awareness composition",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T379"],
+      "acceptance": "focused planner/risk tests, Python compilation, TODO JSON parsing and whitespace checks pass, with any runtime limitation recorded",
+      "notes": "No GPU or FireWorld episode is required for the deterministic planner-unit validation.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 MPLCONFIGDIR=/tmp/conav-matplotlib /home/liushe10/miniconda3/envs/co-nav3/bin/python -m unittest tests.test_global_planners tests.test_risk_frontier tests.test_local_planner_baselines tests.test_risk_planner tests.test_pointnav_local_planner",
+          "python -m py_compile utils/global_planners/__init__.py utils/global_planners/base.py utils/global_planners/nearest.py utils/global_planners/co_ut.py utils/global_planners/fill.py utils/global_planners/random.py utils/global_planners/risk_module.py utils/global_planners/risk_aware.py tests/test_global_planners.py",
+          "python -m json.tool todo/todo.json",
+          "git diff --check -- utils/global_planners tests/test_global_planners.py docs/risk_assessment.md docs/benchmark_experiment_plan.md todo/todo.json"
+        ],
+        "summary": "All 68 focused global/local/risk/PointNav tests pass; changed Python files compile, TODO JSON parses and whitespace checks pass. A broader 76-test diagnostic had one pre-existing unrelated prompt-literal failure expecting 'global top-view' while the current prompt says 'candidate top-view'; it was intentionally not changed."
+      },
+      "last_updated": "2026-08-07T16:54:14-04:00"
+    },
+    {
+      "id": "T381",
+      "title": "Inventory all existing FireWorld plans and timelines",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": [],
+      "acceptance": "every plan JSON is matched to its canonical timeline path, validated against current propagation settings and classified as ready or missing",
+      "notes": "Found 417 plans across 36 scenes. Sixteen timelines pass current validation; 401 require generation or replacement. Missing uncompressed upper bound is 813.99 GiB versus 621.9 GiB currently free, so compressed-capacity and inventory checks are required before production.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "enumerate scenes/*/plans/*.json and validate canonical outputs/fire_world timelines with validate_timeline",
+          "df -h /home/liushe10/Co-NavGPT2",
+          "find outputs/fire_world -name timeline.npz and summarize sizes"
+        ],
+        "summary": "The request covers 417 existing plans, including historical template versions, rather than only the current 398-scenario template matrix."
+      },
+      "last_updated": "2026-08-07T16:59:26-04:00"
+    },
+    {
+      "id": "T382",
+      "title": "Add filtered resumable propagation orchestration",
+      "status": "done",
+      "priority": "P0",
+      "depends_on": ["T381"],
+      "acceptance": "one script enumerates existing plan JSON files without regenerating them, filters by fire type and intensity, performs inventory/resource/disk preflight, resumes validated timelines, bakes missing timelines atomically and writes manifests plus a final completeness report",
+      "notes": "The requested production scope is only fire_type=multi_origin and intensity=medium. Reuse pipeline_runner validation, locking and staging; default to one worker because the machine has 30 GiB RAM and some timelines have large peak-memory estimates.",
+      "validation": {
+        "status": "passed",
+        "commands": [
+          "PYTHONDONTWRITEBYTECODE=1 python -m unittest tests.test_fire_world_pipeline_runner -v",
+          "PYTHONDONTWRITEBYTECODE=1 python -m py_compile scripts/bake_all_fire_plan_timelines.py utils/fire_world/pipeline_runner.py",
+          "PYTHONDONTWRITEBYTECODE=1 python scripts/bake_all_fire_plan_timelines.py --fire-types multi_origin --intensities medium --dry-run"
+        ],
+        "summary": "Five focused tests pass and the filtered dry-run selects exactly 44 multi-origin medium plans: 7 valid existing timelines and 37 missing, with no discovery failures and a passing disk preflight."
+      },
+      "last_updated": "2026-08-07T17:09:12-04:00"
+    },
+    {
+      "id": "T383",
+      "title": "Generate multi-origin medium FireWorld timelines",
+      "status": "in_progress",
+      "priority": "P0",
+      "depends_on": ["T382"],
+      "acceptance": "all existing multi-origin medium plans have validated canonical timeline.npz files, or any resource-blocked subset is precisely reported without risking disk exhaustion",
+      "notes": "Generate no other fire type or intensity. Use resume mode and per-plan logs so a long run can safely continue after interruption.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-08-07T17:09:12-04:00"
+    },
+    {
+      "id": "T384",
+      "title": "Validate multi-origin medium propagation completeness",
+      "status": "todo",
+      "priority": "P0",
+      "depends_on": ["T383"],
+      "acceptance": "all selected multi-origin medium NPZ headers, times, metadata and plan IDs validate; counts, failures, disk use and operational manifests are reported",
+      "notes": "Run focused pipeline/propagation tests and JSON/whitespace validation for any script changes.",
+      "validation": {
+        "status": "not_run",
+        "commands": [],
+        "summary": ""
+      },
+      "last_updated": "2026-08-07T16:59:26-04:00"
     }
   ]
 }

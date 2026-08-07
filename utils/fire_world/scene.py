@@ -36,11 +36,14 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Optional, Tuple
 
 import numpy as np
 
+from utils.fire_world.plan_selection import (
+    scene_id_from_config,
+    select_fire_plan,
+)
 from utils.fire_world.runtime import FireWorld
 
 try:
@@ -190,33 +193,28 @@ class FireScene:
         active scene on every reset) and locates the precomputed
         timeline npz on disk. Supports both Habitat-Lab 0.3.3
         (``config.habitat.simulator.scene``) and legacy 0.2.1 YACS
-        (``config.SIMULATOR.SCENE``).
+        (``config.SIMULATOR.SCENE``). When no explicit plan ID is supplied,
+        selection defaults to a runnable medium plan for the active scene.
         """
-        if not getattr(args, "fire_world_plan_id", None):
-            raise ValueError(
-                "FireScene.from_args requires --fire_world_plan_id to point "
-                "at a plan.json under scenes/<scene>/plans/."
-            )
-        if hasattr(config, "habitat"):
-            scene_glb = config.habitat.simulator.scene
-        else:
-            scene_glb = config.SIMULATOR.SCENE
-        scene_short = (
-            scene_glb.split("/")[-1]
-                     .replace(".basis.glb", "")
-                     .replace(".glb", "")
+        scene_short = scene_id_from_config(config)
+        selection = select_fire_plan(
+            scene_short,
+            plan_id=getattr(args, "fire_world_plan_id", None),
+            intensity=getattr(args, "fire_world_intensity", "medium"),
+            fire_type=getattr(args, "fire_world_fire_type", "auto"),
+            scenes_root=getattr(args, "fire_world_scenes_root", "scenes"),
+            out_root=getattr(args, "fire_world_out_root", "outputs/fire_world"),
         )
+        # Keep the configured selector stable across episodes.  The active ID
+        # is separate so risk reports can record the actual auto-selected plan.
+        args.fire_world_active_plan_id = selection.plan_id
+        args.fire_world_active_scene_id = selection.scene_id
 
-        scenes_root = Path(args.fire_world_scenes_root)
-        out_root = Path(args.fire_world_out_root)
-        plan_path = scenes_root / scene_short / "plans" / f"{args.fire_world_plan_id}.json"
-        if not plan_path.exists():
-            raise FileNotFoundError(
-                f"plan not found: {plan_path}. Build inventory.json + "
-                f"plan.json + run propagation for scene {scene_short} first."
-            )
-
-        fw = FireWorld.load(scene_short, args.fire_world_plan_id, out_root=out_root)
+        fw = FireWorld.load(
+            selection.scene_id,
+            selection.plan_id,
+            out_root=selection.timeline_path.parents[2],
+        )
         mode = str(getattr(args, "fire_clock_mode", "wallclock")).lower()
         clock = FireClock(
             mode=mode,

@@ -23,12 +23,12 @@ Example (single robot + humanoids + visible Spot + fire)::
     python scripts/keyboard_teleop_full.py \\
         --num-agents 1 --num-humans 2 \\
         --robot-models-enabled 1 --robot-profiles spot \\
-        --plan-id 83679a07b632 --scene-id Nfvxx8J5NCo
+        --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 --scene-id Nfvxx8J5NCo
 
 Example (two robots + fire only, no humans)::
 
     python scripts/keyboard_teleop_full.py \\
-        --num-agents 2 --plan-id 83679a07b632 --scene-id Nfvxx8J5NCo
+        --num-agents 2 --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 --scene-id Nfvxx8J5NCo
 
 Controls (window must have focus):
 
@@ -123,7 +123,8 @@ def parse_args() -> argparse.Namespace:
 
     # fire world (all optional; the fire pipeline turns on when --plan-id is set)
     p.add_argument("--plan-id", default=None,
-                   help="FireWorld plan id (12-hex). Omit to disable fire.")
+                   help="FireWorld semantic plan id "
+                        "(scene_type_intensity_hash). Omit to disable fire.")
     p.add_argument("--scenes-root", default="scenes")
     p.add_argument("--out-root", default="outputs/fire_world")
     p.add_argument("--clock-mode", default="wallclock",

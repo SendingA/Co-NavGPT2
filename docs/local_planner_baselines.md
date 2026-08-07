@@ -39,12 +39,12 @@ SafeSuccess and CHE:
 ```bash
 # Risk-aware A*
 python main.py --local_planner astar \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step --risk_enabled 1 --risk_source sensed
 
 # Risk-blind A*, with the same risk evaluator still measuring exposure
 python main.py --local_planner astar \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step --risk_enabled 1 --risk_source none
 ```
 
@@ -110,7 +110,7 @@ Evaluate a frozen checkpoint:
 ```bash
 python main.py --local_planner rl \
     --rl_local_checkpoint outputs/local_planner_rl/aware.pth \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step --risk_enabled 1 --risk_source sensed
 ```
 
@@ -214,12 +214,12 @@ For fire experiments:
 ```bash
 # Frozen PointNav plus risk-aware frontier assignment and hard-hazard shield
 python main.py --local_planner pointnav \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --risk_enabled 1 --risk_source sensed
 
 # Frozen PointNav without access to planning risk; evaluator remains active
 python main.py --local_planner pointnav \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --risk_enabled 1 --risk_source none
 ```
 

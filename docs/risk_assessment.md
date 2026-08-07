@@ -204,31 +204,29 @@ R_k = max(p95(frontier k), mean(approach route k))
 若 **frontier 区域本身**接触 `M_hard`，或其最大规划风险达到
 `--risk_hard_frontier_threshold`，则先将它硬过滤。直线 route proxy 仍进入
 连续风险代价，但因为它可能穿墙，明确设置 `route_is_proxy=true`，不作为硬 veto
-依据。对 agent `a` 和剩余 frontier `k` 的确定性 utility 为：
+依据。风险模块不再重写 `nearest/co_ut/fill` 的策略公式。每个 normal planner
+先提供自己的原始 preference `B_a,k`，再由共享 `SharedRiskAwareness` 在每个
+机器人内部将它单调归一化为 `B_bar_a,k`，并统一叠加安全代价：
 
 ```text
-u_a,k = w_I I_bar_k - w_D d_bar_a,k
-        - w_R R_k - w_U (1-C_bar_k)
-U_team = sum_a u_a,assignment(a) - w_red · redundancy
+u_a,k = B_bar_a,k - w_R R_k - 0.5 (1-C_bar_k)
 ```
 
-`I_bar` 与每个 agent 的 `d_bar` 都做确定性归一化；`w_R` 由
-`--risk_frontier_weight` 控制。其它权重按旧 `--nav_mode` 映射，以保留各基线
-偏好：
+`w_R` 由 `--risk_frontier_weight` 控制，默认 `2.0`。四个 classical planner
+的 normal preference 与安全层关系如下：
 
-| `nav_mode` | `w_I` | `w_D` | `w_R` 默认 | `w_U` | `w_red` |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| `nearest` | 0.00 | 1.00 | 2.00 | 0.50 | 0.00 |
-| `co_ut` | 1.00 | `cost_utility_lambda`（默认 1.00） | 2.00 | 0.50 | 0.00 |
-| `fill` | 1.00 | 0.25 | 2.00 | 0.50 | 0.75 |
-| `gpt` / 其它 | 1.00 | 0.35 | 2.00 | 0.50 | 0.75 |
+| `nav_mode` | normal preference `B_a,k` | 共享 risk-awareness |
+| --- | --- | --- |
+| `nearest` | `-robot_frontier_distance` | hard filter、`-w_R R_k`、`-0.5 uncertainty` |
+| `co_ut` | `frontier_size - lambda * distance` | 同上 |
+| `fill` | `target_score`（缺失时使用 inverse distance） | 同上 |
+| `random` | 可复现的 reachable map-goal sampling | 同一模块先生成 safe sampling domain |
 
-普通 `co_ut` 严格使用未归一化的
-`frontier_size - cost_utility_lambda × robot_grid_distance`。开启 risk 后，
-size 与 distance 按上式做确定性归一化，再加入 risk 和 uncertainty 项，避免
-cell 数量级掩盖 `[0,1]` 风险值。`random` 不使用这个 frontier utility：
-它在每个机器人的已探索可达自由空间内随机采样，并提前剔除 hard-unsafe 和超过
-danger threshold 的 cell。
+因此零风险、完整 confidence 且没有 hard cell 时，四种模式与各自 normal
+planner 的目标完全一致；risk 只作为横切安全模块加入，不再把 `fill` 改写成
+另一套 size/distance/redundancy 策略。`random` 不使用 frontier utility：它仍在
+每个机器人的已探索可达自由空间内按原 seed 采样，只由共享模块提前剔除
+hard-unsafe 和超过 danger threshold 的 cell。
 
 `gpt` 模式还会把同一 hazard report 作为 JSON 交给 VLM，但安全性不依赖 VLM
 服从提示：确定性 guard 会拒绝不存在、格式错误或 `hard_blocked` 的选择，并只
@@ -302,7 +300,7 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 ```bash
 python main.py \
     --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step \
     --fire_steps_per_unit 5 --fire_seconds_per_unit 2.0 \
     --risk_enabled 1 --risk_source sensed \
@@ -318,17 +316,17 @@ python main.py \
 ```bash
 # evaluator-only：旧导航策略 + 独立 GT 风险测量
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step --risk_enabled 1 --risk_source none
 
 # oracle upper bound：完整 FireWorld 风险图参与规划
 python main.py --num_agents 2 \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step --risk_enabled 1 --risk_source oracle
 
 # privileged smoke-only ablation；仍须明确标作 privileged
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step --risk_enabled 1 --risk_source sensed \
     --risk_smoke_source privileged_transmittance
 ```

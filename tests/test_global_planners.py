@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
-from unittest import mock
 
 import numpy as np
 
@@ -331,6 +330,52 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
         self.assertTrue(result.frontier_reports[0].hard_blocked)
         self.assertEqual(result.frontier_computed_step, 37)
 
+    def test_zero_risk_preserves_every_classical_normal_policy(self) -> None:
+        context_kwargs = {
+            "scores": (10.0, 15.0),
+            "poses": ((1, 1, 0.0), (5, 5, 0.0)),
+            "cells": ((1, 1), (5, 5)),
+            "episode_index": 8,
+        }
+        for mode in ("nearest", "co_ut", "fill", "random"):
+            with self.subTest(mode=mode):
+                kwargs = {
+                    "random_seed": 17,
+                    "random_goal_min_distance_m": 0.0,
+                }
+                normal = create_global_planner(mode, **kwargs).plan(
+                    _context(**context_kwargs)
+                )
+                aware = create_global_planner(mode, **kwargs).plan(
+                    _context(risk=self._risk(), **context_kwargs)
+                )
+                self.assertEqual(
+                    aware.frontier_assignments,
+                    normal.frontier_assignments,
+                )
+                self.assertEqual(aware.goal_points, normal.goal_points)
+
+    def test_same_soft_risk_layer_overrides_all_classical_preferences(
+        self,
+    ) -> None:
+        risk = self._risk()
+        risk.planning_risk[2, 2] = 0.60
+        context_kwargs = {
+            "scores": (20.0, 1.0),
+            "poses": ((1, 1, 0.0), (1, 2, 0.0)),
+            "cells": ((1, 1), (1, 2)),
+        }
+        for mode in ("nearest", "co_ut", "fill"):
+            with self.subTest(mode=mode):
+                normal = create_global_planner(mode).plan(
+                    _context(**context_kwargs)
+                )
+                aware = create_global_planner(mode).plan(
+                    _context(risk=risk, **context_kwargs)
+                )
+                self.assertEqual(normal.frontier_assignments, {0: 0, 1: 0})
+                self.assertEqual(aware.frontier_assignments, {0: 1, 1: 1})
+
     def test_risk_co_ut_weights_preserve_size_distance_tradeoff(self) -> None:
         weights = risk_utility_weights(
             "co_ut",
@@ -415,17 +460,17 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
         )
 
         stream = io.StringIO()
-        with mock.patch(
-            "utils.global_planners.risk_aware.risk_utility_weights",
-            wraps=__import__(
-                "utils.global_planners.risk_aware",
-                fromlist=["risk_utility_weights"],
-            ).risk_utility_weights,
-        ) as weights:
-            with redirect_stdout(stream):
-                result = planner.plan(_context(risk=self._risk()))
+        with redirect_stdout(stream):
+            result = planner.plan(_context(risk=self._risk()))
 
-        weights.assert_called_once_with("co_ut", 2.0, 1.0)
+        expected = create_global_planner("co_ut").plan(
+            _context(risk=self._risk())
+        )
+        self.assertEqual(
+            result.frontier_assignments,
+            expected.frontier_assignments,
+        )
+        self.assertEqual(result.goal_points, expected.goal_points)
         self.assertEqual(result.frontier_assignments, {0: 0, 1: 1})
         payload = json.loads(
             stream.getvalue().split("[gpt-fallback] ", 1)[1]

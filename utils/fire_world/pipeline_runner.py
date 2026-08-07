@@ -280,6 +280,97 @@ def scenario_matrix(
     ]
 
 
+def discover_existing_plan_tasks(
+    scenes_root: Path,
+    *,
+    voxel_m: float,
+    dt: float,
+    save_dt: float,
+) -> Tuple[List[Dict], List[Dict]]:
+    """Enumerate every persisted plan JSON without regenerating plans.
+
+    Dataset-matrix preparation intentionally targets only the current
+    template/seed matrix.  This helper instead treats every JSON already under
+    ``scenes/<scene>/plans`` as an explicit asset request, including retained
+    historical template versions.
+    """
+
+    scenes_root = Path(scenes_root)
+    tasks: List[Dict] = []
+    records: List[Dict] = []
+    for plan_path in sorted(scenes_root.glob("*/plans/*.json")):
+        scene_id = plan_path.parents[1].name
+        base = {
+            "stage": "plan_discovery",
+            "scene_id": scene_id,
+            "plan_path": str(plan_path),
+            "timestamp": utc_now(),
+        }
+        try:
+            plan = json.loads(plan_path.read_text())
+            # Preserve filterable metadata even when a later validation step
+            # fails, so a targeted bake reports only failures in its scope.
+            if "fire_type" in plan:
+                base["fire_type"] = str(plan["fire_type"])
+            if "intensity" in plan:
+                base["intensity"] = str(plan["intensity"])
+            plan_id = str(plan["plan_id"])
+            if plan_path.stem != plan_id:
+                raise ValueError(
+                    f"filename {plan_path.stem!r} != plan_id {plan_id!r}"
+                )
+            if str(plan.get("scene_id")) != scene_id:
+                raise ValueError(
+                    f"plan scene_id {plan.get('scene_id')!r} != {scene_id!r}"
+                )
+            inventory_path = scenes_root / scene_id / "inventory.json"
+            valid_inventory, inventory_reason = _inventory_valid(
+                inventory_path,
+                scene_id,
+            )
+            if not valid_inventory:
+                raise ValueError(inventory_reason)
+            estimate = estimate_timeline_bytes(
+                plan,
+                voxel_m=voxel_m,
+                dt=dt,
+                save_dt=save_dt,
+            )
+            task = {
+                "scene_id": scene_id,
+                "fire_type": str(plan["fire_type"]),
+                "intensity": str(plan["intensity"]),
+                "seed": int(plan["seed"]),
+                "template_version": int(plan["template_version"]),
+                "plan_id": plan_id,
+                "plan_path": str(plan_path),
+                "inventory_path": str(inventory_path),
+                "estimate": estimate,
+            }
+            tasks.append(task)
+            records.append(
+                {
+                    **base,
+                    "status": "ready",
+                    "plan_id": plan_id,
+                    "fire_type": task["fire_type"],
+                    "intensity": task["intensity"],
+                    "seed": task["seed"],
+                    "template_version": task["template_version"],
+                    "estimate": estimate,
+                }
+            )
+        except Exception as exc:
+            records.append(
+                {
+                    **base,
+                    "status": "failed",
+                    "reason": f"{type(exc).__name__}: {exc}",
+                }
+            )
+    return tasks, records
+
+
 def _atomic_write_plan(path: Path, plan: Dict) -> None:
     atomic_write_json(path, plan)
 
@@ -455,7 +546,6 @@ def validate_timeline(
                 "smoke.npy",
                 "temp.npy",
                 "times.npy",
-                "meta_json.npy",
             }
             missing = sorted(required - names)
             if missing:
@@ -482,9 +572,34 @@ def validate_timeline(
                         headers,
                     )
 
-        with np.load(timeline_path, allow_pickle=False) as payload:
-            times = np.asarray(payload["times"], dtype=np.float64)
-            meta = json.loads(str(payload["meta_json"]))
+        # Semantic plan-ID migration updates the lightweight sidecar without
+        # recompressing multi-gigabyte voxel arrays. Match runtime.py by
+        # preferring that sidecar when it is available.
+        sidecar_path = timeline_path.with_name("timeline_meta.json")
+        if sidecar_path.is_file():
+            meta = json.loads(sidecar_path.read_text())
+            with np.load(timeline_path, allow_pickle=False) as payload:
+                times = np.asarray(payload["times"], dtype=np.float64)
+        elif "meta_json.npy" in names:
+            with np.load(timeline_path, allow_pickle=False) as payload:
+                times = np.asarray(payload["times"], dtype=np.float64)
+                meta = json.loads(str(payload["meta_json"]))
+        elif "meta.npy" in names:
+            with np.load(timeline_path, allow_pickle=True) as payload:
+                times = np.asarray(payload["times"], dtype=np.float64)
+                legacy_meta = payload["meta"]
+                raw_meta = (
+                    legacy_meta.item()
+                    if legacy_meta.shape == ()
+                    else legacy_meta.reshape(-1)[0]
+                )
+                meta = (
+                    raw_meta
+                    if isinstance(raw_meta, dict)
+                    else json.loads(str(raw_meta))
+                )
+        else:
+            return False, "timeline metadata is missing", headers
         if times.shape != (expected_frames,):
             return False, f"times shape {times.shape} is invalid", headers
         if not np.isfinite(times).all() or np.any(np.diff(times) <= 0.0):

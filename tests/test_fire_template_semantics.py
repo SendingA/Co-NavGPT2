@@ -172,7 +172,7 @@ class FireTemplateSemanticTests(unittest.TestCase):
             (SCENES / scene_id / "inventory.json").read_text()
         )
         plan = json.loads(
-            (SCENES / scene_id / "plans" / "83679a07b632.json").read_text()
+            (SCENES / scene_id / "plans" / "Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632.json").read_text()
         )
         inventory_by_id = {
             int(item["instance_id"]): item for item in inventory["instances"]

@@ -1,0 +1,328 @@
+{
+  "schema_version": 4,
+  "plan_id": "Nfvxx8J5NCo_multi_origin_severe_9091e5dd818d",
+  "scene_id": "Nfvxx8J5NCo",
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00880-Nfvxx8J5NCo/Nfvxx8J5NCo.basis.glb",
+  "world_aabb": [
+    -16.11662483215332,
+    -0.7191430032253265,
+    -4.802337169647217,
+    5.123380184173584,
+    3.3900370597839355,
+    6.8524489402771
+  ],
+  "fire_type": "multi_origin",
+  "intensity": "severe",
+  "seed": 7,
+  "template_version": 4,
+  "duration_s": 900.0,
+  "num_initial_ignitions": 8,
+  "ignition_cluster_version": 1,
+  "ignitions": [
+    {
+      "object_id": 211,
+      "category": "desk",
+      "position": [
+        -4.349617958068848,
+        0.4975871443748474,
+        -3.895383596420288
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.535,
+      "source_temp_c": 920.5,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 34,
+      "category": "couch",
+      "position": [
+        -10.990887641906738,
+        0.5270777344703674,
+        -2.8373677730560303
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.6,
+      "source_temp_c": 939.5,
+      "fuel_kg": 12.4,
+      "smoke_yield": 0.85,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 110,
+      "category": "bed",
+      "position": [
+        -13.181954383850098,
+        0.5514126420021057,
+        4.911938667297363
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.6,
+      "source_temp_c": 932.2,
+      "fuel_kg": 12.0,
+      "smoke_yield": 0.8,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 36,
+      "category": "table",
+      "position": [
+        -10.719297409057617,
+        0.34242844581604004,
+        -2.241910219192505
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.587,
+      "source_temp_c": 920.8,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 95,
+      "category": "chair",
+      "position": [
+        -13.086894035339355,
+        0.4589349627494812,
+        0.4881671369075775
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.426,
+      "source_temp_c": 949.9,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 94,
+      "category": "chair",
+      "position": [
+        -13.671538352966309,
+        0.4215371310710907,
+        1.031320333480835
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.555,
+      "source_temp_c": 924.6,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 339,
+      "category": "chair",
+      "position": [
+        -10.312944412231445,
+        0.30985504388809204,
+        0.7187202572822571
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.37,
+      "source_temp_c": 974.0,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 341,
+      "category": "chair",
+      "position": [
+        -9.120224952697754,
+        0.20749910175800323,
+        0.8053272366523743
+      ],
+      "ignite_time_s": 0.0,
+      "source_radius_m": 0.465,
+      "source_temp_c": 961.3,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "initial"
+    },
+    {
+      "object_id": 214,
+      "category": "table",
+      "position": [
+        -5.199459075927734,
+        0.4050905406475067,
+        -3.845008373260498
+      ],
+      "ignite_time_s": 34.80002925883627,
+      "source_radius_m": 0.4,
+      "source_temp_c": 970.5,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "secondary",
+      "parent_object_id": 211,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 35,
+      "category": "carpet",
+      "position": [
+        -10.853745460510254,
+        0.02614600583910942,
+        -2.7503974437713623
+      ],
+      "ignite_time_s": 51.874305451280705,
+      "source_radius_m": 0.4,
+      "source_temp_c": 939.6,
+      "fuel_kg": 11.2,
+      "smoke_yield": 0.55,
+      "ignition_role": "secondary",
+      "parent_object_id": 34,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 46,
+      "category": "table",
+      "position": [
+        -10.127922058105469,
+        0.9091199636459351,
+        3.1870627403259277
+      ],
+      "ignite_time_s": 53.889126714421415,
+      "source_radius_m": 0.4,
+      "source_temp_c": 975.8,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "secondary",
+      "parent_object_id": 110,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 49,
+      "category": "table",
+      "position": [
+        -9.450369834899902,
+        0.8798022866249084,
+        1.201923131942749
+      ],
+      "ignite_time_s": 44.79566945817432,
+      "source_radius_m": 0.4,
+      "source_temp_c": 941.1,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "secondary",
+      "parent_object_id": 36,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 98,
+      "category": "table",
+      "position": [
+        -13.821425437927246,
+        0.5379590392112732,
+        0.6026465892791748
+      ],
+      "ignite_time_s": 56.02344192943541,
+      "source_radius_m": 0.4,
+      "source_temp_c": 976.6,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "secondary",
+      "parent_object_id": 95,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 93,
+      "category": "chair",
+      "position": [
+        -14.183252334594727,
+        0.5032485127449036,
+        1.1818286180496216
+      ],
+      "ignite_time_s": 33.891356474113664,
+      "source_radius_m": 0.4,
+      "source_temp_c": 925.2,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "secondary",
+      "parent_object_id": 94,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 340,
+      "category": "chair",
+      "position": [
+        -9.715981483459473,
+        0.25280219316482544,
+        0.7502775192260742
+      ],
+      "ignite_time_s": 54.71240456403554,
+      "source_radius_m": 0.365,
+      "source_temp_c": 959.9,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "secondary",
+      "parent_object_id": 339,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 342,
+      "category": "chair",
+      "position": [
+        -8.591620445251465,
+        0.14287802577018738,
+        0.7893697023391724
+      ],
+      "ignite_time_s": 29.279912969948356,
+      "source_radius_m": 0.4,
+      "source_temp_c": 954.0,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.5,
+      "ignition_role": "secondary",
+      "parent_object_id": 341,
+      "secondary_rank": 1
+    },
+    {
+      "object_id": 47,
+      "category": "table",
+      "position": [
+        -8.270862579345703,
+        0.8863720297813416,
+        3.1183483600616455
+      ],
+      "ignite_time_s": 62.32774676477258,
+      "source_radius_m": 0.4,
+      "source_temp_c": 975.2,
+      "fuel_kg": 10.4,
+      "smoke_yield": 0.45,
+      "ignition_role": "secondary",
+      "parent_object_id": 341,
+      "secondary_rank": 2
+    }
+  ],
+  "propagation_rules": {
+    "flammable_threshold": 0.4,
+    "ignition_temp_c": 200.0,
+    "spread_speed_m_per_s": 0.15000000000000002,
+    "spread_kernel": "laplacian",
+    "ceiling_jet_speed_m_per_s": 0.42,
+    "buoyancy_v_m_per_s": 0.65,
+    "thermal_diffusivity": 0.05,
+    "ambient_temp_c": 25.0,
+    "radiative_gain_c": 270.0,
+    "radiative_radius_cells": 3,
+    "floor_thermal_attenuation": 0.2,
+    "flame_through_floors": 1,
+    "fuel_neighborhood_cells": 2,
+    "fuel_abundance_min": 0.5,
+    "fuel_abundance_max": 2.5,
+    "floor_ignite_temp_c": 250.0,
+    "floor_fuel_value": 0.45,
+    "floor_ignite_radius_cells": 1,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_spread_speed_m_per_s": 0.005,
+    "floor_max_spread_radius_m": 1.1,
+    "secondary_floor_spread_scale": 0.5,
+    "limit_flame_to_source_envelope": 1,
+    "floor_seed_flame_min": 0.1,
+    "floor_seed_flame_max": 0.5,
+    "inextinguishable_sources": 1,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55
+  },
+  "num_initial_ignitions_requested": 8,
+  "plan_hash": "9091e5dd818d"
+}

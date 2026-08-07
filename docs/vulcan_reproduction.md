@@ -422,7 +422,7 @@ python scripts/build_inventory.py \
 The active experiment uses the committed, frozen template-v1 plan:
 
 ```text
-scenes/Nfvxx8J5NCo/plans/83679a07b632.json
+scenes/Nfvxx8J5NCo/plans/Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632.json
 ```
 
 It contains the corrected real HM3D `object_id=48`, category
@@ -432,7 +432,7 @@ It contains the corrected real HM3D `object_id=48`, category
 python - <<'PY'
 import json
 
-path = "scenes/Nfvxx8J5NCo/plans/83679a07b632.json"
+path = "scenes/Nfvxx8J5NCo/plans/Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632.json"
 plan = json.load(open(path, encoding="utf-8"))
 assert plan["template_version"] == 1
 assert any(
@@ -445,7 +445,7 @@ PY
 ```
 
 Use this committed JSON directly when reproducing the existing
-`83679a07b632` benchmark.
+`Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632` benchmark.
 
 The current generator is template v2. Running the same semantic scenario now
 creates a deliberately different plan:
@@ -462,14 +462,14 @@ python -m utils.fire_world.planner \
 
 Its expected ID is `020ff4f13cd0`, with the current bedroom-template
 ignitions. This is a new benchmark condition: generate a matching timeline
-and do not compare it to results labeled `83679a07b632`.
+and do not compare it to results labeled `Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632`.
 
 ### 9.3 Generate the fire timeline
 
 ```bash
 python -m utils.fire_world.propagation \
     --scene Nfvxx8J5NCo \
-    --plan_id 83679a07b632 \
+    --plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --scenes_root scenes \
     --out_root outputs/fire_world \
     --voxel_m 0.15 \
@@ -480,7 +480,7 @@ python -m utils.fire_world.propagation \
 The result is:
 
 ```text
-outputs/fire_world/Nfvxx8J5NCo/83679a07b632/timeline.npz
+outputs/fire_world/Nfvxx8J5NCo/Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632/timeline.npz
 ```
 
 This file can be hundreds of megabytes and is generated rather than committed.
@@ -494,7 +494,7 @@ python main.py \
     --nav_mode co_ut \
     --seed 1 \
     --fire_world 1 \
-    --fire_world_plan_id 83679a07b632 \
+    --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step \
     --fire_steps_per_unit 5 \
     --fire_seconds_per_unit 2.0 \
@@ -516,7 +516,7 @@ python main.py \
     --nav_mode co_ut \
     --seed 1 \
     --fire_world 1 \
-    --fire_world_plan_id 83679a07b632 \
+    --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step \
     --fire_steps_per_unit 5 \
     --fire_seconds_per_unit 2.0 \
@@ -623,7 +623,7 @@ python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
     --num-agents 1 \
     --scene-id Nfvxx8J5NCo \
-    --plan-id 83679a07b632 \
+    --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --clock-mode step \
     --steps-per-unit 5 \
     --seconds-per-unit 2.0 \
@@ -637,7 +637,7 @@ python scripts/keyboard_teleop_full.py \
     --robot-models-enabled 1 \
     --robot-profiles spot \
     --scene-id Nfvxx8J5NCo \
-    --plan-id 83679a07b632 \
+    --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --clock-mode wallclock \
     --lidar-360 1 --lidar-resolution 320 \
     --snapshot-dir outputs/teleop_sensor_snapshots \

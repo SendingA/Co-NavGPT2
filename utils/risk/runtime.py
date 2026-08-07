@@ -65,6 +65,15 @@ def _agent_positions(agent_states: Sequence[object]) -> np.ndarray:
     return result
 
 
+def _active_fire_plan_id(args) -> Optional[str]:
+    """Return the concrete per-scene plan selected for this episode."""
+
+    return (
+        getattr(args, "fire_world_active_plan_id", None)
+        or getattr(args, "fire_world_plan_id", None)
+    )
+
+
 class RiskRuntime:
     """One-episode risk estimator, planner-map provider and GT evaluator."""
 
@@ -154,7 +163,7 @@ class RiskRuntime:
                 "rank": self.rank,
                 "seed": int(getattr(args, "seed", 0)),
                 "scene_id": getattr(fire_scene, "scene_id", None),
-                "fire_plan_id": getattr(args, "fire_world_plan_id", None),
+                "fire_plan_id": _active_fire_plan_id(args),
                 "fire_clock_mode": str(getattr(
                     args, "fire_clock_mode", "wallclock"
                 )),
@@ -475,9 +484,7 @@ class RiskRuntime:
         result["rank"] = self.rank
         result["seed"] = int(getattr(self.args, "seed", 0))
         result["scene_id"] = getattr(self.fire_scene, "scene_id", None)
-        result["fire_plan_id"] = getattr(
-            self.args, "fire_world_plan_id", None
-        )
+        result["fire_plan_id"] = _active_fire_plan_id(self.args)
         result["fire_clock_mode"] = str(getattr(
             self.args, "fire_clock_mode", "wallclock"
         ))

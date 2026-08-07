@@ -12,6 +12,7 @@ from utils.fire_world.pipeline_runner import (
     ALL_INTENSITIES,
     build_scene_plans,
     discover_dataset_scenes,
+    discover_existing_plan_tasks,
     estimate_timeline_bytes,
     expected_timeline_layout,
     parse_seeds,
@@ -71,6 +72,56 @@ class FireWorldPipelineRunnerTests(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "unsupported"):
             parse_selection("unknown", ALL_INTENSITIES, "--intensities")
+
+    def test_existing_plan_discovery_keeps_persisted_versions(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            scene_root = root / "SceneA"
+            plan_root = scene_root / "plans"
+            structural_root = scene_root / "structural"
+            plan_root.mkdir(parents=True)
+            structural_root.mkdir()
+            structural = {}
+            for name in ("walls", "floors", "ceilings"):
+                path = structural_root / f"{name}.npy"
+                np.save(path, np.zeros((2, 2, 2), dtype=bool))
+                structural[f"{name[:-1]}_voxel_path"] = str(path)
+            inventory = {
+                "schema_version": 2,
+                "scene_id": "SceneA",
+                "world_aabb": [0.0, 0.0, 0.0, 0.4, 0.4, 0.4],
+                "instances": [{"instance_id": 1}],
+                "structural": structural,
+            }
+            (scene_root / "inventory.json").write_text(json.dumps(inventory))
+            for version in (7, 8):
+                plan_id = f"SceneA_multi_origin_light_version{version}"
+                plan = {
+                    "plan_id": plan_id,
+                    "scene_id": "SceneA",
+                    "fire_type": "multi_origin",
+                    "intensity": "light",
+                    "seed": 42,
+                    "template_version": version,
+                    "duration_s": 2.0,
+                    "world_aabb": inventory["world_aabb"],
+                }
+                (plan_root / f"{plan_id}.json").write_text(json.dumps(plan))
+
+            tasks, records = discover_existing_plan_tasks(
+                root,
+                voxel_m=0.2,
+                dt=0.5,
+                save_dt=1.0,
+            )
+
+        self.assertEqual(len(tasks), 2)
+        self.assertEqual(
+            {task["template_version"] for task in tasks},
+            {7, 8},
+        )
+        self.assertEqual({record["status"] for record in records}, {"ready"})
+        self.assertTrue(all("estimate" in task for task in tasks))
 
     @staticmethod
     def _plan():
@@ -132,6 +183,37 @@ class FireWorldPipelineRunnerTests(unittest.TestCase):
             )
             self.assertFalse(valid)
             self.assertIn("plan_id mismatch", reason)
+
+            sidecar_meta = dict(meta, plan_id="semantic_testplan")
+            path.with_name("timeline_meta.json").write_text(
+                json.dumps(sidecar_meta)
+            )
+            semantic_plan = dict(plan, plan_id="semantic_testplan")
+            valid, reason, _ = validate_timeline(
+                path,
+                semantic_plan,
+                voxel_m=0.2,
+                dt=0.5,
+                save_dt=1.0,
+            )
+            self.assertTrue(valid, reason)
+
+            np.savez_compressed(
+                path,
+                flame=fields,
+                smoke=fields,
+                temp=fields,
+                times=times,
+                meta=np.array([json.dumps(meta)], dtype=object),
+            )
+            valid, reason, _ = validate_timeline(
+                path,
+                semantic_plan,
+                voxel_m=0.2,
+                dt=0.5,
+                save_dt=1.0,
+            )
+            self.assertTrue(valid, reason)
 
     def test_dry_run_builds_feasible_plans_without_writing(self):
         def instance(instance_id, category, x):

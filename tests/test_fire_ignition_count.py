@@ -9,9 +9,11 @@ import unittest
 from utils.fire_world.planner import (
     PLAN_SCHEMA_VERSION,
     build_plan,
+    plan_hash_for,
     plan_id_for,
     write_plan,
 )
+from utils.fire_world.plan_ids import semantic_plan_id
 from utils.fire_world.templates import (
     IGNITION_SELECTION_VERSION,
     MULTI_ORIGIN_INITIAL_CATEGORIES,
@@ -78,7 +80,13 @@ class FireIgnitionCountTests(unittest.TestCase):
             f"tpl{TEMPLATE_VERSION}|"
             f"initial-only-v{IGNITION_SELECTION_VERSION}"
         )
-        expected = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+        expected_hash = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+        expected = semantic_plan_id(
+            SCENE_ID,
+            "bedroom_textile",
+            "severe",
+            expected_hash,
+        )
 
         plan = build_plan(
             self.inventory,
@@ -88,6 +96,16 @@ class FireIgnitionCountTests(unittest.TestCase):
         )
 
         self.assertEqual(plan["plan_id"], expected)
+        self.assertEqual(plan["plan_hash"], expected_hash)
+        self.assertEqual(
+            plan_hash_for(
+                SCENE_ID,
+                "bedroom_textile",
+                "severe",
+                seed=7,
+            ),
+            expected_hash,
+        )
         self.assertEqual(
             plan_id_for(
                 SCENE_ID,
@@ -177,10 +195,17 @@ class FireIgnitionCountTests(unittest.TestCase):
             f"tpl{TEMPLATE_VERSION}|"
             f"initial-only-v{IGNITION_SELECTION_VERSION}|n1"
         )
-        expected_id = hashlib.sha1(
+        expected_hash = hashlib.sha1(
             expected_key.encode("utf-8")
         ).hexdigest()[:12]
+        expected_id = semantic_plan_id(
+            SCENE_ID,
+            "kitchen_grease_fire",
+            "severe",
+            expected_hash,
+        )
         self.assertEqual(plan_a["plan_id"], expected_id)
+        self.assertEqual(plan_a["plan_hash"], expected_hash)
 
     def test_multi_origin_honors_exact_initial_count_and_same_floor(self):
         with self.assertRaisesRegex(ValueError, "requires num_ignitions >= 2"):

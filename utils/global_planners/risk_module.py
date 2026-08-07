@@ -1,0 +1,282 @@
+"""Planner-independent risk awareness for global navigation goals.
+
+The normal global planners own *what is useful*: nearest distance,
+cost-utility, fill score, or random map-goal sampling.  This module owns only
+*what is safe*.  Keeping those concerns separate guarantees that enabling a
+zero-valued risk map preserves the corresponding normal planner's ordering.
+"""
+from __future__ import annotations
+
+from dataclasses import dataclass
+from typing import Dict, List, Mapping, Optional, Sequence
+
+import cv2
+import numpy as np
+
+from utils.risk.frontier import (
+    FrontierRiskReport,
+    SeverityThresholds,
+    build_frontier_risk_reports,
+)
+
+from .base import GlobalPlannerContext
+
+
+def grid_line_cells(start, goal, shape) -> List[List[int]]:
+    """Return a clipped one-cell-wide route proxy for risk reporting."""
+
+    canvas = np.zeros(shape, dtype=np.uint8)
+    start_row = int(np.clip(round(float(start[0])), 0, shape[0] - 1))
+    start_col = int(np.clip(round(float(start[1])), 0, shape[1] - 1))
+    goal_row = int(np.clip(round(float(goal[0])), 0, shape[0] - 1))
+    goal_col = int(np.clip(round(float(goal[1])), 0, shape[1] - 1))
+    cv2.line(
+        canvas,
+        (start_col, start_row),
+        (goal_col, goal_row),
+        color=1,
+        thickness=1,
+    )
+    return np.argwhere(canvas > 0).astype(int).tolist()
+
+
+def low_risk_fallback_goal(
+    agent_cell,
+    obstacle_map,
+    explored_map,
+    planning_risk,
+    hard_unsafe,
+) -> List[int]:
+    """Select a nearby explored, reachable, low-risk safety waypoint."""
+
+    shape = np.asarray(planning_risk).shape
+    obstacle = cv2.dilate(
+        (np.asarray(obstacle_map) > 0.5).astype(np.uint8),
+        cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7)),
+    ).astype(bool)
+    explored = np.asarray(explored_map) > 0.0
+    hard = np.asarray(hard_unsafe, dtype=bool)
+    start = np.asarray(agent_cell[:2], dtype=np.float64)
+    start_cell = (
+        int(np.clip(round(start[0]), 0, shape[0] - 1)),
+        int(np.clip(round(start[1]), 0, shape[1] - 1)),
+    )
+    free = ~obstacle & ~hard
+    if not free.any():
+        return [start_cell[0], start_cell[1]]
+
+    seed = start_cell
+    if not free[seed]:
+        free_cells = np.argwhere(free)
+        seed = tuple(
+            free_cells[
+                int(
+                    np.argmin(
+                        np.linalg.norm(
+                            free_cells - start[None, :],
+                            axis=1,
+                        )
+                    )
+                )
+            ]
+        )
+    _, labels = cv2.connectedComponents(
+        free.astype(np.uint8),
+        connectivity=8,
+    )
+    reachable = labels == labels[seed]
+    candidates = explored & reachable
+    if not candidates.any():
+        candidates = reachable
+
+    cells = np.argwhere(candidates)
+    distances = np.linalg.norm(cells - start[None, :], axis=1)
+    nontrivial = distances >= 4.0
+    if nontrivial.any():
+        cells = cells[nontrivial]
+        distances = distances[nontrivial]
+    risk = np.asarray(planning_risk, dtype=np.float32)[
+        cells[:, 0],
+        cells[:, 1],
+    ]
+    distance_scale = max(float(distances.max()), 1.0)
+    score = risk + 0.08 * distances / distance_scale
+    best = cells[int(np.argmin(score))]
+    return [int(best[0]), int(best[1])]
+
+
+@dataclass(frozen=True)
+class RiskAwareAssignment:
+    """Shared safety-layer output before goals are materialized."""
+
+    assignments: Dict[int, Optional[int]]
+    reports: List[FrontierRiskReport]
+    hard_threshold: float
+
+
+class SharedRiskAwareness:
+    """Add one common risk policy on top of normal planner preferences."""
+
+    uncertainty_weight = 0.5
+
+    def __init__(self, context: GlobalPlannerContext) -> None:
+        if context.risk is None:
+            raise ValueError("SharedRiskAwareness requires context.risk")
+        self.context = context
+        self.risk = context.risk
+        danger_threshold = float(self.risk.danger_threshold)
+        safe_threshold = min(0.25, danger_threshold)
+        moderate_threshold = max(safe_threshold, danger_threshold)
+        self.hard_threshold = float(
+            np.clip(
+                self.risk.hard_frontier_threshold,
+                moderate_threshold,
+                1.0,
+            )
+        )
+        self.thresholds = SeverityThresholds(
+            safe_max=safe_threshold,
+            moderate_max=moderate_threshold,
+            hard_max=self.hard_threshold,
+        )
+
+    def build_reports(self) -> List[FrontierRiskReport]:
+        """Build the common frontier and approximate-route hazard report."""
+
+        agent_cells = [
+            [int(cell[0]), int(cell[1])]
+            for cell in self.context.agent_cells[: self.context.num_agents]
+        ]
+        route_cells = []
+        for frontier in self.context.target_points:
+            nearest_cell = min(
+                agent_cells,
+                key=lambda cell: np.linalg.norm(
+                    np.asarray(cell) - np.asarray(frontier)
+                ),
+            )
+            route_cells.append(
+                grid_line_cells(
+                    nearest_cell,
+                    frontier,
+                    np.asarray(self.risk.planning_risk).shape,
+                )
+            )
+        return build_frontier_risk_reports(
+            self.context.target_edge_map,
+            self.risk.planning_risk,
+            self.risk.confidence,
+            hard_unsafe_map=self.risk.hard_unsafe,
+            frontier_points=self.context.target_points,
+            route_cells=route_cells,
+            route_is_proxy=True,
+            thresholds=self.thresholds,
+        )
+
+    @staticmethod
+    def _normalise_preferences(values: Sequence[float]) -> np.ndarray:
+        """Map base-policy preferences to [0, 1] without changing ordering."""
+
+        raw = np.asarray(values, dtype=np.float64)
+        if raw.ndim != 1:
+            raise ValueError("frontier preferences must be one-dimensional")
+        finite = np.isfinite(raw)
+        normalized = np.full(raw.shape, -np.inf, dtype=np.float64)
+        if not finite.any():
+            return normalized
+        low = float(raw[finite].min())
+        high = float(raw[finite].max())
+        if high > low:
+            normalized[finite] = (raw[finite] - low) / (high - low)
+        else:
+            # Equal preferences remain equal so the normal planner's
+            # deterministic lowest-frontier-id tie break is preserved.
+            normalized[finite] = 1.0
+        return normalized
+
+    def assign_frontiers(
+        self,
+        base_preferences: Mapping[int, Sequence[float]],
+        reports: Optional[Sequence[FrontierRiskReport]] = None,
+    ) -> RiskAwareAssignment:
+        """Apply identical safety costs to every classical base policy."""
+
+        ordered_reports = sorted(
+            self.build_reports() if reports is None else reports,
+            key=lambda report: report.frontier_id,
+        )
+        assignments: Dict[int, Optional[int]] = {}
+        expected = len(ordered_reports)
+        for robot_id in range(self.context.num_agents):
+            preferences = self._normalise_preferences(
+                base_preferences.get(robot_id, ())
+            )
+            if len(preferences) != expected:
+                raise ValueError(
+                    "robot {} has {} frontier preferences; expected {}".format(
+                        robot_id,
+                        len(preferences),
+                        expected,
+                    )
+                )
+            best_frontier = None
+            best_utility = float("-inf")
+            for ordinal, report in enumerate(ordered_reports):
+                threshold_blocked = bool(
+                    report.max_risk >= self.hard_threshold
+                    or (
+                        not report.route_is_proxy
+                        and report.route_max_risk is not None
+                        and report.route_max_risk >= self.hard_threshold
+                    )
+                )
+                if (
+                    report.hard_blocked
+                    or threshold_blocked
+                    or not np.isfinite(preferences[ordinal])
+                ):
+                    continue
+                utility = (
+                    float(preferences[ordinal])
+                    - float(self.risk.frontier_weight)
+                    * report.planning_risk
+                    - self.uncertainty_weight * report.uncertainty
+                )
+                if utility > best_utility + 1e-12 or (
+                    abs(utility - best_utility) <= 1e-12
+                    and (
+                        best_frontier is None
+                        or report.frontier_id < best_frontier
+                    )
+                ):
+                    best_frontier = int(report.frontier_id)
+                    best_utility = utility
+            assignments[robot_id] = best_frontier
+
+        return RiskAwareAssignment(
+            assignments=assignments,
+            reports=list(ordered_reports),
+            hard_threshold=self.hard_threshold,
+        )
+
+    def safe_traversable_map(self) -> np.ndarray:
+        """Return the common safe domain used by map-goal samplers."""
+
+        traversable = (
+            (np.asarray(self.context.explored_map) > 0.0)
+            & (np.asarray(self.context.obstacle_map) <= 0.5)
+        )
+        traversable &= ~np.asarray(self.risk.hard_unsafe, dtype=bool)
+        traversable &= (
+            np.asarray(self.risk.planning_risk, dtype=np.float32)
+            <= float(self.risk.danger_threshold)
+        )
+        return traversable
+
+
+__all__ = [
+    "RiskAwareAssignment",
+    "SharedRiskAwareness",
+    "grid_line_cells",
+    "low_risk_fallback_goal",
+]

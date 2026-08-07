@@ -6,8 +6,8 @@ plan is the single source of truth consumed by stage 3 (propagation).
 
 Determinism guarantees:
     - Same (scene_id, fire_type, intensity, seed, template_version,
-      optional num_ignitions) ALWAYS produces the same plan_id and the same
-      ignitions.
+      optional num_ignitions) ALWAYS produces the same semantic plan_id,
+      stable plan_hash, and ignitions.
     - The planner emits t=0 initial objects only. An explicit count
       participates in the plan hash; otherwise the intensity preset
       deterministically supplies the count.
@@ -39,15 +39,16 @@ from .templates import (
     _default_propagation_rules,
     build_template_ignitions,
 )
+from .plan_ids import semantic_plan_id
 
 
-PLAN_SCHEMA_VERSION = 3
+PLAN_SCHEMA_VERSION = 4
 
 
 # ---------------------------------------------------------------------------
 # Plan id
 # ---------------------------------------------------------------------------
-def plan_id_for(
+def plan_hash_for(
     scene_id: str,
     fire_type: str,
     intensity: str,
@@ -55,6 +56,7 @@ def plan_id_for(
     template_version: int = TEMPLATE_VERSION,
     num_ignitions: Optional[int] = None,
 ) -> str:
+    """Return the stable 12-hex identity component for a plan."""
     key = (
         f"{scene_id}|{fire_type}|{intensity}|{seed}|tpl{template_version}"
         f"|initial-only-v{IGNITION_SELECTION_VERSION}"
@@ -63,6 +65,26 @@ def plan_id_for(
         requested = _validate_num_ignitions(num_ignitions)
         key += f"|n{requested}"
     return hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+
+
+def plan_id_for(
+    scene_id: str,
+    fire_type: str,
+    intensity: str,
+    seed: int,
+    template_version: int = TEMPLATE_VERSION,
+    num_ignitions: Optional[int] = None,
+) -> str:
+    """Return ``scene_type_intensity_hash`` for human-readable lookup."""
+    plan_hash = plan_hash_for(
+        scene_id,
+        fire_type,
+        intensity,
+        seed,
+        template_version=template_version,
+        num_ignitions=num_ignitions,
+    )
+    return semantic_plan_id(scene_id, fire_type, intensity, plan_hash)
 
 
 def _validate_num_ignitions(num_ignitions: int) -> int:
@@ -145,7 +167,7 @@ def build_plan(
         )
 
     rules = _default_propagation_rules(intensity)
-    pid = plan_id_for(
+    plan_hash = plan_hash_for(
         inventory["scene_id"],
         fire_type,
         intensity,
@@ -155,7 +177,13 @@ def build_plan(
 
     plan = {
         "schema_version": PLAN_SCHEMA_VERSION,
-        "plan_id": pid,
+        "plan_id": semantic_plan_id(
+            inventory["scene_id"],
+            fire_type,
+            intensity,
+            plan_hash,
+        ),
+        "plan_hash": plan_hash,
         "scene_id": inventory["scene_id"],
         "scene_glb": inventory.get("scene_glb"),
         "world_aabb": inventory["world_aabb"],

@@ -117,6 +117,21 @@ class GlobalPlanner(ABC):
     def plan(self, context: GlobalPlannerContext) -> GlobalPlannerResult:
         """Assign one map goal to every robot."""
 
+    def frontier_preferences(
+        self,
+        context: GlobalPlannerContext,
+    ) -> Optional[Dict[int, Sequence[float]]]:
+        """Return the normal policy's per-robot frontier preferences.
+
+        Classical frontier planners override this method.  A shared safety
+        layer can then add risk costs without reimplementing or replacing the
+        planner's normal objective.  Non-frontier policies such as random map
+        sampling and GPT return ``None`` and use their dedicated adapters.
+        """
+
+        del context
+        return None
+
     def refine_risk_assignments(
         self,
         context: GlobalPlannerContext,

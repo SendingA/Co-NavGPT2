@@ -50,7 +50,7 @@ Stage 4 is purely a sanity-check render. Stage 5 is the live hook.
 scenes/<scene_short>/
 ├── inventory.json              # schema v2, every HM3D instance, structural masks paths
 ├── plans/
-│   └── <plan_id>.json          # 12-hex plan id, deterministic
+│   └── <plan_id>.json          # scene_type_intensity_12hex, deterministic
 └── structural/                 # generated alongside inventory.json
     ├── walls.npy               # boolean (Nx, Ny, Nz)
     ├── floors.npy
@@ -82,7 +82,7 @@ are tiny (~0.2–1 MB) and review-friendly.
 | `d4f8b9c253ab` | TEEsavR23oF   | kitchen_grease_fire   | medium    | 42   |
 | `549afa3c5305` | TEEsavR23oF   | bedroom_textile       | severe    | 7    |
 | `b2fc76fae83d` | Nfvxx8J5NCo   | kitchen_grease_fire   | medium    | 42   |
-| `83679a07b632` | Nfvxx8J5NCo   | bedroom_textile       | severe    | 7    |
+| `Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632` | Nfvxx8J5NCo   | bedroom_textile       | severe    | 7    |
 
 ---
 
@@ -143,7 +143,7 @@ and the dehaze path have been removed.
 --use_thermal_perception {0,1}                # default 1
 
 --fire_world {0,1}                            # enable the voxel fire suite
---fire_world_plan_id <12hex>                  # NEW: which plan to load
+--fire_world_plan_id <scene_type_intensity_hash> # which plan to load
 --fire_world_scenes_root scenes
 --fire_world_out_root outputs/fire_world
 --fire_steps_per_unit 5                       # NEW: every N robot steps -> 1 fire-time unit
@@ -203,7 +203,7 @@ python -m utils.fire_world.planner \
 
 # 3. Propagate → outputs/fire_world/<id>/<plan_id>/timeline.npz
 python -m utils.fire_world.propagation \
-    --scene Nfvxx8J5NCo --plan_id 83679a07b632 \
+    --scene Nfvxx8J5NCo --plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --voxel_m 0.15 --dt 0.5 --save_dt 2.0
 ```
 
@@ -236,7 +236,7 @@ python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
     --num-agents 1 --agent-id 0 \
     --scene-id Nfvxx8J5NCo \
-    --plan-id 83679a07b632 \
+    --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --steps-per-unit 5 --seconds-per-unit 2.0 \
     --depth_use_clean 1
 ```
@@ -254,7 +254,7 @@ Keys: `W` forward · `A` left · `D` right · `Q` look down · `E` look up
 python main.py \
     --task_config multi_objectnav_hm3d.yaml \
     --nav_mode gpt --num_agents 1 \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_steps_per_unit 5 --fire_seconds_per_unit 2.0 \
     --depth_use_clean 1 --use_thermal_perception 1 \
     --visualize 0 --print_images 1
@@ -469,19 +469,19 @@ python scripts/build_inventory.py --scene 00880-Nfvxx8J5NCo
 python -m utils.fire_world.planner --scene Nfvxx8J5NCo \
        --fire_type bedroom_textile --intensity severe --seed 7
 python -m utils.fire_world.propagation --scene Nfvxx8J5NCo \
-       --plan_id 83679a07b632
+       --plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632
 python -m utils.fire_world.topdown_video --scene Nfvxx8J5NCo \
-       --plan_id 83679a07b632
+       --plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632
 
 # 2. See the fire from the agent's eye, manually:
 python scripts/keyboard_teleop_fire.py \
        --task-config configs/multi_objectnav_hm3d.yaml \
-       --scene-id Nfvxx8J5NCo --plan-id 83679a07b632 \
+       --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
        --depth_use_clean 1
 
 # 3. Run the full navigation stack with a live fire:
 python main.py --task_config multi_objectnav_hm3d.yaml \
-       --fire_world 1 --fire_world_plan_id 83679a07b632 \
+       --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
        --depth_use_clean 1 --use_thermal_perception 1 \
        --visualize 0
 ```

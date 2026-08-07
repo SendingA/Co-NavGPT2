@@ -70,21 +70,33 @@ class RandomGlobalPlanner(GlobalPlanner):
         ]
         return int(nearest[0]), int(nearest[1])
 
-    def _traversable_map(self, context: GlobalPlannerContext) -> np.ndarray:
-        traversable = (
+    @staticmethod
+    def _traversable_map(context: GlobalPlannerContext) -> np.ndarray:
+        """Return the normal, risk-free random-sampling domain."""
+
+        return (
             (np.asarray(context.explored_map) > 0.0)
             & (np.asarray(context.obstacle_map) <= 0.5)
         )
-        if context.risk is not None:
-            traversable &= ~np.asarray(context.risk.hard_unsafe, dtype=bool)
-            traversable &= (
-                np.asarray(context.risk.planning_risk, dtype=np.float32)
-                <= float(context.risk.danger_threshold)
-            )
-        return traversable
 
     def plan(self, context: GlobalPlannerContext) -> GlobalPlannerResult:
-        traversable = self._traversable_map(context)
+        return self.plan_in_domain(context, self._traversable_map(context))
+
+    def plan_in_domain(
+        self,
+        context: GlobalPlannerContext,
+        traversable,
+    ) -> GlobalPlannerResult:
+        """Run the unchanged sampler inside a caller-provided safe domain."""
+
+        traversable = np.asarray(traversable, dtype=bool)
+        if traversable.shape != np.asarray(context.obstacle_map).shape:
+            raise ValueError(
+                "traversable domain shape {} does not match map {}".format(
+                    traversable.shape,
+                    np.asarray(context.obstacle_map).shape,
+                )
+            )
         _, labels = cv2.connectedComponents(
             traversable.astype(np.uint8),
             connectivity=8,

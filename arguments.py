@@ -318,7 +318,38 @@ def get_args() -> argparse.Namespace:
 
     # FireWorld runtime
     parser.add_argument("--fire_world", type=int, default=0)
-    parser.add_argument("--fire_world_plan_id", type=str, default=None)
+    parser.add_argument(
+        "--fire_world_plan_id",
+        type=str,
+        default=None,
+        help=(
+            "explicit semantic plan ID; omit it (or pass 'auto') to select "
+            "a runnable plan for each episode scene"
+        ),
+    )
+    parser.add_argument(
+        "--fire_world_intensity",
+        type=str,
+        default="medium",
+        choices=["light", "medium", "severe"],
+        help="intensity used by automatic FireWorld plan selection",
+    )
+    parser.add_argument(
+        "--fire_world_fire_type",
+        type=str,
+        default="auto",
+        choices=[
+            "auto",
+            "multi_origin",
+            "kitchen_grease_fire",
+            "bedroom_textile",
+            "living_room_electric",
+        ],
+        help=(
+            "fire type used by automatic plan selection; auto uses a stable "
+            "multi-origin-first priority"
+        ),
+    )
     parser.add_argument("--fire_world_scenes_root", type=str, default="scenes")
     parser.add_argument("--fire_world_out_root", type=str,
                         default="outputs/fire_world")

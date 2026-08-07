@@ -24,6 +24,7 @@ from utils.fire_world.planner import (  # noqa: E402
     PLAN_SCHEMA_VERSION,
     build_plan,
     load_inventory,
+    plan_hash_for,
     plan_id_for,
     write_plan,
 )
@@ -40,6 +41,10 @@ def test_deterministic_plan_id() -> None:
     c = plan_id_for(SCENE, "kitchen_grease_fire", "medium", 43)
     assert a == b, "plan_id changed under identical inputs"
     assert a != c, "plan_id should differ under different seeds"
+    assert a.startswith(f"{SCENE}_kitchen_grease_fire_medium_")
+    assert a.endswith(plan_hash_for(
+        SCENE, "kitchen_grease_fire", "medium", 42
+    ))
     print(f"deterministic plan_id: {a} (seed=42) vs {c} (seed=43) -> OK")
 
 
@@ -48,6 +53,9 @@ def test_plan_id_in_payload() -> None:
     plan = build_plan(inv, "kitchen_grease_fire", "medium", 42)
     expected = plan_id_for(SCENE, "kitchen_grease_fire", "medium", 42)
     assert plan["plan_id"] == expected
+    assert plan["plan_hash"] == plan_hash_for(
+        SCENE, "kitchen_grease_fire", "medium", 42
+    )
     assert plan["schema_version"] == PLAN_SCHEMA_VERSION
     assert plan["scene_id"] == SCENE
     assert plan["world_aabb"] is not None

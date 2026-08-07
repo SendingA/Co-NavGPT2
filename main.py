@@ -69,17 +69,15 @@ def _find_scene_for_fire_plan(args):
     the habitat dataset (``content_scenes: [<scene>]``) to restrict
     the episode iterator to matching scenes.
     """
-    from pathlib import Path
+    from utils.fire_world.plan_selection import find_scene_for_plan
 
-    root = Path(getattr(args, "fire_world_scenes_root", "scenes"))
-    if not root.is_absolute():
-        root = Path(__file__).resolve().parent / root
-    plan_id = args.fire_world_plan_id
+    plan_id = getattr(args, "fire_world_plan_id", None)
     if not plan_id:
         return None
-    for plan_file in root.glob(f"*/plans/{plan_id}.json"):
-        return plan_file.parents[1].name
-    return None
+    return find_scene_for_plan(
+        plan_id,
+        scenes_root=getattr(args, "fire_world_scenes_root", "scenes"),
+    )
 
 
 def main(args, send_queue, receive_queue):
@@ -110,8 +108,8 @@ def main(args, send_queue, receive_queue):
     local_risk_awareness = validate_local_planner_config(args)
     if risk_config.enabled and not int(getattr(args, "fire_world", 0)):
         raise ValueError(
-            "--risk_enabled=1 requires --fire_world=1 and a valid "
-            "--fire_world_plan_id"
+            "--risk_enabled=1 requires --fire_world=1 and a runnable "
+            "FireWorld plan/timeline"
         )
     if risk_config.enabled:
         print(
@@ -146,12 +144,68 @@ def main(args, send_queue, receive_queue):
             )
         print(f"[lidar_360] installed sensors: {LIDAR_DEPTH_UUIDS}")
 
-    # When fire_world is on we can only render the scene the plan
-    # was baked for. Filter the dataset to episodes whose scene_id
-    # matches so env.reset() never loads an unrelated scene mid-run.
-    if int(getattr(args, "fire_world", 0)) and args.fire_world_plan_id:
-        _target_scene = _find_scene_for_fire_plan(args)
-        if _target_scene:
+    # FireWorld can only play scenes with a baked timeline. Explicit mode
+    # keeps the historical one-plan/one-scene behavior. Auto mode discovers
+    # every scene that has a runnable plan matching the requested defaults and
+    # filters Habitat before Env creation, so a long run cannot fail midway on
+    # a scene whose timeline is missing.
+    if int(getattr(args, "fire_world", 0)):
+        from utils.fire_world.plan_selection import (
+            discover_runnable_fire_scenes,
+            is_auto_plan_id,
+            select_fire_plan,
+        )
+
+        if is_auto_plan_id(getattr(args, "fire_world_plan_id", None)):
+            _fire_selections = discover_runnable_fire_scenes(
+                intensity=args.fire_world_intensity,
+                fire_type=args.fire_world_fire_type,
+                scenes_root=args.fire_world_scenes_root,
+                out_root=args.fire_world_out_root,
+            )
+            if not _fire_selections:
+                raise FileNotFoundError(
+                    "No runnable FireWorld scenes match "
+                    f"fire_type={args.fire_world_fire_type}, "
+                    f"intensity={args.fire_world_intensity}. Generate the "
+                    "matching timeline.npz assets before navigation."
+                )
+            _fire_scene_ids = sorted(_fire_selections)
+            with habitat.config.read_write(config):
+                config.habitat.dataset.content_scenes = _fire_scene_ids
+            print(
+                "[fire_world] automatic plan selection "
+                f"fire_type={args.fire_world_fire_type} "
+                f"intensity={args.fire_world_intensity} "
+                f"ready_scenes={len(_fire_scene_ids)}"
+            )
+            for _scene_id in _fire_scene_ids[:5]:
+                print(
+                    "[fire_world] ready "
+                    f"scene={_scene_id} "
+                    f"plan={_fire_selections[_scene_id].plan_id}"
+                )
+            if len(_fire_scene_ids) > 5:
+                print(
+                    "[fire_world] "
+                    f"{len(_fire_scene_ids) - 5} additional ready scenes"
+                )
+        else:
+            _target_scene = _find_scene_for_fire_plan(args)
+            if _target_scene is None:
+                raise FileNotFoundError(
+                    "Explicit FireWorld plan was not found under "
+                    f"{args.fire_world_scenes_root}: "
+                    f"{args.fire_world_plan_id}"
+                )
+            # Fail before the expensive Habitat environment is created if the
+            # matching timeline is absent or the plan metadata is malformed.
+            select_fire_plan(
+                _target_scene,
+                plan_id=args.fire_world_plan_id,
+                scenes_root=args.fire_world_scenes_root,
+                out_root=args.fire_world_out_root,
+            )
             with habitat.config.read_write(config):
                 config.habitat.dataset.content_scenes = [_target_scene]
             print(f"[fire_world] restricting dataset to scene {_target_scene}")
@@ -264,14 +318,24 @@ def main(args, send_queue, receive_queue):
     from utils.fire_pipeline import step_fire_observation  # noqa: E402
 
     def _build_fire_scene_and_suites():
-        """Lazy construction; runs once, after the first env.reset()."""
+        """Build/reuse assets after reset for the active episode scene."""
         nonlocal fire_scene, fire_suites, fire_viewers
-        if fire_scene is not None or fire_suites is not None:
-            return
         if not int(getattr(args, "fire_world", 0)):
             return
 
         from utils.fire_world.scene import FireScene
+        from utils.fire_world.plan_selection import scene_id_from_config
+
+        current_scene_id = scene_id_from_config(config)
+        if (
+            fire_scene is not None
+            and fire_suites is not None
+            and fire_scene.scene_id == current_scene_id
+        ):
+            args.fire_world_active_plan_id = fire_scene.plan_id
+            args.fire_world_active_scene_id = fire_scene.scene_id
+            return
+
         fire_scene = FireScene.from_args(args, config)
         print(f"[fire_world] {fire_scene.describe()}")
 
@@ -304,7 +368,10 @@ def main(args, send_queue, receive_queue):
             )
             for i in range(num_agents)
         ]
-        if int(getattr(args, "fire_show_window", 0)):
+        if (
+            int(getattr(args, "fire_show_window", 0))
+            and fire_viewers is None
+        ):
             fire_viewers = [
                 FireSensorViewer.start(
                     window_name=f"Fire Sensors - agent {i}",

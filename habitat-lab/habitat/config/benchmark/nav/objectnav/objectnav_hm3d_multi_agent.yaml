@@ -1,0 +1,36 @@
+# @package _global_
+#
+# Habitat 2-compatible classic multi-agent navigation on Habitat 3.3.
+# ``agents_order`` replaces the old ``SIMULATOR.NUM_AGENTS`` setting.
+
+defaults:
+  - objectnav_hm3d
+  - /habitat/simulator/sensor_setups@habitat.simulator.agents.agent_1: rgbd_agent
+  - _self_
+
+habitat:
+  simulator:
+    type: Sim-v0
+    default_agent_id: 0
+    tilt_angle: 30
+    agents_order:
+      - main_agent
+      - agent_1
+    agents:
+      main_agent: &navigation_agent
+        height: 0.88
+        radius: 0.18
+        sim_sensors:
+          rgb_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            position: [0.0, 0.88, 0.0]
+          depth_sensor:
+            width: 640
+            height: 480
+            hfov: 79
+            min_depth: 0.5
+            max_depth: 5.0
+            position: [0.0, 0.88, 0.0]
+      agent_1: *navigation_agent

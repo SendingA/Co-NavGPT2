@@ -11,7 +11,7 @@ Example::
     python scripts/keyboard_teleop_fire.py \\
         --task-config configs/multi_objectnav_hm3d.yaml \\
         --scene-id Nfvxx8J5NCo \\
-        --plan-id 83679a07b632 \\
+        --plan-id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \\
         --steps-per-unit 5 --seconds-per-unit 2.0 \\
         --depth_use_clean 1
 
@@ -57,7 +57,8 @@ def parse_args():
                    help="HM3D short id, e.g. Nfvxx8J5NCo. The script "
                         "filters the episode dataset to one matching scene.")
     p.add_argument("--plan-id", type=str, required=True,
-                   help="FireWorld plan id (12-hex). The propagation "
+                   help="FireWorld semantic plan id "
+                        "(scene_type_intensity_hash). The propagation "
                         "outputs/fire_world/<scene>/<plan_id>/timeline.npz "
                         "must already exist.")
     p.add_argument("--scenes-root", default="scenes")

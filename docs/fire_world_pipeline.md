@@ -45,9 +45,9 @@ model are **fully decoupled and independently ablatable**:
 **Claimed contributions (paper §1):**
 
 - **C1 — A reproducible dynamic-hazard benchmark.** Every artefact is a
-  deterministic function of its inputs and content-addressed by a
-  SHA1-truncated `plan_id`, so a full experimental run is bit-for-bit
-  reproducible from three scalars `(fire_type, intensity, seed)`.
+  deterministic function of its inputs and named by a semantic
+  `scene_type_intensity_hash` `plan_id`; its final 12-hex hash is derived
+  from the full planner inputs, so a run is bit-for-bit reproducible.
 - **C2 — Semantically grounded fire.** Ignition sources, fuel loads, and
   smoke yields are derived from HM3D per-instance semantics, not painted
   by hand, so the hazard is spatially consistent with the scene.
@@ -156,11 +156,12 @@ rule set. Later object ignition is an output of the solver. Code:
 `utils/fire_world/templates.py` (scenario logic) and
 `utils/fire_world/planner.py` (CLI + hashing).
 
-**Deterministic identity.** A plan is content-addressed by a
-SHA1-truncated hash of its inputs (scene, fire_type, intensity, seed,
-template version, ignition-selection version, and optional explicit initial
-count), so the same inputs always yield the same `plan_id` and the same
-ignitions (C1).
+**Deterministic identity.** A plan is named
+`<scene_id>_<fire_type>_<intensity>_<12hex_hash>`. The final `plan_hash`
+is a SHA1-truncated hash of the scene, fire type, intensity, seed, template
+version, ignition-selection version, and optional explicit initial count.
+The same inputs therefore always yield the same readable `plan_id`,
+`plan_hash`, and ignitions (C1).
 
 **Template-based source selection** (`TEMPLATES` in `templates.py`). Each
 template samples one or more initial sources by flammability from its declared
@@ -206,8 +207,9 @@ timelines cannot be confused with template-v9. V10 retains the enlarged
 duration-aware radial floor hazard from v9 and adds metric limits for both
 free flame columns and vertical object-BBox visual fill.
 
-**Plan schema v3 (`plans/<plan_id>.json`).** Top level: `scene_id`,
-`world_aabb`, `fire_type`, `intensity`, `seed`, `template_version`,
+**Plan schema v4 (`plans/<plan_id>.json`).** Top level: semantic `plan_id`,
+12-hex `plan_hash`, `scene_id`, `world_aabb`, `fire_type`, `intensity`,
+`seed`, `template_version`,
 `duration_s`, `num_initial_ignitions`, `ignition_selection_mode`, and
 `ignition_selection_version`, plus
 optional `num_initial_ignitions_requested`. Each `ignitions[i]`:
@@ -566,9 +568,9 @@ smoke field, paired with a multi-modal sensor-degradation model. The
 benchmark is produced by a six-stage pipeline (Fig. X) that decouples a
 *world model* of fire propagation from an *observation model* of sensor
 degradation, so that each can be ablated independently. Every
-intermediate artefact is content-addressed by a SHA1-truncated
-`plan_id`, making complete experimental runs bit-for-bit reproducible
-from a `(fire_type, intensity, seed)` triple.
+intermediate artefact uses a semantic `scene_type_intensity_hash`
+`plan_id`; the stable hash suffix makes complete experimental runs
+bit-for-bit reproducible from the full planner inputs.
 
 ### 7.2 Scene parsing and material assignment
 
@@ -701,7 +703,9 @@ perception (`--depth_use_clean`, `--use_thermal_perception`,
 | `utils/fire_world/scene_scan.py` | Stage 1: build `inventory.json` + structural voxels |
 | `utils/fire_world/hm3d_semantic.py` | Stage 1: sRGB OETF + GLB parsing helpers |
 | `utils/fire_world/templates.py` | Stage 2: ignition templates + intensity presets + default rules |
-| `utils/fire_world/planner.py` | Stage 2: CLI + `plan_id` hashing |
+| `utils/fire_world/planner.py` | Stage 2: CLI + semantic `plan_id` generation |
+| `utils/fire_world/plan_ids.py` | Canonical `scene_type_intensity_hash` naming |
+| `scripts/migrate_fire_plan_ids.py` | Dry-run/apply migration for legacy 12-hex IDs |
 | `utils/fire_world/propagation.py` | Stage 3: voxel solver |
 | `utils/fire_world/voxel_world.py` | Stage 3: `VoxelWorld` state container |
 | `utils/fire_world/runtime.py` | Stage 4: `FireWorld` timeline loader (+ stale-cache warning) |
@@ -739,21 +743,21 @@ python -m utils.fire_world.planner \
     --num_ignitions 4 --print_only
 
 # 3) Run propagation with the plan_id printed by step 2
-# (6df964ec1f4c for the exact template-v8 inputs above)
+# (Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c for the exact template-v8 inputs above)
 python -m utils.fire_world.propagation \
-    --scene Nfvxx8J5NCo --plan_id 6df964ec1f4c \
+    --scene Nfvxx8J5NCo --plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
     --voxel_m 0.15
 
 # 4) Automated evaluation (wallclock clock, real-time fire)
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id 6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
     --fire_clock_mode wallclock --fire_speedup 1.0 \
     --depth_use_clean 1
 
 # 4') Or drive manually to inspect the field (step clock for reproducibility)
 python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
-    --scene-id Nfvxx8J5NCo --plan-id 6df964ec1f4c \
+    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
     --clock-mode step --steps-per-unit 1 --seconds-per-unit 5.0 \
     --depth_use_clean 1 --show-dashboard 1
 ```

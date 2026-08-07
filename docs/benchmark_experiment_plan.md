@@ -61,11 +61,12 @@ The entrypoints do not implement these policies directly. `main.py` and
 in `utils/global_planners/{nearest,co_ut,fill,random,gpt}.py`; this keeps benchmark
 labels and CLI flags stable while making each baseline independently testable.
 
-When `risk_source=sensed` or `oracle`, frontier-based modes enter the common
-risk-aware frontier assignment path. `random` instead samples from reachable
-explored free cells after removing hard-unsafe and above-threshold cells.
-These are no longer byte-for-byte the risk-blind algorithms. Report rows as, for example,
-`nearest+sensed-risk`, not simply `nearest`.
+When `risk_source=sensed` or `oracle`, every classical planner first retains
+its normal preference (`nearest`, raw `co_ut`, `fill`, or seeded `random`). A
+shared `SharedRiskAwareness` layer then adds identical hard filtering and soft
+risk/uncertainty costs; for `random` it filters the sampling domain. A zero-risk
+map therefore reproduces the normal planner assignment. Report rows as, for
+example, `nearest+sensed-risk`, not simply `nearest`.
 
 ### 2.3 Local planner selectors
 
@@ -119,7 +120,7 @@ image artifact capture are still required before publishing a VLM comparison.
 
 | Scene | Plan | Scenario | Intensity | Timeline |
 | --- | --- | --- | --- | --- |
-| `Nfvxx8J5NCo` | `83679a07b632` | bedroom textile | severe | ready |
+| `Nfvxx8J5NCo` | `Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632` | bedroom textile | severe | ready |
 | `Nfvxx8J5NCo` | `b2fc76fae83d` | kitchen grease | medium | **missing** |
 | `TEEsavR23oF` | `549afa3c5305` | bedroom textile | severe | ready |
 | `TEEsavR23oF` | `d4f8b9c253ab` | kitchen grease | medium | ready |
@@ -553,7 +554,7 @@ python main.py \
     --task_config multi_objectnav_hm3d.yaml \
     --num_agents 2 --seed 1 \
     --nav_mode co_ut --local_planner fmm \
-    --fire_world 1 --fire_world_plan_id 83679a07b632 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
     --fire_clock_mode step \
     --fire_steps_per_unit 5 --fire_seconds_per_unit 2.0 \
     --depth_use_clean 1 --use_thermal_perception 1 \

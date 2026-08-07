@@ -130,7 +130,7 @@ python main.py --dataset_path data/datasets/objectnav_hm3d_v2/{split}/{split}.js
                --scene_dataset data/scene_datasets/hm3d_v0.2/hm3d_annotated_basis.scene_dataset_config.json
 
 # fire-scene evaluation
-python main.py --fire_world 1 --fire_world_plan_id 83679a07b632
+python main.py --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632
 
 # vectorised eval (2 workers)
 python main_vec.py -n 2

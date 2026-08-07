@@ -17,15 +17,15 @@ class FillGlobalPlanner(GlobalPlanner):
 
     name = "fill"
 
-    def plan(self, context: GlobalPlannerContext) -> GlobalPlannerResult:
+    def frontier_preferences(self, context: GlobalPlannerContext):
         if len(context.target_points) == 0:
-            return random_goal_result(context)
-
-        assignments = {}
-        goals = []
+            return {
+                robot_id: np.empty((0,), dtype=np.float64)
+                for robot_id in range(context.num_agents)
+            }
+        preferences = {}
         for robot_id in range(context.num_agents):
-            best_idx = 0
-            best_score = -1.0
+            values = []
             for frontier_id, frontier in enumerate(context.target_points):
                 if (
                     context.target_score is not None
@@ -40,9 +40,19 @@ class FillGlobalPlanner(GlobalPlanner):
                             - np.asarray(context.poses[robot_id][:2])
                         )
                     )
-                if score > best_score:
-                    best_score = float(score)
-                    best_idx = frontier_id
+                values.append(float(score))
+            preferences[robot_id] = np.asarray(values, dtype=np.float64)
+        return preferences
+
+    def plan(self, context: GlobalPlannerContext) -> GlobalPlannerResult:
+        if len(context.target_points) == 0:
+            return random_goal_result(context)
+
+        preferences = self.frontier_preferences(context)
+        assignments = {}
+        goals = []
+        for robot_id in range(context.num_agents):
+            best_idx = int(np.argmax(preferences[robot_id]))
             assignments[robot_id] = int(best_idx)
             goals.append(goal_from_frontier(context, best_idx))
 
