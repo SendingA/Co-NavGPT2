@@ -14,6 +14,82 @@ GridPoint = Sequence[int]
 
 
 @dataclass(frozen=True)
+class AgentFrontierMap:
+    """One robot's map and frontier namespace.
+
+    Frontier IDs are local to this record. The team-level individual-map
+    adapter flattens them only after each robot has made a choice, so two
+    locally named frontier-zero candidates are never treated as one shared
+    frontier.
+    """
+
+    target_score: Optional[Sequence[float]]
+    target_edge_map: np.ndarray
+    target_points: Sequence[GridPoint]
+    obstacle_map: np.ndarray
+    explored_map: np.ndarray
+    top_view_map: np.ndarray
+
+    def __post_init__(self) -> None:
+        shape = np.asarray(self.obstacle_map).shape
+        if len(shape) != 2:
+            raise ValueError("agent obstacle_map must be a 2-D map")
+        if np.asarray(self.explored_map).shape != shape:
+            raise ValueError(
+                "agent explored_map shape must match obstacle_map shape"
+            )
+        if np.asarray(self.target_edge_map).shape != shape:
+            raise ValueError(
+                "agent target_edge_map shape must match obstacle_map shape"
+            )
+        if np.asarray(self.top_view_map).shape[:2] != shape:
+            raise ValueError(
+                "agent top_view_map spatial shape must match obstacle_map"
+            )
+        if (
+            self.target_score is not None
+            and len(self.target_score) < len(self.target_points)
+        ):
+            raise ValueError(
+                "agent target_score must contain every target point"
+            )
+
+
+def merge_agent_frontier_maps(
+    agent_maps: Sequence[AgentFrontierMap],
+):
+    """Flatten local frontier labels for diagnostics and visualization only."""
+
+    if not agent_maps:
+        raise ValueError("agent_maps must not be empty")
+    shape = np.asarray(agent_maps[0].target_edge_map).shape
+    merged_edge = np.zeros(shape, dtype=np.int32)
+    merged_points = []
+    merged_scores = []
+    all_scores_known = True
+    offset = 0
+    for agent_map in agent_maps:
+        edge = np.asarray(agent_map.target_edge_map)
+        if edge.shape != shape:
+            raise ValueError("all agent frontier maps must share one shape")
+        for local_id, point in enumerate(agent_map.target_points):
+            merged_edge[edge == local_id + 1] = offset + local_id + 1
+            merged_points.append([int(point[0]), int(point[1])])
+            if agent_map.target_score is None:
+                all_scores_known = False
+            else:
+                merged_scores.append(
+                    float(agent_map.target_score[local_id])
+                )
+        offset += len(agent_map.target_points)
+    return (
+        merged_scores if all_scores_known else None,
+        merged_edge,
+        merged_points,
+    )
+
+
+@dataclass(frozen=True)
 class RiskPlanningContext:
     """Risk inputs shared by every risk-aware global planner."""
 
@@ -65,6 +141,7 @@ class GlobalPlannerContext:
     num_agents: int
     risk: Optional[RiskPlanningContext] = None
     episode_index: int = 0
+    agent_ids: Optional[Sequence[int]] = None
 
     def __post_init__(self) -> None:
         if int(self.num_agents) < 1:
@@ -73,6 +150,11 @@ class GlobalPlannerContext:
             raise ValueError("poses must contain one entry per robot")
         if len(self.agent_cells) < self.num_agents:
             raise ValueError("agent_cells must contain one entry per robot")
+        if (
+            self.agent_ids is not None
+            and len(self.agent_ids) < self.num_agents
+        ):
+            raise ValueError("agent_ids must contain one entry per robot")
         map_shape = np.asarray(self.obstacle_map).shape
         if len(map_shape) != 2:
             raise ValueError("obstacle_map must be a 2-D map")
@@ -105,6 +187,7 @@ class GlobalPlannerResult:
         default_factory=dict
     )
     frontier_reports: List[FrontierRiskReport] = field(default_factory=list)
+    frontier_report_agent_ids: List[int] = field(default_factory=list)
     frontier_computed_step: Optional[int] = None
 
 
@@ -112,10 +195,28 @@ class GlobalPlanner(ABC):
     """Interface implemented by every global frontier planner."""
 
     name: str
+    uses_shared_frontier_map: bool = False
 
     @abstractmethod
     def plan(self, context: GlobalPlannerContext) -> GlobalPlannerResult:
         """Assign one map goal to every robot."""
+
+    def plan_individual_maps(
+        self,
+        context: GlobalPlannerContext,
+        agent_maps: Sequence[AgentFrontierMap],
+    ) -> GlobalPlannerResult:
+        """Assign goals from robot-local maps.
+
+        The factory's risk-aware adapter implements this for every non-GPT
+        planner. Direct planner instances retain a clear failure mode instead
+        of silently falling back to the shared map.
+        """
+
+        del context, agent_maps
+        raise RuntimeError(
+            f"{self.name} does not implement individual-map planning"
+        )
 
     def frontier_preferences(
         self,

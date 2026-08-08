@@ -17,9 +17,11 @@ from habitat import Env
 from utils.shortest_path_follower import ShortestPathFollowerCompat
 from utils.explored_map_utils import Global_Map_Proc
 from utils.global_planners import (
+    AgentFrontierMap,
     GlobalPlannerContext,
     RiskPlanningContext,
     create_global_planner,
+    merge_agent_frontier_maps,
 )
 from utils.evaluation_resume import (
     advance_episode_iterator,
@@ -290,6 +292,11 @@ def main(args, send_queue, receive_queue):
         random_goal_min_distance_m=args.random_goal_min_distance_m,
         map_resolution_cm=args.map_resolution,
     )
+    individual_map_processes = (
+        []
+        if global_planner.uses_shared_frontier_map
+        else [Global_Map_Proc(args) for _ in range(num_agents)]
+    )
 
     # ------------------------------------------------------------------
     # Humanoid pedestrians + visible robot URDF models (Habitat 3 only)
@@ -427,6 +434,8 @@ def main(args, send_queue, receive_queue):
         )
 
         map_process.reset()
+        for individual_map_process in individual_map_processes:
+            individual_map_process.reset()
         if fire_scene is not None:
             fire_scene.clock.start()
 
@@ -446,6 +455,7 @@ def main(args, send_queue, receive_queue):
 
         risk_runtime = None
         risk_frontier_reports = []
+        risk_frontier_report_agent_ids = []
         risk_frontier_computed_step = None
         if risk_config.enabled:
             from utils.risk.runtime import RiskRuntime
@@ -530,6 +540,16 @@ def main(args, send_queue, receive_queue):
             obstacle_map, explored_map, top_view_map = map_process.Map_Extraction(
                 point_sum, agent[0].camera_position[1]
             )
+            individual_map_views = []
+            for robot_id, individual_map_process in enumerate(
+                individual_map_processes
+            ):
+                individual_map_views.append(
+                    individual_map_process.Map_Extraction(
+                        agent[robot_id].point_sum,
+                        agent[robot_id].camera_position[1],
+                    )
+                )
 
             # ---------- Dynamic shared risk assessment ----------
             if risk_runtime is not None:
@@ -563,9 +583,39 @@ def main(args, send_queue, receive_queue):
                 or pointnav_replan_requested
             ) and not found_goal:
                 goal_points.clear()
-                target_score, target_edge_map, target_point_list = (
-                    map_process.Frontier_Det(threshold_point=8)
-                )
+                agent_frontier_maps = None
+                if global_planner.uses_shared_frontier_map:
+                    target_score, target_edge_map, target_point_list = (
+                        map_process.Frontier_Det(threshold_point=8)
+                    )
+                else:
+                    agent_frontier_maps = []
+                    for robot_id, individual_map_process in enumerate(
+                        individual_map_processes
+                    ):
+                        scores, edge_map, points = (
+                            individual_map_process.Frontier_Det(
+                                threshold_point=8
+                            )
+                        )
+                        own_obstacle, own_explored, own_top_view = (
+                            individual_map_views[robot_id]
+                        )
+                        agent_frontier_maps.append(
+                            AgentFrontierMap(
+                                target_score=scores,
+                                target_edge_map=edge_map,
+                                target_points=points,
+                                obstacle_map=own_obstacle,
+                                explored_map=own_explored,
+                                top_view_map=own_top_view,
+                            )
+                        )
+                    (
+                        target_score,
+                        target_edge_map,
+                        target_point_list,
+                    ) = merge_agent_frontier_maps(agent_frontier_maps)
 
                 planner_risk = None
                 if (
@@ -586,32 +636,41 @@ def main(args, send_queue, receive_queue):
                         map_resolution_cm=float(args.map_resolution),
                     )
 
-                planner_result = global_planner.plan(
-                    GlobalPlannerContext(
-                        target_score=target_score,
-                        target_edge_map=target_edge_map,
-                        target_points=target_point_list,
-                        poses=pose_pred,
-                        agent_cells=[
-                            [
-                                int(a.current_grid_pose[0]),
-                                int(a.current_grid_pose[1]),
-                            ]
-                            for a in agent
-                        ],
-                        obstacle_map=obstacle_map,
-                        explored_map=explored_map,
-                        top_view_map=top_view_map,
-                        goal_name=agent[0].goal_name,
-                        local_step=int(agent[0].l_step),
-                        navigation_step=navigation_step,
-                        num_agents=num_agents,
-                        risk=planner_risk,
-                        episode_index=count_episodes,
+                planner_context = GlobalPlannerContext(
+                    target_score=target_score,
+                    target_edge_map=target_edge_map,
+                    target_points=target_point_list,
+                    poses=pose_pred,
+                    agent_cells=[
+                        [
+                            int(a.current_grid_pose[0]),
+                            int(a.current_grid_pose[1]),
+                        ]
+                        for a in agent
+                    ],
+                    obstacle_map=obstacle_map,
+                    explored_map=explored_map,
+                    top_view_map=top_view_map,
+                    goal_name=agent[0].goal_name,
+                    local_step=int(agent[0].l_step),
+                    navigation_step=navigation_step,
+                    num_agents=num_agents,
+                    risk=planner_risk,
+                    episode_index=count_episodes,
+                )
+                planner_result = (
+                    global_planner.plan(planner_context)
+                    if agent_frontier_maps is None
+                    else global_planner.plan_individual_maps(
+                        planner_context,
+                        agent_frontier_maps,
                     )
                 )
                 goal_points.extend(planner_result.goal_points)
                 risk_frontier_reports = planner_result.frontier_reports
+                risk_frontier_report_agent_ids = (
+                    planner_result.frontier_report_agent_ids
+                )
                 risk_frontier_computed_step = (
                     planner_result.frontier_computed_step
                 )
@@ -621,6 +680,18 @@ def main(args, send_queue, receive_queue):
                         navigation_agent.acknowledge_pointnav_replan()
 
             if risk_runtime is not None:
+                frontier_report_payloads = []
+                for report_index, report in enumerate(
+                    risk_frontier_reports
+                ):
+                    payload = report.to_dict()
+                    if report_index < len(
+                        risk_frontier_report_agent_ids
+                    ):
+                        payload["agent_id"] = int(
+                            risk_frontier_report_agent_ids[report_index]
+                        )
+                    frontier_report_payloads.append(payload)
                 risk_runtime.save_step(
                     step=navigation_step,
                     timestamp_s=shared_risk_t,
@@ -631,9 +702,7 @@ def main(args, send_queue, receive_queue):
                     frontier_points=[
                         report.point for report in risk_frontier_reports
                     ],
-                    frontier_reports=[
-                        report.to_dict() for report in risk_frontier_reports
-                    ],
+                    frontier_reports=frontier_report_payloads,
                     frontier_computed_step=risk_frontier_computed_step,
                 )
 

@@ -16,7 +16,7 @@ def create_global_planner(name, **kwargs):
     """Build one planner behind the shared risk-aware interface."""
 
     planner_name = str(name).strip().lower()
-    cost_utility_lambda = kwargs.pop("cost_utility_lambda", 1.0)
+    cost_utility_lambda = kwargs.pop("cost_utility_lambda", 0.5)
     random_seed = kwargs.pop("random_seed", 1)
     random_goal_min_distance_m = kwargs.pop(
         "random_goal_min_distance_m",

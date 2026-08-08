@@ -43,6 +43,11 @@ class RandomGlobalPlanner(GlobalPlanner):
             int(context.navigation_step) & 0xFFFFFFFF,
             int(context.local_step) & 0xFFFFFFFF,
         ]
+        if context.agent_ids is not None:
+            # Individual-map planning invokes one single-agent context per
+            # physical robot. Include that stable identity so equal local maps
+            # do not receive the same random stream.
+            words.append(int(context.agent_ids[0]) & 0xFFFFFFFF)
         return np.random.default_rng(np.random.SeedSequence(words))
 
     @staticmethod

@@ -1,0 +1,148 @@
+{
+  "curation": {
+    "acceptance_thresholds": {
+      "max_aware_max_risk": 0.35,
+      "max_detour_ratio": 1.8,
+      "min_blind_max_risk": 0.6,
+      "min_detour_ratio": 1.05,
+      "min_exposure_reduction": 0.7,
+      "min_path_divergence": 0.2
+    },
+    "chosen_goal_cell": [
+      52,
+      74
+    ],
+    "contrast": {
+      "accepted": true,
+      "aware": {
+        "cumulative_exposure": 2.330336940371825,
+        "hard_unsafe_cells": 0,
+        "length_cells": 117.15432893255064,
+        "length_m": 11.715432893255064,
+        "max_risk": 0.2704559564590454,
+        "mean_risk": 0.021466111252997435,
+        "objective_cost": 126.47567669403794
+      },
+      "blind": {
+        "cumulative_exposure": 32.048414789140224,
+        "hard_unsafe_cells": 23,
+        "length_cells": 83.21320343559643,
+        "length_m": 8.321320343559643,
+        "max_risk": 1.0,
+        "mean_risk": 0.4155197138778674,
+        "objective_cost": 83.21320343559643
+      },
+      "detour_ratio": 1.4078814911052335,
+      "exposure_reduction": 0.9272869826572055,
+      "path_divergence": 0.7050359712230216,
+      "reasons": [],
+      "score": 0.8474755209892386
+    },
+    "episode_id": "4",
+    "goal_cells": [
+      [
+        52,
+        74
+      ]
+    ],
+    "ignition": {
+      "category": "chair",
+      "centroid": [
+        -5.6773152351379395,
+        0.4506618082523346,
+        -2.09495210647583
+      ],
+      "flammability": 0.55,
+      "instance_id": 319
+    },
+    "ignition_cell": [
+      67,
+      75
+    ],
+    "object_category": "sofa",
+    "profile": "dynamic",
+    "scene_id": "TEEsavR23oF",
+    "start_cell": [
+      115,
+      103
+    ],
+    "start_position": [
+      -0.91383,
+      0.01338,
+      0.41887
+    ]
+  },
+  "duration_s": 420.0,
+  "fire_type": "route_contrast",
+  "ignition_selection_mode": "curated_route_contrast",
+  "ignition_selection_version": 1,
+  "ignitions": [
+    {
+      "category": "chair",
+      "floor_spread_scale": 1.0,
+      "fuel_kg": 1.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 319,
+      "position": [
+        -5.6773152351379395,
+        0.4506618082523346,
+        -2.09495210647583
+      ],
+      "smoke_yield": 0.52,
+      "source_radius_m": 0.32,
+      "source_temp_c": 850.0,
+      "sustain_s": 420.0
+    }
+  ],
+  "intensity": "dynamic",
+  "num_initial_ignitions": 1,
+  "plan_hash": "d8b5f25bd8ae",
+  "plan_id": "TEEsavR23oF_route_contrast_dynamic_d8b5f25bd8ae",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.5,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 0,
+    "flammable_threshold": 0.95,
+    "floor_flame_contact_thresh": 0.18,
+    "floor_fuel_value": 0.26,
+    "floor_ignite_radius_cells": 1,
+    "floor_ignite_temp_c": 275.0,
+    "floor_max_spread_radius_m": 0.85,
+    "floor_seed_flame_max": 0.45,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_speed_m_per_s": 0.0035,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.0,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 250.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "object_bbox_fill_speed_m_per_s": 0.0,
+    "object_max_spread_radius_m": 0.85,
+    "object_spread_speed_m_per_s": 0.0035,
+    "radiative_gain_c": 100.0,
+    "radiative_radius_cells": 2,
+    "secondary_floor_spread_scale": 0.45,
+    "spread_kernel": "gaussian",
+    "spread_speed_m_per_s": 0.025,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb",
+  "scene_id": "TEEsavR23oF",
+  "schema_version": 4,
+  "seed": 42,
+  "template_version": 1,
+  "world_aabb": [
+    -12.947001457214355,
+    -0.7366210073232651,
+    -9.556449890136719,
+    4.6296257972717285,
+    6.369441032409668,
+    1.6548290252685547
+  ]
+}

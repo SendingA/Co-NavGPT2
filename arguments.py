@@ -167,7 +167,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument(
         "--cost_utility_lambda",
         type=float,
-        default=1.0,
+        default=0.5,
         help=(
             "distance coefficient in co_ut: frontier_size - lambda * "
             "robot_distance (distance is measured in map cells)"

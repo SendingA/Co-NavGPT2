@@ -11,10 +11,12 @@ import unittest
 import numpy as np
 
 from utils.global_planners import (
+    AgentFrontierMap,
     GlobalPlannerContext,
     RiskPlanningContext,
     create_global_planner,
 )
+from utils.global_planners.co_ut import CostUtilityGlobalPlanner
 from utils.global_planners.errors import GPTResponseError
 from utils.global_planners.gpt import GPTGlobalPlanner
 from utils.global_planners.risk_aware import RiskAwareGlobalPlanner
@@ -53,7 +55,109 @@ def _context(
     )
 
 
+def _agent_frontier_map(
+    points,
+    scores,
+    *,
+    explored=None,
+    obstacle=None,
+):
+    shape = (12, 12)
+    labels = np.zeros(shape, dtype=np.int32)
+    for frontier_id, point in enumerate(points):
+        labels[int(point[0]), int(point[1])] = frontier_id + 1
+    return AgentFrontierMap(
+        target_score=scores,
+        target_edge_map=labels,
+        target_points=[list(point) for point in points],
+        obstacle_map=(
+            np.zeros(shape, dtype=np.float32)
+            if obstacle is None
+            else np.asarray(obstacle, dtype=np.float32)
+        ),
+        explored_map=(
+            np.ones(shape, dtype=np.float32)
+            if explored is None
+            else np.asarray(explored, dtype=np.float32)
+        ),
+        top_view_map=np.zeros((*shape, 3), dtype=np.uint8),
+    )
+
+
 class ClassicalGlobalPlannerTests(unittest.TestCase):
+    def test_co_ut_default_lambda_is_point_five(self) -> None:
+        self.assertEqual(CostUtilityGlobalPlanner().cost_utility_lambda, 0.5)
+        result = create_global_planner("co_ut").plan(
+            _context(
+                scores=(10.0, 15.0),
+                poses=((1, 1, 0.0), (9, 9, 0.0)),
+                cells=((1, 1), (9, 9)),
+            )
+        )
+        self.assertEqual(result.frontier_assignments, {0: 1, 1: 1})
+
+    def test_classical_modes_use_local_frontiers_and_exclude_collision(
+        self,
+    ) -> None:
+        agent_maps = [
+            _agent_frontier_map(
+                ((2, 2), (2, 9)),
+                (20.0, 1.0),
+            ),
+            _agent_frontier_map(
+                ((2, 3), (9, 9)),
+                (20.0, 5.0),
+            ),
+        ]
+        # The two local segmentations describe the same physical frontier but
+        # have different centroids. Component overlap, rather than point
+        # equality alone, must keep the second robot from selecting it again.
+        agent_maps[0].target_edge_map[2, 3] = 1
+        context = _context(
+            poses=((1, 1, 0.0), (9, 9, 0.0)),
+            cells=((1, 1), (9, 9)),
+        )
+
+        for mode in ("nearest", "co_ut", "fill"):
+            with self.subTest(mode=mode):
+                result = create_global_planner(mode).plan_individual_maps(
+                    context,
+                    agent_maps,
+                )
+                self.assertEqual(result.goal_points, [[2, 2], [9, 9]])
+                self.assertEqual(
+                    result.frontier_assignments,
+                    {0: 0, 1: 3},
+                )
+
+    def test_random_samples_from_each_robot_local_map(self) -> None:
+        first_explored = np.zeros((12, 12), dtype=np.float32)
+        first_explored[1:5, 1:5] = 1.0
+        second_explored = np.zeros((12, 12), dtype=np.float32)
+        second_explored[7:11, 7:11] = 1.0
+        agent_maps = [
+            _agent_frontier_map((), (), explored=first_explored),
+            _agent_frontier_map((), (), explored=second_explored),
+        ]
+        context = _context(
+            points=(),
+            scores=(),
+            poses=((1, 1, 0.0), (9, 9, 0.0)),
+            cells=((1, 1), (9, 9)),
+            episode_index=9,
+        )
+
+        result = create_global_planner(
+            "random",
+            random_seed=7,
+            random_goal_min_distance_m=0.0,
+        ).plan_individual_maps(context, agent_maps)
+
+        self.assertGreater(first_explored[tuple(result.goal_points[0])], 0.0)
+        self.assertGreater(second_explored[tuple(result.goal_points[1])], 0.0)
+        self.assertNotEqual(result.goal_points[0], result.goal_points[1])
+        self.assertEqual(result.frontier_assignments, {0: None, 1: None})
+
     def test_nearest_preserves_independent_shared_assignment(self) -> None:
         result = create_global_planner("nearest").plan(_context())
 
@@ -224,6 +328,38 @@ class _FakeChatBackend:
 
 
 class GPTGlobalPlannerTests(unittest.TestCase):
+    def test_gpt_fallback_default_lambda_is_point_five(self) -> None:
+        planner = GPTGlobalPlanner(
+            chat_backend=_FakeChatBackend({}),
+            prompts=SimpleNamespace(
+                system_prompt="normal prompt",
+                risk_prompt="risk prompt",
+            ),
+        )
+        self.assertEqual(planner._fallback.cost_utility_lambda, 0.5)
+
+    def test_gpt_explicitly_keeps_shared_frontier_map(self) -> None:
+        planner = create_global_planner(
+            "gpt",
+            chat_backend=_FakeChatBackend(
+                {"robot_0": "frontier_0", "robot_1": "frontier_1"}
+            ),
+            prompts=SimpleNamespace(
+                system_prompt="normal prompt",
+                risk_prompt="risk prompt",
+            ),
+        )
+
+        self.assertTrue(planner.uses_shared_frontier_map)
+        with self.assertRaisesRegex(RuntimeError, "shared frontier map"):
+            planner.plan_individual_maps(
+                _context(),
+                [
+                    _agent_frontier_map(((2, 2),), (1.0,)),
+                    _agent_frontier_map(((8, 8),), (1.0,)),
+                ],
+            )
+
     def test_normal_gpt_uses_configurable_robot_count(self) -> None:
         backend = _FakeChatBackend(
             {"robot_0": "frontier_1", "robot_1": "frontier_0"}
@@ -330,6 +466,42 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
         self.assertTrue(result.frontier_reports[0].hard_blocked)
         self.assertEqual(result.frontier_computed_step, 37)
 
+    def test_risk_reports_remain_in_each_agent_frontier_namespace(
+        self,
+    ) -> None:
+        risk = self._risk(hard_at=(2, 2))
+        agent_maps = [
+            _agent_frontier_map(
+                ((2, 2), (2, 8)),
+                (20.0, 1.0),
+            ),
+            _agent_frontier_map(
+                ((2, 2), (9, 9)),
+                (20.0, 5.0),
+            ),
+        ]
+        context = _context(
+            poses=((1, 1, 0.0), (9, 9, 0.0)),
+            cells=((1, 1), (9, 9)),
+            risk=risk,
+        )
+
+        result = create_global_planner("fill").plan_individual_maps(
+            context,
+            agent_maps,
+        )
+
+        self.assertEqual(result.goal_points, [[2, 8], [9, 9]])
+        self.assertEqual(result.frontier_assignments, {0: 1, 1: 3})
+        self.assertEqual(
+            [report.frontier_id for report in result.frontier_reports],
+            [0, 1, 2, 3],
+        )
+        self.assertEqual(
+            result.frontier_report_agent_ids,
+            [0, 0, 1, 1],
+        )
+
     def test_zero_risk_preserves_every_classical_normal_policy(self) -> None:
         context_kwargs = {
             "scores": (10.0, 15.0),
@@ -386,6 +558,10 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
         self.assertEqual(weights.information_gain, 1.0)
         self.assertEqual(weights.distance, 0.4)
         self.assertEqual(weights.redundancy, 0.0)
+        self.assertEqual(
+            risk_utility_weights("co_ut", frontier_weight=2.0).distance,
+            0.5,
+        )
 
     def test_random_risk_mode_samples_only_safe_reachable_cells(self) -> None:
         risk = self._risk()
@@ -490,7 +666,12 @@ class MainGlobalPlannerBoundaryTests(unittest.TestCase):
                     "global_planner = create_global_planner(",
                     source,
                 )
-                self.assertIn("planner_result = global_planner.plan(", source)
+                self.assertIn("global_planner.plan(planner_context)", source)
+                self.assertIn(
+                    "global_planner.plan_individual_maps(",
+                    source,
+                )
+                self.assertIn("individual_map_processes", source)
                 self.assertNotIn('elif args.nav_mode == "nearest"', source)
                 self.assertNotIn('elif args.nav_mode == "co_ut"', source)
                 self.assertNotIn('elif args.nav_mode == "fill"', source)

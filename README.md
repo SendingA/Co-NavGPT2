@@ -299,7 +299,7 @@ important experiment controls are:
 --num_agents
 --num_humans
 --nav_mode {nearest,co_ut,fill,random,gpt}
---cost_utility_lambda 1.0
+--cost_utility_lambda 0.5
 --random_goal_min_distance_m 1.0
 --fire_world
 --fire_world_plan_id

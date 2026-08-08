@@ -24,8 +24,10 @@ from envs import RandomHumanoidWalker, RobotModelManager
 from utils.explored_map_utils import Global_Map_Proc
 from utils.fire_sensors import FireSensorSuite, FireSensorConfig
 from utils.global_planners import (
+    AgentFrontierMap,
     GlobalPlannerContext,
     create_global_planner,
+    merge_agent_frontier_maps,
 )
 
 
@@ -70,6 +72,11 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
         random_seed=seed,
         random_goal_min_distance_m=args.random_goal_min_distance_m,
         map_resolution_cm=args.map_resolution,
+    )
+    individual_map_processes = (
+        []
+        if global_planner.uses_shared_frontier_map
+        else [Global_Map_Proc(args) for _ in range(num_agents)]
     )
 
     walker = RandomHumanoidWalker(
@@ -153,6 +160,8 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
 
         actions = []
         map_process.reset()
+        for individual_map_process in individual_map_processes:
+            individual_map_process.reset()
         if fire_scene is not None:
             fire_scene.clock.start()
 
@@ -212,6 +221,17 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             obstacle_map, explored_map, top_view_map = map_process.Map_Extraction(
                 point_sum, agent[0].camera_position[1], clean_diff
             )
+            individual_map_views = []
+            for robot_id, individual_map_process in enumerate(
+                individual_map_processes
+            ):
+                individual_map_views.append(
+                    individual_map_process.Map_Extraction(
+                        agent[robot_id].point_sum,
+                        agent[robot_id].camera_position[1],
+                        not bool(agent[robot_id].clean_diff),
+                    )
+                )
 
             pointnav_replan_requested = any(
                 bool(getattr(a, "pointnav_replan_requested", False))
@@ -223,55 +243,100 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
                 or pointnav_replan_requested
             ) and not found_goal:
                 goal_points.clear()
-                target_score, target_edge_map, target_point_list = (
-                    map_process.Frontier_Det(threshold_point=8)
-                )
-
-                if args.fill_mode and len(target_point_list) > 0:
-                    for i in range(num_agents):
-                        if agent[i].curr_frontier_count > 2 * args.num_local_steps + 1:
-                            if goal_frontiers is not None and (
-                                "robot_" + str(i) in goal_frontiers
-                            ):
-                                idx = int(
-                                    goal_frontiers["robot_" + str(i)].split("_")[1]
-                                )
-                                if idx < len(target_point_list):
-                                    map_process.obstacle_map[
-                                        target_edge_map == idx + 1
-                                    ] = 1
-                                    obstacle_map[target_edge_map == idx + 1] = 1
-                            agent[i].curr_frontier_count = 0
+                agent_frontier_maps = None
+                if global_planner.uses_shared_frontier_map:
                     target_score, target_edge_map, target_point_list = (
                         map_process.Frontier_Det(threshold_point=8)
                     )
+                    if args.fill_mode and len(target_point_list) > 0:
+                        for i in range(num_agents):
+                            if (
+                                agent[i].curr_frontier_count
+                                > 2 * args.num_local_steps + 1
+                            ):
+                                if goal_frontiers is not None and (
+                                    "robot_" + str(i) in goal_frontiers
+                                ):
+                                    idx = int(
+                                        goal_frontiers[
+                                            "robot_" + str(i)
+                                        ].split("_")[1]
+                                    )
+                                    if idx < len(target_point_list):
+                                        frontier_cells = (
+                                            target_edge_map == idx + 1
+                                        )
+                                        map_process.obstacle_map[
+                                            frontier_cells
+                                        ] = 1
+                                        obstacle_map[frontier_cells] = 1
+                                agent[i].curr_frontier_count = 0
+                        (
+                            target_score,
+                            target_edge_map,
+                            target_point_list,
+                        ) = map_process.Frontier_Det(threshold_point=8)
+                else:
+                    agent_frontier_maps = []
+                    for robot_id, individual_map_process in enumerate(
+                        individual_map_processes
+                    ):
+                        scores, edge_map, points = (
+                            individual_map_process.Frontier_Det(
+                                threshold_point=8
+                            )
+                        )
+                        own_obstacle, own_explored, own_top_view = (
+                            individual_map_views[robot_id]
+                        )
+                        agent_frontier_maps.append(
+                            AgentFrontierMap(
+                                target_score=scores,
+                                target_edge_map=edge_map,
+                                target_points=points,
+                                obstacle_map=own_obstacle,
+                                explored_map=own_explored,
+                                top_view_map=own_top_view,
+                            )
+                        )
+                    (
+                        target_score,
+                        target_edge_map,
+                        target_point_list,
+                    ) = merge_agent_frontier_maps(agent_frontier_maps)
 
-                planner_result = global_planner.plan(
-                    GlobalPlannerContext(
-                        target_score=target_score,
-                        target_edge_map=target_edge_map,
-                        target_points=target_point_list,
-                        poses=pose_pred,
-                        agent_cells=[
-                            [
-                                int(a.current_grid_pose[0]),
-                                int(a.current_grid_pose[1]),
-                            ]
-                            for a in agent
-                        ],
-                        obstacle_map=obstacle_map,
-                        explored_map=explored_map,
-                        top_view_map=top_view_map,
-                        goal_name=agent[0].goal_name,
-                        local_step=int(agent[0].l_step),
-                        navigation_step=int(agent[0].l_step),
-                        num_agents=num_agents,
-                        episode_index=count_episodes,
+                planner_context = GlobalPlannerContext(
+                    target_score=target_score,
+                    target_edge_map=target_edge_map,
+                    target_points=target_point_list,
+                    poses=pose_pred,
+                    agent_cells=[
+                        [
+                            int(a.current_grid_pose[0]),
+                            int(a.current_grid_pose[1]),
+                        ]
+                        for a in agent
+                    ],
+                    obstacle_map=obstacle_map,
+                    explored_map=explored_map,
+                    top_view_map=top_view_map,
+                    goal_name=agent[0].goal_name,
+                    local_step=int(agent[0].l_step),
+                    navigation_step=int(agent[0].l_step),
+                    num_agents=num_agents,
+                    episode_index=count_episodes,
+                )
+                planner_result = (
+                    global_planner.plan(planner_context)
+                    if agent_frontier_maps is None
+                    else global_planner.plan_individual_maps(
+                        planner_context,
+                        agent_frontier_maps,
                     )
                 )
                 goal_points.extend(planner_result.goal_points)
                 if (
-                    args.nav_mode == "gpt"
+                    global_planner.uses_shared_frontier_map
                     and any(
                         frontier_id is not None
                         for frontier_id in (

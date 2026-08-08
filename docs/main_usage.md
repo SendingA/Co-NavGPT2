@@ -79,7 +79,7 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 | 参数 | 取值 | 说明 |
 | --- | --- | --- |
 | `--nav_mode` | `nearest` / `co_ut` / `fill` / `random` / `gpt`（默认 `gpt`） | 全局目标选择策略：最近前沿 / Cost-Utility / 高得分覆盖 / 随机长期目标 / GPT-4o 决策 |
-| `--cost_utility_lambda` | float, `1.0` | `co_ut` 的距离系数；逐机器人最大化 `frontier_size - λ × robot_distance`，其中 size 和 distance 分别以 frontier cell 数和 map cell 为单位 |
+| `--cost_utility_lambda` | float, `0.5` | `co_ut` 的距离系数；逐机器人最大化 `frontier_size - λ × robot_distance`，其中 size 和 distance 分别以 frontier cell 数和 map cell 为单位 |
 | `--random_goal_min_distance_m` | float, `1.0` | `random` 优先采样的最小目标距离；有效候选不足时退化到同一可达自由空间内的任意 cell |
 | `--fill_mode` | int, `0` | `fill` 模式细分（保留位） |
 | `--gpt_type` | int, `2` | `0=text-davinci-003`，`1=gpt-3.5-turbo`，`2=gpt-4o`（默认），`3=gpt-4o-mini` |
@@ -327,7 +327,8 @@ python main.py \
 全局规划也采用独立接口：
 
 - `utils/global_planners/base.py`：定义 `GlobalPlannerContext`、
-  `RiskPlanningContext`、`GlobalPlannerResult` 和 `GlobalPlanner` 接口。
+  `AgentFrontierMap`、`RiskPlanningContext`、`GlobalPlannerResult` 和
+  `GlobalPlanner` 接口。
 - `utils/global_planners/{nearest,co_ut,fill,random,gpt}.py`：五种 `--nav_mode`
   的具体实现。
 - `utils/global_planners/risk_aware.py`：统一包装五种策略；只有 context
@@ -336,9 +337,14 @@ python main.py \
   planner 时，在独立文件实现接口并注册到 factory，不需要修改主循环。
 
 `main.py` 仍然拥有地图更新、frontier 检测、PointNav 请求重规划的确认以及
-risk report 的保存；planner 只返回每个机器人本轮的 frontier/map goal 和
-风险报告元数据。因此 `--nav_mode` 的命令行用法、重规划周期与现有 benchmark
-标签不变。
+risk report 的保存。共享地图继续供局部避障、团队可视化和 GPT 使用；
+`nearest/co_ut/fill/random` 另外为每个机器人维护独立的
+`Global_Map_Proc`，在各自 obstacle/explored map 上检测 frontier 或采样
+map goal。不同机器人的本地 frontier ID 在返回团队结果时会展平为唯一 ID；
+若后一个机器人的候选连通区域与已分配 frontier 重叠，会先从它自己的候选集中
+排除该区域再规划，因此局部分割中心略有偏差时也不会重复。GPT（包括 GPT 失败
+后的 `co_ut` fallback）仍使用共享 candidate map。
+因此 `--nav_mode` 的命令行用法、重规划周期与现有 benchmark 标签不变。
 
 ### 3.2 FireWorld 感知管线
 

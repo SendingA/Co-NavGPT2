@@ -26,6 +26,7 @@ class GPTGlobalPlanner(GlobalPlanner):
     """Assign frontiers with the project's existing GPT-4o prompts."""
 
     name = "gpt"
+    uses_shared_frontier_map = True
     risk_fallback_name = "co_ut"
 
     def __init__(
@@ -33,7 +34,7 @@ class GPTGlobalPlanner(GlobalPlanner):
         *,
         chat_backend=None,
         prompts=None,
-        cost_utility_lambda: float = 1.0,
+        cost_utility_lambda: float = 0.5,
     ) -> None:
         if chat_backend is None:
             from utils import chat_utils as chat_backend

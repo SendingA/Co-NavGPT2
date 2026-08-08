@@ -1,0 +1,145 @@
+{
+  "curation": {
+    "acceptance_thresholds": {
+      "max_aware_max_risk": 0.35,
+      "max_detour_ratio": 1.8,
+      "min_blind_max_risk": 0.6,
+      "min_detour_ratio": 1.15,
+      "min_exposure_reduction": 0.7,
+      "min_path_divergence": 0.2
+    },
+    "chosen_goal_cell": [
+      42,
+      78
+    ],
+    "contrast": {
+      "accepted": true,
+      "aware": {
+        "cumulative_exposure": 0.0,
+        "hard_unsafe_cells": 0,
+        "length_cells": 89.94112549695426,
+        "length_m": 8.994112549695426,
+        "max_risk": 0.0,
+        "mean_risk": 0.0,
+        "objective_cost": 89.94112549695426
+      },
+      "blind": {
+        "cumulative_exposure": 21.833702449285397,
+        "hard_unsafe_cells": 10,
+        "length_cells": 66.52691193458118,
+        "length_m": 6.652691193458118,
+        "max_risk": 1.0,
+        "mean_risk": 0.32399874720080146,
+        "objective_cost": 66.52691193458118
+      },
+      "detour_ratio": 1.3519510057132562,
+      "exposure_reduction": 1.0,
+      "path_divergence": 0.9140625,
+      "reasons": [],
+      "score": 0.9027931669773884
+    },
+    "episode_id": "5",
+    "goal_cells": [
+      [
+        42,
+        78
+      ]
+    ],
+    "ignition": {
+      "category": "trashcan",
+      "centroid": [
+        -10.941875457763672,
+        0.2975989580154419,
+        1.1879395246505737
+      ],
+      "flammability": 0.45,
+      "instance_id": 51
+    },
+    "ignition_cell": [
+      44,
+      52
+    ],
+    "object_category": "bed",
+    "profile": "stable",
+    "scene_id": "Nfvxx8J5NCo",
+    "start_cell": [
+      65,
+      21
+    ],
+    "start_position": [
+      -9.07278,
+      0.03086,
+      -2.14367
+    ]
+  },
+  "duration_s": 300.0,
+  "fire_type": "route_contrast",
+  "ignition_selection_mode": "curated_route_contrast",
+  "ignition_selection_version": 1,
+  "ignitions": [
+    {
+      "category": "trashcan",
+      "floor_spread_scale": 1.0,
+      "fuel_kg": 1.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 51,
+      "position": [
+        -10.941875457763672,
+        0.2975989580154419,
+        1.1879395246505737
+      ],
+      "smoke_yield": 0.48,
+      "source_radius_m": 0.42,
+      "source_temp_c": 820.0,
+      "sustain_s": 300.0
+    }
+  ],
+  "intensity": "stable",
+  "num_initial_ignitions": 1,
+  "plan_hash": "e6a4ad2abbf4",
+  "plan_id": "Nfvxx8J5NCo_route_contrast_stable_e6a4ad2abbf4",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.5,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 0,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.18,
+    "floor_fuel_value": 0.28,
+    "floor_ignite_radius_cells": 1,
+    "floor_ignite_temp_c": 275.0,
+    "floor_max_spread_radius_m": 0.95,
+    "floor_seed_flame_max": 0.45,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_speed_m_per_s": 0.0025,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.0,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 250.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "radiative_gain_c": 150.0,
+    "radiative_radius_cells": 2,
+    "secondary_floor_spread_scale": 0.45,
+    "spread_kernel": "gaussian",
+    "spread_speed_m_per_s": 0.035,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00880-Nfvxx8J5NCo/Nfvxx8J5NCo.basis.glb",
+  "scene_id": "Nfvxx8J5NCo",
+  "schema_version": 4,
+  "seed": 42,
+  "template_version": 1,
+  "world_aabb": [
+    -16.11662483215332,
+    -0.7191430032253265,
+    -4.802337169647217,
+    5.123380184173584,
+    3.3900370597839355,
+    6.8524489402771
+  ]
+}

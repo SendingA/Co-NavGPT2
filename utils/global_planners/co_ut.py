@@ -17,7 +17,7 @@ class CostUtilityGlobalPlanner(GlobalPlanner):
 
     name = "co_ut"
 
-    def __init__(self, cost_utility_lambda: float = 1.0) -> None:
+    def __init__(self, cost_utility_lambda: float = 0.5) -> None:
         value = float(cost_utility_lambda)
         if not np.isfinite(value) or value < 0.0:
             raise ValueError(

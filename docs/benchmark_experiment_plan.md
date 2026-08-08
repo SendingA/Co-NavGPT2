@@ -45,21 +45,29 @@ The active selector is `--nav_mode`:
 
 | Value | Current behavior without planning risk |
 | --- | --- |
-| `nearest` | Each robot selects its nearest frontier; sharing is allowed |
-| `co_ut` | Each robot maximizes `frontier_size - cost_utility_lambda * robot_grid_distance` |
-| `fill` | Selects the frontier with the highest frontier score |
-| `random` | Reproducibly samples a long-term goal from the robot's reachable explored free-space component |
-| `gpt` | Sends separate candidate-map images to GPT-4o for assignment |
+| `nearest` | Each robot selects its nearest frontier from its own map |
+| `co_ut` | Each robot maximizes `frontier_size - cost_utility_lambda * robot_grid_distance` over its own frontiers |
+| `fill` | Selects the highest-score frontier detected in that robot's map |
+| `random` | Reproducibly samples a long-term goal from that robot's reachable explored free-space component |
+| `gpt` | Uses the merged team map and sends shared candidate-map images to GPT-4o for assignment |
 
 Global replanning occurs every `--num_local_steps` navigation steps, default
 `25`.
 
 The entrypoints do not implement these policies directly. `main.py` and
-`main_vec.py` retain the replanning cadence and frontier detection, then pass a
-`GlobalPlannerContext` to the planner returned by
+`main_vec.py` retain the replanning cadence and map updates. They pass one
+`AgentFrontierMap` per robot to every non-GPT planner, while GPT receives the
+merged `GlobalPlannerContext`. The planner is returned by
 `utils.global_planners.create_global_planner`. The five implementations live
 in `utils/global_planners/{nearest,co_ut,fill,random,gpt}.py`; this keeps benchmark
 labels and CLI flags stable while making each baseline independently testable.
+
+Local frontier IDs are flattened into a unique team diagnostic namespace after
+selection. Before selecting for robot N, a candidate whose connected frontier
+region overlaps a frontier already selected by robots 0..N-1 is removed from
+robot N's own candidate set. This prevents duplicate frontier assignments even
+when two local segmentations have slightly different centroids, without
+allowing one robot's planner to see another robot's map.
 
 When `risk_source=sensed` or `oracle`, every classical planner first retains
 its normal preference (`nearest`, raw `co_ut`, `fill`, or seeded `random`). A
