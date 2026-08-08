@@ -1,0 +1,76 @@
+name: conavgpt2
+
+x-conav-environment: &conav-environment
+  HOME: /tmp/conav-home
+  XDG_CACHE_HOME: /tmp/conav-home/.cache
+  MPLCONFIGDIR: /tmp/conav-home/.cache/matplotlib
+  PYTHONUNBUFFERED: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+  NVIDIA_VISIBLE_DEVICES: ${CONAV_NVIDIA_VISIBLE_DEVICES:-all}
+  NVIDIA_DRIVER_CAPABILITIES: compute,utility,graphics
+  OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+  CONAV_DATA_ROOT: /workspace/data
+  CONAV_OUTPUT_ROOT: /workspace/outputs
+  CONAV_MOBILE_SAM_PATH: /workspace/mobile_sam.pt
+  CONAV_YOLO_WORLD_PATH: /workspace/yolov8l-world.pt
+
+services:
+  conav:
+    image: ${CONAV_IMAGE:-conavgpt2:vulcan}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${CONAV_VCS_REF:-unknown}
+    init: true
+    ipc: host
+    shm_size: 8gb
+    gpus: all
+    user: "${CONAV_HOST_UID:-1000}:${CONAV_HOST_GID:-1000}"
+    working_dir: /workspace
+    environment: *conav-environment
+    volumes:
+      - type: bind
+        source: ${CONAV_DATA_DIR:-./data}
+        target: /workspace/data
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CONAV_OUTPUT_DIR:-./outputs/docker}
+        target: /workspace/outputs
+      - type: bind
+        source: ${CONAV_MOBILE_SAM_PATH:-./mobile_sam.pt}
+        target: /workspace/mobile_sam.pt
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${CONAV_YOLO_WORLD_PATH:-./yolov8l-world.pt}
+        target: /workspace/yolov8l-world.pt
+        read_only: true
+        bind:
+          create_host_path: false
+    command: ["preflight", "--mode", "navigation", "--strict"]
+    stdin_open: true
+    tty: true
+
+  conav-test:
+    image: ${CONAV_IMAGE:-conavgpt2:vulcan}
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        VCS_REF: ${CONAV_VCS_REF:-unknown}
+    profiles: ["test"]
+    init: true
+    shm_size: 2gb
+    user: "${CONAV_HOST_UID:-1000}:${CONAV_HOST_GID:-1000}"
+    working_dir: /workspace
+    environment:
+      HOME: /tmp/conav-home
+      XDG_CACHE_HOME: /tmp/conav-home/.cache
+      MPLCONFIGDIR: /tmp/conav-home/.cache/matplotlib
+      PYTHONUNBUFFERED: "1"
+      PYTHONDONTWRITEBYTECODE: "1"
+    command: ["test"]

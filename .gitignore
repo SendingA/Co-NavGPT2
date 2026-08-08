@@ -12,6 +12,7 @@ envs/*
 mobile_sam.pt
 yolov8l-world.pt
 .history
+.env
 exp_*
 
 # Local task tracking.

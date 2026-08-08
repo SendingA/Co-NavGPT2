@@ -1,0 +1,39 @@
+# Direct runtime dependencies validated in the co-nav3 environment.
+# PyTorch CUDA wheels and Habitat-Sim are installed separately by Dockerfile.
+attrs==25.3.0
+cmake==3.25.0
+faster-fifo==1.5.2
+gym==0.23.0
+h5py==3.14.0
+hydra-core==1.3.4
+ifcfg==0.24
+imageio==2.37.0
+imageio-ffmpeg==0.6.0
+lmdb==2.3.0
+matplotlib==3.9.4
+moviepy==2.2.1
+numba==0.60.0
+numpy==1.26.4
+numpy-quaternion==2023.0.4
+omegaconf==2.3.1
+open3d==0.19.0
+openai==2.44.0
+opencv-python==4.10.0.84
+opencv-python-headless==4.10.0.84
+pillow==10.4.0
+PyYAML==6.0.3
+scikit-fmm==2023.4.2
+scikit-image==0.24.0
+scikit-learn==1.6.1
+scipy==1.13.1
+supervision==0.19.0
+tensorboard==2.21.0
+tqdm==4.67.1
+tyro==1.0.15
+ultralytics==8.4.88
+wandb==0.26.1
+webdataset==0.1.40
+
+# YOLO-World text embeddings use the same pinned Ultralytics CLIP fork as the
+# validated host environment.
+clip @ git+https://github.com/ultralytics/CLIP.git@f5e9fc6a896e66309f07747bd607704f6c3d282a

@@ -49,6 +49,14 @@ rendering also requires a working OpenGL/EGL setup. CPU-only execution is
 supported for the focused unit tests and most synthetic FireWorld sensor tests,
 but not for a full `main.py` episode without code changes.
 
+### Docker quick path
+
+For a pinned CUDA 11.8/Habitat 0.3.3 image, use the Docker workflow in
+[`docs/docker_reproduction.md`](docs/docker_reproduction.md). The image applies
+the required VULCAN Habitat patch automatically. Licensed HM3D assets, model
+weights, API keys and generated outputs remain host-mounted rather than being
+embedded in the image.
+
 ## 2. Clone and pin the project
 
 ```bash

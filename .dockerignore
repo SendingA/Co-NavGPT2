@@ -1,0 +1,35 @@
+.git
+.github
+.agents
+.codex
+.history
+.env
+.venv
+__pycache__
+**/__pycache__
+*.py[cod]
+*.swp
+*.swo
+
+# Licensed or large runtime assets are mounted, never copied into the image.
+data
+weights
+mobile_sam.pt
+yolov8l-world.pt
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.glb
+
+# Generated artifacts and caches.
+outputs
+tmp
+todo
+*.mp4
+*.npz
+*.npy
+*.zip
+
+# The image installs the complete pinned upstream checkout plus our patch.
+habitat-lab

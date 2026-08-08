@@ -1,0 +1,9 @@
+name: conav
+channels:
+  - conda-forge
+  - aihabitat
+dependencies:
+  - python=3.9.19
+  - pip=25.1
+  - habitat-sim=0.3.3
+  - withbullet=2.0
