@@ -5,8 +5,8 @@ needs:
 
 - the risk-blind route minimizes geometric distance and crosses the fire zone;
 - the risk-aware route uses the same start and goal, but minimizes
-  `distance * (1 + risk_alpha * mean_risk)` and treats flame/high temperature
-  cells as hard obstacles;
+  `distance * (1 + risk_alpha * mean_risk)`, treats high-intensity flame cores
+  as hard obstacles, and retains surrounding heat/smoke as continuous cost;
 - the expensive FireWorld timeline, rather than only the radial screening
   surrogate, must pass the route-contrast contract at 20%, 50%, and 80% of
   the episode duration.
@@ -15,7 +15,7 @@ needs:
 
 | Profile | Scene and target | Fire source | Final plan |
 | --- | --- | --- | --- |
-| Stable strong detour | `Nfvxx8J5NCo`, episode `5`, bed | trashcan instance 51 | `Nfvxx8J5NCo_route_contrast_stable_e6a4ad2abbf4` |
+| Stable strong detour | `Nfvxx8J5NCo`, episode `5`, bed | trashcan 51 + chair 339 | `Nfvxx8J5NCo_route_contrast_stable_0ddce73046be` |
 | Dynamic efficient detour | `TEEsavR23oF`, episode `4`, sofa | chair instance 319 | `TEEsavR23oF_route_contrast_dynamic_d8b5f25bd8ae` |
 
 The stable profile requires a route at least 15% longer. The dynamic profile
@@ -28,13 +28,19 @@ Measured from the baked oracle-risk fields:
 
 | Profile | Times (s) | Detour ratio | Exposure reduction | Blind max risk | Aware max risk | Path divergence |
 | --- | --- | --- | --- | --- | --- | --- |
-| Stable | 60 / 150 / 240 | 1.352 at all samples | 94.8%–97.8% | 0.979–0.987 | 0.017–0.028 | 0.978 |
+| Stable | 60 / 150 / 240 | 1.352 / 1.370 / 1.513 | 85.6%–96.3% | 1.000 | 0.046–0.221 | 0.978–0.979 |
 | Dynamic | 84 / 210 / 336 | 1.060 at all samples | 70.2%–77.7% | 0.778–0.783 | 0.136–0.190 | 0.752 |
 
 The dynamic plan deliberately bounds both the floor front and object spread.
 It disables visual object-AABB flame filling, which otherwise caused late
 secondary flame to close every corridor. These settings are plan-local and do
 not change FireWorld's global propagation defaults.
+
+The strengthened stable plan replaces the previous single `0.42m` trashcan
+source with two sustained `0.58m` sources. Under the same current risk
+projection, its mean physical-risk footprint is about 3.6x, 4.6x and 5.6x
+larger at 60s, 150s and 240s, while the aware route remains below the `0.35`
+maximum-risk acceptance bound at every sample.
 
 ## Rebuild and validate
 
@@ -63,35 +69,61 @@ MAGNUM_LOG=quiet HABITAT_SIM_LOG=quiet \
 
 Candidate and actual-field reports are written under
 `outputs/fire_route_tuning/<scene>_<profile>/`. In the PNG overlays, blue is
-the risk-blind shortest route, green is the risk-aware route, yellow is the
-ignition, purple is the goal, and red intensity is physical risk.
+the risk-blind shortest route, green is the risk-aware route, yellow points
+are the ignitions, purple is the goal, and red intensity is physical risk.
 
 ## End-to-end comparison
 
 Each generated dataset contains exactly the selected episode. Keep all other
 planner settings and the seed identical between the two runs.
 Pass the package's root `val.json.gz` shown below, not its
-`content/<scene>.json.gz` shard. The root-plus-content layout is required so
-Habitat's `content_scenes` filter and the FireWorld short scene ID agree.
+`content/<scene>.json.gz` shard.
 
 Stable risk-blind run:
 
 ```bash
-python main.py --task_config multi_objectnav_hm3d.yaml \
-  --dataset_path data/processed/fire_route_scenarios/Nfvxx8J5NCo_route_contrast_stable_e6a4ad2abbf4/val.json.gz \
-  --max_episodes 1 --num_agents 1 --nav_mode nearest --local_planner fmm \
-  --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_route_contrast_stable_e6a4ad2abbf4 \
-  --fire_clock_mode step --risk_enabled 0
+python main.py \
+  --task_config multi_objectnav_hm3d.yaml \
+  --dataset_path data/processed/fire_route_scenarios/Nfvxx8J5NCo_route_contrast_stable_0ddce73046be/val.json.gz \
+  --max_episodes 1 \
+  --num_agents 2 \
+  --nav_mode co_ut \
+  --local_planner fmm \
+  --fire_world 1 \
+  --fire_world_plan_id Nfvxx8J5NCo_route_contrast_stable_0ddce73046be \
+  --fire_clock_mode step \
+  --fire_fast 0 \
+  --fire_world_n_steps 24 \
+  --fire_world_render_scale 0.5 \
+  --fire_render_backend torch \
+  --fire_render_device cuda:0 \
+  --risk_enabled 1 \
+  --risk_source none \
+  --print_images 1
 ```
 
 Stable oracle risk-aware run:
 
 ```bash
-python main.py --task_config multi_objectnav_hm3d.yaml \
-  --dataset_path data/processed/fire_route_scenarios/Nfvxx8J5NCo_route_contrast_stable_e6a4ad2abbf4/val.json.gz \
-  --max_episodes 1 --num_agents 1 --nav_mode nearest --local_planner fmm \
-  --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_route_contrast_stable_e6a4ad2abbf4 \
-  --fire_clock_mode step --risk_enabled 1 --risk_source oracle --risk_alpha 4
+python main.py \
+  --task_config multi_objectnav_hm3d.yaml \
+  --dataset_path data/processed/fire_route_scenarios/Nfvxx8J5NCo_route_contrast_stable_0ddce73046be/val.json.gz \
+  --max_episodes 1 \
+  --num_agents 2 \
+  --nav_mode co_ut \
+  --local_planner fmm \
+  --fire_world 1 \
+  --fire_world_plan_id Nfvxx8J5NCo_route_contrast_stable_0ddce73046be \
+  --fire_clock_mode step \
+  --fire_fast 0 \
+  --fire_world_n_steps 24 \
+  --fire_world_render_scale 0.5 \
+  --fire_render_backend torch \
+  --fire_render_device cuda:0 \
+  --risk_enabled 1 \
+  --risk_source oracle \
+  --risk_alpha 4 \
+  --print_images 1
 ```
 
 Replace both occurrences of the stable plan ID and dataset with the dynamic

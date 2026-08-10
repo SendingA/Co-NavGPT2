@@ -22,6 +22,7 @@ from utils.fire_world.fine_tuning import (
     write_curated_plan,
 )
 from scripts.tune_fire_route_scenarios import _write_episode_dataset
+from scripts.build_fork_detour_scenario import select_secondary_route
 
 
 def _two_route_grid():
@@ -49,6 +50,23 @@ def _instance():
         "centroid": [1.5, 0.4, 1.5],
         "flammability": 0.8,
     }
+
+
+def _additional_instances():
+    return [
+        {
+            "instance_id": 18,
+            "category": "stool",
+            "centroid": [1.9, 0.4, 1.5],
+            "flammability": 0.7,
+        },
+        {
+            "instance_id": 19,
+            "category": "table",
+            "centroid": [2.3, 0.4, 1.5],
+            "flammability": 0.6,
+        },
+    ]
 
 
 class GridRouteTests(unittest.TestCase):
@@ -141,6 +159,48 @@ class GridRouteTests(unittest.TestCase):
         self.assertTrue(np.any(np.all(image == (30, 220, 80), axis=2)))
         self.assertTrue(np.array_equal(image[ignition], (255, 220, 0)))
 
+    def test_secondary_start_uses_long_low_overlap_route(self) -> None:
+        traversible = np.ones((31, 41), dtype=np.uint8)
+        # Two broad wings meet only near the goal on the right.
+        traversible[1:29, 20] = 0
+        traversible[3, 20] = 1
+        traversible[27, 20] = 1
+        primary = (3, 2)
+        goal = (3, 38)
+        aware = tuple((3, col) for col in range(2, 39))
+
+        result = select_secondary_route(
+            traversible,
+            primary_start=primary,
+            primary_aware_cells=aware,
+            goals=[goal],
+            ignition_cells=[(3, 18)],
+            resolution_m=0.25,
+            min_start_separation_m=3.0,
+            min_secondary_length_ratio=1.10,
+            max_route_overlap=0.20,
+            min_ignition_clearance_m=1.0,
+        )
+
+        self.assertGreaterEqual(result["start_separation_m"], 3.0)
+        self.assertGreaterEqual(result["length_ratio_to_primary_safe"], 1.10)
+        self.assertLessEqual(result["route_overlap_fraction"], 0.20)
+
+        hidden = select_secondary_route(
+            traversible,
+            primary_start=primary,
+            primary_aware_cells=aware,
+            goals=[goal],
+            ignition_cells=[(3, 18)],
+            resolution_m=0.25,
+            min_start_separation_m=3.0,
+            min_secondary_length_ratio=1.10,
+            max_route_overlap=0.20,
+            min_ignition_clearance_m=1.0,
+            candidate_validator=lambda cell: cell != tuple(result["cell"]),
+        )
+        self.assertNotEqual(hidden["cell"], result["cell"])
+
 
 class CuratedPlanTests(unittest.TestCase):
     def test_curated_dataset_contains_only_selected_episode(self) -> None:
@@ -216,7 +276,10 @@ class CuratedPlanTests(unittest.TestCase):
         dynamic = CURATED_FIRE_PROFILES["dynamic"]
 
         self.assertEqual(stable.thresholds.min_detour_ratio, 1.15)
+        self.assertEqual(stable.num_initial_ignitions, 2)
+        self.assertEqual(stable.source_radius_m, 0.58)
         self.assertEqual(dynamic.thresholds.min_detour_ratio, 1.05)
+        self.assertEqual(dynamic.num_initial_ignitions, 1)
         self.assertEqual(dynamic.propagation_rules[
             "object_max_spread_radius_m"
         ], 0.85)
@@ -232,6 +295,7 @@ class CuratedPlanTests(unittest.TestCase):
             CURATED_FIRE_PROFILES["stable"],
             seed=7,
             curation=curation,
+            additional_ignition_instances=_additional_instances()[:1],
         )
         second = build_curated_plan(
             _inventory(),
@@ -239,6 +303,7 @@ class CuratedPlanTests(unittest.TestCase):
             CURATED_FIRE_PROFILES["stable"],
             seed=7,
             curation=curation,
+            additional_ignition_instances=_additional_instances()[:1],
         )
 
         self.assertEqual(first, second)
@@ -246,7 +311,15 @@ class CuratedPlanTests(unittest.TestCase):
         self.assertTrue(first["plan_id"].startswith(
             "SceneA_route_contrast_stable_"
         ))
-        self.assertEqual(first["num_initial_ignitions"], 1)
+        self.assertEqual(first["num_initial_ignitions"], 2)
+        self.assertEqual(
+            [ignition["object_id"] for ignition in first["ignitions"]],
+            [17, 18],
+        )
+        self.assertTrue(all(
+            ignition["source_radius_m"] == 0.58
+            for ignition in first["ignitions"]
+        ))
         self.assertEqual(first["ignitions"][0]["ignite_time_s"], 0.0)
         self.assertEqual(first["ignitions"][0]["sustain_s"], 300.0)
         self.assertEqual(
@@ -261,6 +334,7 @@ class CuratedPlanTests(unittest.TestCase):
             CURATED_FIRE_PROFILES["stable"],
             seed=7,
             curation={"episode_id": "4"},
+            additional_ignition_instances=_additional_instances()[:1],
         )
         second = build_curated_plan(
             _inventory(),
@@ -268,6 +342,7 @@ class CuratedPlanTests(unittest.TestCase):
             CURATED_FIRE_PROFILES["stable"],
             seed=7,
             curation={"episode_id": "5"},
+            additional_ignition_instances=_additional_instances()[:1],
         )
 
         self.assertNotEqual(first["plan_hash"], second["plan_hash"])

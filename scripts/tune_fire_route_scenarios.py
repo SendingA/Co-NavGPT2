@@ -188,6 +188,7 @@ def _make_simulator(
     scene_dataset_config: Path,
     *,
     agent_radius_m: float = 0.18,
+    enable_physics: bool = False,
 ):
     try:
         import habitat_sim
@@ -199,7 +200,7 @@ def _make_simulator(
     backend = habitat_sim.SimulatorConfiguration()
     backend.scene_id = str(scene_glb)
     backend.scene_dataset_config_file = str(scene_dataset_config)
-    backend.enable_physics = False
+    backend.enable_physics = bool(enable_physics)
     agent = habitat_sim.agent.AgentConfiguration()
     agent.radius = float(agent_radius_m)
     agent.height = 0.88
@@ -211,10 +212,13 @@ def _scene_grid(
     scene_dataset_config: Path,
     resolution_m: float,
     floor_y_m: float,
+    *,
+    enable_physics: bool = False,
 ) -> SceneGrid:
     simulator = _make_simulator(
         ROOT / str(inventory["scene_glb"]),
         scene_dataset_config,
+        enable_physics=enable_physics,
     )
     nav_zx = np.asarray(
         simulator.pathfinder.get_topdown_view(
@@ -318,6 +322,100 @@ def _ignition_instances(
             continue
         candidates.append(instance)
     return candidates
+
+
+def _select_plan_ignitions(
+    candidate: Candidate,
+    inventory: Mapping[str, object],
+    grid: SceneGrid,
+    count: int,
+) -> List[Mapping[str, object]]:
+    """Select sources near the blind route and clear of the safe detour.
+
+    The primary source remains the object that won candidate screening.
+    Additional sources must be ordinary same-floor semantic objects, sit near
+    the blind route, remain at least 1.10 m from the surrogate aware route,
+    and be spatially distinct from already selected sources.
+    """
+
+    requested = int(count)
+    if requested < 1:
+        raise ValueError("ignition count must be positive")
+    selected = [candidate.ignition_instance]
+    if requested == 1:
+        return selected
+
+    blind = np.asarray(candidate.contrast.blind.cells, dtype=np.float64)
+    aware = np.asarray(candidate.contrast.aware.cells, dtype=np.float64)
+    floor_id = _floor_id(inventory, grid.floor_y_m)
+    primary_id = int(candidate.ignition_instance["instance_id"])
+    ranked = []
+    for instance in _ignition_instances(inventory, floor_id=floor_id):
+        object_id = int(instance["instance_id"])
+        if object_id == primary_id:
+            continue
+        centroid = np.asarray(instance["centroid"], dtype=np.float64)
+        # Avoid ceiling fixtures: their centroid can project near the route
+        # while the physical flame sphere never reaches the floor corridor.
+        if abs(float(centroid[1]) - float(grid.floor_y_m)) > 1.0:
+            continue
+        raw_cell = grid.frame.world_to_grid(centroid)
+        cell = _nearest_free(grid.traversible, raw_cell, max_radius_cells=10)
+        if cell is None:
+            continue
+        point = np.asarray(cell, dtype=np.float64)
+        blind_distance_m = float(
+            np.min(np.linalg.norm(blind - point[None, :], axis=1))
+            * grid.frame.resolution_m
+        )
+        aware_distance_m = float(
+            np.min(np.linalg.norm(aware - point[None, :], axis=1))
+            * grid.frame.resolution_m
+        )
+        if blind_distance_m > 0.90 or aware_distance_m < 1.10:
+            continue
+        ranked.append((
+            blind_distance_m,
+            -aware_distance_m,
+            object_id,
+            instance,
+        ))
+
+    for _, _, _, instance in sorted(ranked):
+        position = np.asarray(instance["centroid"], dtype=np.float64)
+        if any(
+            np.linalg.norm(
+                position[[0, 2]]
+                - np.asarray(other["centroid"], dtype=np.float64)[[0, 2]]
+            ) < 0.45
+            for other in selected
+        ):
+            continue
+        selected.append(instance)
+        if len(selected) == requested:
+            break
+    if len(selected) != requested:
+        raise RuntimeError(
+            f"could only select {len(selected)} of {requested} route-safe "
+            "ignition objects"
+        )
+    return selected
+
+
+def _ignition_summary(
+    instances: Sequence[Mapping[str, object]],
+) -> List[Dict[str, object]]:
+    return [
+        {
+            "instance_id": int(instance["instance_id"]),
+            "category": str(instance.get("category")),
+            "centroid": [
+                float(value) for value in instance["centroid"][:3]
+            ],
+            "flammability": float(instance.get("flammability", 0.0)),
+        }
+        for instance in instances
+    ]
 
 
 def _floor_id(inventory: Mapping[str, object], floor_y_m: float) -> Optional[int]:
@@ -611,6 +709,13 @@ def _actual_timeline_report(
         out_root=timeline_root,
     )
     profile = CURATED_FIRE_PROFILES[candidate.profile_name]
+    ignition_cells = [
+        tuple(
+            int(value)
+            for value in grid.frame.world_to_grid(ignition["position"])
+        )
+        for ignition in plan["ignitions"]
+    ]
     fractions = (0.20, 0.50, 0.80)
     frames = []
     for fraction in fractions:
@@ -646,7 +751,7 @@ def _actual_timeline_report(
                 contrast,
                 start=candidate.start_cell,
                 goal=candidate.chosen_goal_cell,
-                ignition=candidate.ignition_cell,
+                ignitions=ignition_cells,
             )
             scale = max(
                 1, int(round(0.40 / grid.frame.resolution_m))
@@ -740,14 +845,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     or args.bake
                     or args.validate_existing
                 ):
+                    profile = CURATED_FIRE_PROFILES[profile_name]
+                    selected_ignitions = _select_plan_ignitions(
+                        best,
+                        inventory,
+                        grid,
+                        profile.num_initial_ignitions,
+                    )
+                    curation = _summary_without_cells(
+                        best, float(args.resolution_m)
+                    )
+                    curation["ignitions"] = _ignition_summary(
+                        selected_ignitions
+                    )
                     plan = build_curated_plan(
                         inventory,
                         best.ignition_instance,
-                        CURATED_FIRE_PROFILES[profile_name],
+                        profile,
                         seed=int(args.seed),
-                        curation=_summary_without_cells(
-                            best, float(args.resolution_m)
-                        ),
+                        curation=curation,
+                        additional_ignition_instances=selected_ignitions[1:],
                     )
                     plan_path = write_curated_plan(plan, scenes_root)
                     summary["selected_plan_id"] = str(plan["plan_id"])

@@ -237,6 +237,7 @@ class VLM_Agent():
 
         self.is_running = True
         self.found_goal = False
+        self.goal_detection_enabled = True
         self.last_action = 0
         self.last_goal = None
         self._latest_pointnav_observations = None
@@ -264,6 +265,14 @@ class VLM_Agent():
         self.downstair_flag = False
         self.another_floor = False
         self.clean_diff = True
+
+    def set_goal_detection_enabled(self, enabled: bool) -> None:
+        """Gate which agents may terminate a controlled target-search run."""
+
+        self.goal_detection_enabled = bool(enabled)
+        if not self.goal_detection_enabled:
+            self.found_goal = False
+            self.object_pcd.clear()
 
     def set_risk_map(self, risk_map=None, hard_unsafe_mask=None,
                      risk_alpha=None, enabled=None):
@@ -357,7 +366,7 @@ class VLM_Agent():
         
         n_masks = len(detections.xyxy)
         for mask_idx in range(n_masks):
-            if self.goal_id == detections.class_id[mask_idx] and (detections.confidence[mask_idx] > self.args.sem_threshold or ('plant' in self.goal_name and detections.confidence[mask_idx] > 0.5)):
+            if self.goal_detection_enabled and self.goal_id == detections.class_id[mask_idx] and (detections.confidence[mask_idx] > self.args.sem_threshold or ('plant' in self.goal_name and detections.confidence[mask_idx] > 0.5)):
                 mask = detections.mask[mask_idx]
 
                 # --- Debug: log every time we accept a goal detection.

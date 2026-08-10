@@ -374,6 +374,8 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
                 states,
                 step=1,
                 planner_statuses=["unsafe_goal", None],
+                actions=[1, 3],
+                wall_time_s=0.125,
             )
             layers, planning_risk = runtime.planner_state(1.0)
             runtime.save_step(
@@ -396,6 +398,16 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
             self.assertEqual(exposure["record_type"], "exposure")
             self.assertEqual(set(exposure["agents"]), {"0", "1"})
             self.assertEqual(exposure["planner_statuses"], ["unsafe_goal", None])
+            action_records = [
+                json.loads(line)
+                for line in runtime.action_log_path.read_text().splitlines()
+            ]
+            self.assertEqual(len(action_records), 1)
+            self.assertEqual(
+                [item["action_name"] for item in action_records[0]["actions"]],
+                ["move_forward", "turn_right"],
+            )
+            self.assertEqual(action_records[0]["wall_time_s"], 0.125)
             self.assertEqual(snapshot["record_type"], "planner_snapshot")
             self.assertEqual(snapshot["planner_source"], "oracle")
             self.assertEqual(snapshot["t_sim_s"], 1.0)
@@ -415,6 +427,19 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
             self.assertEqual(summary["team"]["safe_refusal_steps"], 1)
             summary_path = runtime.save_summary(summary)
             self.assertEqual(json.loads(summary_path.read_text()), summary)
+            action_list = json.loads(runtime.action_list_path.read_text())
+            self.assertEqual(action_list["num_steps"], 1)
+            self.assertEqual(action_list["num_agents"], 2)
+            self.assertEqual(action_list["total_actions"], 2)
+            self.assertEqual(action_list["total_wall_time_s"], 0.125)
+            self.assertEqual(
+                action_list["per_agent_action_ids"], {"0": [1], "1": [3]}
+            )
+            self.assertEqual(
+                action_list["per_agent_action_names"],
+                {"0": ["move_forward"], "1": ["turn_right"]},
+            )
+            self.assertEqual(action_list["steps"], action_records)
 
             off_floor = [
                 SimpleNamespace(position=np.array([0.0, 2.0, 0.0])),

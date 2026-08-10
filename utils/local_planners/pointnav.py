@@ -237,6 +237,42 @@ def frontier_grid_to_world(
     ).astype(np.float32)
 
 
+def world_to_frontier_grid(
+    goal_world: Sequence[float],
+    *,
+    origins_grid: Sequence[float],
+    map_resolution_cm: float,
+    initial_agent_position: Sequence[float],
+    initial_sensor_rotation: Any,
+) -> np.ndarray:
+    """Inverse XZ map projection for a controlled known world goal."""
+
+    world = np.asarray(goal_world, dtype=np.float64)
+    origin = np.asarray(origins_grid, dtype=np.float64)
+    initial = np.asarray(initial_agent_position, dtype=np.float64)
+    if world.shape != (3,) or initial.shape != (3,) or origin.shape != (2,):
+        raise ValueError(
+            "goal_world, initial_agent_position and origins_grid must be 3-D, "
+            "3-D and 2-D respectively"
+        )
+    scale = float(map_resolution_cm) / 100.0
+    if scale <= 0.0:
+        raise ValueError("map_resolution_cm must be positive")
+    rx = np.asarray(
+        [[0.0, 0.0, -1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]],
+        dtype=np.float64,
+    )
+    habitat_to_open3d = _rotation_matrix(initial_sensor_rotation) @ rx.T
+    open3d_goal = habitat_to_open3d.T @ (world - initial)
+    return np.asarray(
+        [
+            origin[0] + open3d_goal[0] / scale,
+            origin[1] + open3d_goal[2] / scale,
+        ],
+        dtype=np.float32,
+    )
+
+
 @dataclass(frozen=True)
 class ObservationField:
     uuid: str

@@ -71,11 +71,14 @@ class RiskConfig:
     temperature_ambient_c: float = 25.0
     temperature_reference_c: float = 25.0
     temperature_hazard_c: float = 150.0
-    temperature_hard_c: float = 80.0
+    temperature_hard_c: float = 250.0
+    temperature_hard_enabled: bool = False
 
-    # Hard exclusion and footprint inflation.
-    flame_hard_threshold: float = 0.65
-    flame_safety_distance_m: float = 0.50
+    # The default hard exclusion is only the high-intensity flame core.
+    # Surrounding heat/smoke remains continuous soft risk. A safety dilation
+    # or temperature hard cutoff is an explicit experiment choice.
+    flame_hard_threshold: float = 0.80
+    flame_safety_distance_m: float = 0.0
 
     # 3-D FireWorld -> current-floor 2-D navigation-map projection.
     floor_min_offset_m: float = 0.0
@@ -190,6 +193,10 @@ class RiskConfig:
             temperature_hard_c=float(value(
                 "risk_temperature_hard_c", defaults.temperature_hard_c
             )),
+            temperature_hard_enabled=bool(int(value(
+                "risk_temperature_hard_enabled",
+                int(defaults.temperature_hard_enabled),
+            ))),
             flame_hard_threshold=float(value(
                 "risk_flame_hard_threshold", defaults.flame_hard_threshold
             )),

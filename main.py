@@ -39,6 +39,12 @@ from utils.person_objectnav import (
     person_goal_positions,
     refresh_simulator_observations,
 )
+from utils.multi_agent_start import apply_episode_agent_starts
+from utils.multi_agent_start import (
+    episode_agent_goal_positions,
+    episode_target_agent_ids,
+)
+from utils.local_planners import world_to_frontier_grid
 
 import open3d as o3d
 import open3d.visualization.gui as gui
@@ -405,6 +411,29 @@ def main(args, send_queue, receive_queue):
     while count_episodes < num_episodes:
         observations = env.reset()
 
+        curated_start_states = apply_episode_agent_starts(
+            env.sim, env.current_episode, num_agents
+        )
+        curated_goal_positions = episode_agent_goal_positions(
+            env.current_episode, num_agents
+        )
+        target_agent_ids = episode_target_agent_ids(
+            env.current_episode, num_agents
+        )
+        if curated_start_states:
+            positions = [state["position"] for state in curated_start_states]
+            print(f"[multi_agent_start] applied positions={positions}")
+        if curated_goal_positions:
+            print(
+                "[route_contrast] controlled agent goals="
+                f"{curated_goal_positions}"
+            )
+        if target_agent_ids:
+            print(
+                "[route_contrast] target-search agents="
+                f"{target_agent_ids}"
+            )
+
         # Fire construction is deferred until we know the real scene id.
         _build_fire_scene_and_suites()
 
@@ -442,9 +471,20 @@ def main(args, send_queue, receive_queue):
         reset_agent_states = [
             env.sim.get_agent_state(i) for i in range(num_agents)
         ]
+        # Every mapper must use one common world reference frame.  With
+        # curated separate starts, resetting each mapper around its own start
+        # would make point clouds and the oracle risk grid incomparable.
+        mapper_reset_states = (
+            [reset_agent_states[0] for _ in range(num_agents)]
+            if curated_start_states
+            else reset_agent_states
+        )
         actions = []
         for i in range(num_agents):
-            agent[i].reset(observations[i], reset_agent_states[i])
+            agent[i].reset(observations[i], mapper_reset_states[i])
+            agent[i].set_goal_detection_enabled(
+                not target_agent_ids or i in target_agent_ids
+            )
             actions.append(0)
         # A detected object makes the frontier branch intentionally skip on
         # the first frame.  Keep a valid placeholder so act() never indexes an
@@ -495,6 +535,9 @@ def main(args, send_queue, receive_queue):
             navigation_step = int(agent[0].l_step)
             risk_layers = None
             planning_risk = None
+            visualization_risk = None
+            visualization_hard_unsafe = None
+            hazard_display_label = None
 
             # ---------- Fire-scene perception ----------
             if fire_suites is not None:
@@ -563,6 +606,21 @@ def main(args, send_queue, receive_queue):
                 risk_layers, planning_risk = risk_runtime.planner_state(
                     shared_risk_t
                 )
+                if args.visualize or args.print_images:
+                    if risk_runtime.source == "none":
+                        display_layers = (
+                            risk_runtime.evaluator_visualization_state(
+                                shared_risk_t
+                            )
+                        )
+                        visualization_risk = display_layers.physical_risk
+                        visualization_hard_unsafe = (
+                            display_layers.hard_unsafe
+                        )
+                        hazard_display_label = "GT display only"
+                    else:
+                        visualization_risk = planning_risk
+                        visualization_hard_unsafe = risk_layers.hard_unsafe
                 for i in range(num_agents):
                     agent[i].set_risk_map(
                         planning_risk,
@@ -634,6 +692,7 @@ def main(args, send_queue, receive_queue):
                         ),
                         frontier_weight=float(args.risk_frontier_weight),
                         map_resolution_cm=float(args.map_resolution),
+                        route_risk_alpha=float(args.risk_alpha),
                     )
 
                 planner_context = GlobalPlannerContext(
@@ -678,6 +737,38 @@ def main(args, send_queue, receive_queue):
                 if pointnav_replan_requested:
                     for navigation_agent in agent:
                         navigation_agent.acknowledge_pointnav_replan()
+
+            # Controlled route-contrast episodes may expose a known target
+            # waypoint to selected agents.  This bypasses frontier selection,
+            # not local collision/risk planning or Habitat's native STOP and
+            # Success measurements. Unknown-target agents remain untouched.
+            if curated_goal_positions:
+                for robot_id, world_goal in enumerate(curated_goal_positions):
+                    if world_goal is None:
+                        continue
+                    cell = world_to_frontier_grid(
+                        world_goal,
+                        origins_grid=agent[robot_id].origins_grid,
+                        map_resolution_cm=args.map_resolution,
+                        initial_agent_position=(
+                            agent[robot_id].init_agent_position
+                        ),
+                        initial_sensor_rotation=(
+                            agent[robot_id].init_sim_rotation
+                        ),
+                    )
+                    goal_points[robot_id] = [
+                        int(np.clip(
+                            round(float(cell[0])),
+                            1,
+                            agent[robot_id].map_size - 2,
+                        )),
+                        int(np.clip(
+                            round(float(cell[1])),
+                            1,
+                            agent[robot_id].map_size - 2,
+                        )),
+                    ]
 
             if risk_runtime is not None:
                 frontier_report_payloads = []
@@ -726,6 +817,9 @@ def main(args, send_queue, receive_queue):
                     goal_map,
                     transform_rgb_bgr(top_view_map),
                     agent[0].episode_n,
+                    planning_risk=visualization_risk,
+                    hard_unsafe_mask=visualization_hard_unsafe,
+                    hazard_display_label=hazard_display_label,
                 )
 
             # ---------- Advance humanoids + env ----------
@@ -740,6 +834,7 @@ def main(args, send_queue, receive_queue):
                     env.sim.get_agent_state(i) for i in range(num_agents)
                 ]
                 post_step_t = risk_runtime.shared_time(agent[0].l_step)
+                decision_wall_time_s = time.time() - start
                 risk_runtime.record_exposure(
                     post_step_t,
                     post_step_states,
@@ -747,6 +842,8 @@ def main(args, send_queue, receive_queue):
                     planner_statuses=[
                         getattr(a, "_risk_escape_reason", None) for a in agent
                     ],
+                    actions=actions,
+                    wall_time_s=decision_wall_time_s,
                 )
 
             step_end = time.time()

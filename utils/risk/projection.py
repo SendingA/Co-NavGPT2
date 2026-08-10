@@ -110,16 +110,25 @@ def hard_unsafe_mask(
     frame: GridFrame,
     config: RiskConfig,
 ) -> np.ndarray:
-    """Combine temperature exclusion with a distance-inflated flame mask."""
+    """Return the non-negotiable core hazard used by local/global planners.
+
+    By default this is only the high-intensity flame core. Heat and smoke are
+    retained in the continuous physical-risk field so their influence fades
+    spatially instead of becoming one oversized binary region. Experiments
+    that specifically need the legacy temperature veto or a flame clearance
+    ring can opt into them through :class:`RiskConfig`.
+    """
 
     flame_source = np.asarray(flame) >= float(config.flame_hard_threshold)
     radius = int(np.ceil(
         float(config.flame_safety_distance_m) / frame.resolution_m
     ))
     flame_unsafe = dilate_disk(flame_source, radius)
-    temperature_unsafe = (
-        np.asarray(temperature_c) >= float(config.temperature_hard_c)
-    )
+    temperature_unsafe = np.zeros(flame_unsafe.shape, dtype=bool)
+    if bool(config.temperature_hard_enabled):
+        temperature_unsafe = (
+            np.asarray(temperature_c) >= float(config.temperature_hard_c)
+        )
     return np.asarray(flame_unsafe | temperature_unsafe, dtype=bool)
 
 

@@ -79,8 +79,9 @@ CLI 默认值为 `T_ref=35°C`、`T_hazard=150°C`，以及
 生存阈值、伤害概率或生理模型。
 
 火焰不再进入连续加权和：在当前 FireWorld 中，火焰已经会推高温度，把 `F`
-再次加权会重复计算同一危险。火焰仍保留为第 2.2 节的硬约束和安全膨胀源，
-所以这不是忽略明火，而是把“不可穿越的火”与“可连续累计的热/烟暴露”分开。
+再次加权会重复计算同一危险。高强度火焰核心保留为第 2.2 节的硬约束；外围
+温度和烟雾继续通过 `H_phys` 平滑递减，所以这不是忽略明火，而是把“不可穿越
+的火焰核心”与“可连续累计的外围热/烟暴露”分开。
 感知不确定性也只进入规划代价，不混入 GT 暴露指标，从而把危险本身和机器人
 对危险的未知程度分开。
 
@@ -89,13 +90,17 @@ CLI 默认值为 `T_ref=35°C`、`T_hazard=150°C`，以及
 连续风险以外，代码还构造硬约束：
 
 ```text
-M_hard = dilate(F >= F_hard, ceil(d_safe / map_resolution))
-         OR (T >= T_hard)
+M_hard = dilate(F >= F_hard, ceil(d_core / map_resolution))
+         OR temperature_hard_enabled · (T >= T_hard)
 ```
 
-CLI 默认 `F_hard=0.20`、火焰安全膨胀距离 `d_safe=0.45m`、
-`T_hard=250°C`。`M_hard` 不会被低风险样本平均掉：它会过滤 frontier、
-从 FMM 可通行域中移除对应栅格，并用于 critical violation 计数。
+CLI 默认 `F_hard=0.80`、`d_core=0m` 且
+`temperature_hard_enabled=0`，因此只有高强度火焰核心属于 hard unsafe；周围
+温度/烟雾全部保留为连续风险。需要复现旧式保守安全环时，可以显式设置
+`--risk_flame_safety_distance_m`，需要温度二值 veto 时再启用
+`--risk_temperature_hard_enabled 1 --risk_temperature_hard_c 250`。
+`M_hard` 不会被低风险样本平均掉：它会过滤 frontier、从 FMM 可通行域中移除
+对应栅格，并用于 critical violation 计数。
 
 ## 3. Oracle 与 sensed 风险图
 
@@ -202,9 +207,12 @@ R_k = max(p95(frontier k), mean(approach route k))
 ```
 
 若 **frontier 区域本身**接触 `M_hard`，或其最大规划风险达到
-`--risk_hard_frontier_threshold`，则先将它硬过滤。直线 route proxy 仍进入
-连续风险代价，但因为它可能穿墙，明确设置 `route_is_proxy=true`，不作为硬 veto
-依据。风险模块不再重写 `nearest/co_ut/fill` 的策略公式。每个 normal planner
+`--risk_hard_frontier_threshold`，则先将它硬过滤。approach route 现在通过该
+agent 自己的已探索自由空间执行八邻域风险加权搜索（代价与 local A* 一致），
+所以“目标方向的直线穿火，但实际可以绕火到达”不会被误判为必须穿火。仅在当前
+地图中找不到可通行 approach route 时才退回直线诊断，并明确设置
+`route_is_proxy=true`；proxy 进入连续代价但不作为 hard veto。风险模块不再重写
+`nearest/co_ut/fill` 的策略公式。每个 normal planner
 先提供自己的原始 preference `B_a,k`，再由共享 `SharedRiskAwareness` 在每个
 机器人内部将它单调归一化为 `B_bar_a,k`，并统一叠加安全代价：
 
@@ -212,7 +220,9 @@ R_k = max(p95(frontier k), mean(approach route k))
 u_a,k = B_bar_a,k - w_R R_k - 0.5 (1-C_bar_k)
 ```
 
-`w_R` 由 `--risk_frontier_weight` 控制，默认 `2.0`。四个 classical planner
+`w_R` 由 `--risk_frontier_weight` 控制，默认 `0.5`，只给 global exploration
+direction 一个软安全偏置；实际逐 action 绕火仍由 local FMM 的
+`--risk_alpha`（默认 `1.0`）和 hard flame core 负责。四个 classical planner
 的 normal preference 与安全层关系如下：
 
 | `nav_mode` | normal preference `B_a,k` | 共享 risk-awareness |
@@ -248,7 +258,7 @@ path，而是始终进入共享栅格上的 risk-aware FMM。连续风险通过�
 v(x) = 1 / (1 + alpha · P(x))
 ```
 
-其中 `alpha=--risk_alpha`，默认 `4.0`；风险越高，travel time 越大。
+其中 `alpha=--risk_alpha`，默认 `1.0`；风险越高，travel time 越大。
 该形式对应 VULCAN Eq. (11)，但这里的 `P(x)` 明确包含本实现的温度/烟雾风险与
 unknown/uncertainty planner penalty；火焰只通过 `M_hard` 进入。
 `M_hard` cell 则直接从 traversible domain 中移除。如果 agent 已被动态更新的
@@ -269,9 +279,10 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 | `--risk_temperature_ambient_c` | `25.0` | 原始温度层与衰减基线（°C） |
 | `--risk_temperature_reference_c` | `35.0` | 温度风险开始上升的校准点（°C） |
 | `--risk_temperature_hazard_c` | `150.0` | 温度归一化到 1 的校准点（°C） |
-| `--risk_temperature_hard_c` | `250.0` | 温度硬不可通行阈值（°C） |
-| `--risk_flame_hard_threshold` | `0.20` | 火焰硬阈值 |
-| `--risk_flame_safety_distance_m` | `0.45` | 火焰硬区域膨胀距离（m） |
+| `--risk_temperature_hard_c` | `250.0` | 启用温度硬 veto 时使用的阈值（°C） |
+| `--risk_temperature_hard_enabled` | `0` | `1` 才启用温度二值硬封锁；默认温度为连续软风险 |
+| `--risk_flame_hard_threshold` | `0.80` | 高强度火焰核心硬阈值 |
+| `--risk_flame_safety_distance_m` | `0.0` | 可选火焰核心膨胀距离（m）；默认不扩张 |
 | `--risk_danger_threshold` | `0.55` | danger 暴露与 frontier severity 阈值 |
 | `--risk_critical_threshold` | `0.80` | critical violation 的连续风险阈值 |
 | `--risk_decay_tau_s` | `20.0` | sensed 物理证据衰减时间常数（s） |
@@ -283,8 +294,8 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 | `--risk_floor_max_offset_m` | `1.50` | GT 垂直投影带上界，相对初始 floor y（m） |
 | `--risk_smoke_source` | `appearance_depth` | `appearance_depth` / `privileged_transmittance` |
 | `--risk_geometry_depth_source` | `clean` | `clean` smoke-robust geometry surrogate / `smoke` 退化深度消融 |
-| `--risk_alpha` | `4.0` | FMM 风险速度惩罚强度 |
-| `--risk_frontier_weight` | `2.0` | global frontier utility 的风险权重 |
+| `--risk_alpha` | `1.0` | FMM 风险速度惩罚强度 |
+| `--risk_frontier_weight` | `0.5` | global frontier utility 的软风险权重；主要绕火责任留给 local planner |
 | `--risk_hard_frontier_threshold` | `0.80` | frontier/approach 最大规划风险硬过滤阈值；运行时至少不低于 danger threshold |
 | `--risk_dump_dir` | `./outputs/risk_assessment` | 风险 artefact 根目录 |
 | `--risk_save_every` | `10` | 每 N 个导航 step 保存 PNG；`0` 只关闭 PNG，不关闭 JSON trace/summary |
@@ -363,6 +374,14 @@ PNG dashboard 为 2×3 panel：Flame risk、Temperature risk、Smoke risk、
 Physical risk、Planning cost、Confidence；unknown cell 为灰色，hard-unsafe
 为品红色，并叠加 agent/frontier 位置。
 
+当 `--visualize 1` 或 `--print_images 1` 时，普通导航合成图左侧的
+obstacle-map panel 会叠加 hazard：淡黄→橙→红表示风险从低到高，品红色区域
+和深色轮廓表示 `hard_unsafe`。`source=sensed/oracle` 显示 planner 实际使用的
+`planning_risk`；evaluator-only `source=none` 显示独立 GT evaluator 的
+`physical_risk`，并明确标注 `GT display only`。后者只用于解释 risk-blind
+轨迹穿过了什么危险，不会进入 Global/Local Planner。真实障碍物在混色后原样
+重绘，右侧 top-view 保持不变。只有 `risk_enabled=0` 时不显示叠加层。
+
 ### 6.2 推荐 benchmark 指标
 
 Evaluator 在 reset 后先 `prime` 初始位置，但不把 reset 算作 action sample；之后
@@ -415,7 +434,8 @@ metrics；因此名字和聚合方式稳定，但它们还不是 Habitat registr
 
 1. **不是 CFD。** FireWorld 是确定性体素扩散/浮力/反应近似，不是经过验证的
    Navier–Stokes/燃烧 CFD，也不输出可用于真实消防决策的物理安全保证。
-2. **阈值是 benchmark calibration。** `35/150/250°C` 等默认阈值用于模拟
+2. **阈值是 benchmark calibration。** `35/150°C` 与可选的 `250°C` hard
+   veto 等阈值用于模拟
    实验分级，不代表人体可生存时间、烧伤阈值或装备认证界限。
 3. **Smoke 不是毒性。** FireWorld smoke 是 `[0,1]` 的无量纲烟尘/消光场；
    `appearance_depth` 更只是能见度 proxy。当前没有 CO、O₂、毒性剂量或呼吸
@@ -460,6 +480,7 @@ oracle 与真正的 sensed policy。
 | `utils/risk/visualization.py` | 六 panel 风险 snapshot |
 | `utils/risk/runtime.py` | episode orchestration、输出与 oracle/sensed 隔离 |
 | `utils/fmm_planner.py` | 风险速度场、hard mask 与 emergency escape |
+| `utils/visualization.py` | 导航 obstacle-map panel 的 hazard overlay 与图例 |
 | `main.py` | sensor → risk → global planner → local planner → evaluator 接线 |
 
 相关窄测试可用以下命令运行：
@@ -473,5 +494,6 @@ python -m unittest -v \
     tests.test_risk_planner \
     tests.test_risk_runtime \
     tests.test_risk_visualization \
+    tests.test_hazard_overlay \
     tests.test_risk_integration
 ```

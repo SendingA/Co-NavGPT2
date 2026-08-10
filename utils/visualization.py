@@ -452,7 +452,163 @@ def write_number_full(image, pose, number):
     
     return pil_image
 
-def Visualize(args, step, pose_pred, map_pred, exp_pred, goal_name, visited_vis, map_edge, goal_map, top_view_map, episode_n=0, rank=0):
+
+def overlay_hazard_on_obstacle_map(
+    map_bgr,
+    planning_risk,
+    hard_unsafe_mask=None,
+    obstacle_mask=None,
+    *,
+    max_alpha=0.72,
+):
+    """Blend the planner hazard field onto a rendered obstacle map.
+
+    ``planning_risk`` is the normalized ``[0, 1]`` map consumed by the
+    planners. Low values are faint yellow, medium values orange and high
+    values red. Hard-unsafe cells receive a magenta fill and outline.
+    Physical obstacle pixels are restored after blending so this function is
+    strictly a visualization layer and cannot make map semantics ambiguous.
+    """
+
+    base = np.asarray(map_bgr)
+    if base.ndim != 3 or base.shape[2] != 3:
+        raise ValueError("map_bgr must have shape (height, width, 3)")
+    if base.dtype != np.uint8:
+        raise ValueError("map_bgr must use uint8 BGR pixels")
+
+    shape = base.shape[:2]
+    risk = np.asarray(planning_risk, dtype=np.float32)
+    if risk.shape != shape:
+        raise ValueError(
+            "planning_risk shape {} does not match obstacle map {}".format(
+                risk.shape, shape
+            )
+        )
+    risk = np.clip(
+        np.nan_to_num(risk, nan=0.0, posinf=1.0, neginf=0.0),
+        0.0,
+        1.0,
+    )
+
+    if hard_unsafe_mask is None:
+        hard = np.zeros(shape, dtype=bool)
+    else:
+        hard = np.asarray(hard_unsafe_mask, dtype=bool)
+        if hard.shape != shape:
+            raise ValueError(
+                "hard_unsafe_mask shape {} does not match obstacle map {}"
+                .format(hard.shape, shape)
+            )
+
+    if obstacle_mask is None:
+        obstacles = np.zeros(shape, dtype=bool)
+    else:
+        obstacles = np.asarray(obstacle_mask, dtype=bool)
+        if obstacles.shape != shape:
+            raise ValueError(
+                "obstacle_mask shape {} does not match obstacle map {}"
+                .format(obstacles.shape, shape)
+            )
+
+    result = base.copy()
+    heat = np.empty_like(result)
+    heat[..., 0] = 0
+    heat[..., 1] = np.rint(255.0 * (1.0 - risk)).astype(np.uint8)
+    heat[..., 2] = 255
+    alpha = (
+        np.clip(float(max_alpha), 0.0, 1.0) * risk
+    )[..., None]
+    blended = (
+        result.astype(np.float32) * (1.0 - alpha)
+        + heat.astype(np.float32) * alpha
+    )
+    visible = ~obstacles
+    result[visible] = np.rint(blended[visible]).astype(np.uint8)
+
+    hard_visible = hard & visible
+    if np.any(hard_visible):
+        hard_color = np.asarray([180, 0, 255], dtype=np.float32)
+        result[hard_visible] = np.rint(
+            0.18 * result[hard_visible].astype(np.float32)
+            + 0.82 * hard_color
+        ).astype(np.uint8)
+        contours, _ = cv2.findContours(
+            hard_visible.astype(np.uint8),
+            cv2.RETR_EXTERNAL,
+            cv2.CHAIN_APPROX_SIMPLE,
+        )
+        cv2.drawContours(result, contours, -1, (80, 0, 160), 1)
+
+    # Contour drawing can touch the neighboring obstacle pixel. Restore every
+    # physical obstacle exactly, keeping occupancy and hazard visually distinct.
+    result[obstacles] = base[obstacles]
+    return result
+
+
+def draw_hazard_legend(image_bgr, display_label=None):
+    """Draw the hazard scale in the navigation panel header."""
+
+    image = np.asarray(image_bgr)
+    if image.ndim != 3 or image.shape[2] != 3:
+        raise ValueError("image_bgr must have shape (height, width, 3)")
+    if image.shape[0] < 45 or image.shape[1] < 930:
+        return image
+
+    x0, y0, width, height = 600, 8, 150, 10
+    values = np.linspace(0.0, 1.0, width, dtype=np.float32)
+    gradient = np.zeros((height, width, 3), dtype=np.uint8)
+    gradient[..., 1] = np.rint(
+        255.0 * (1.0 - values)
+    ).astype(np.uint8)[None, :]
+    gradient[..., 2] = 255
+    image[y0:y0 + height, x0:x0 + width] = gradient
+    cv2.rectangle(
+        image, (x0 - 1, y0 - 1), (x0 + width, y0 + height), (40, 40, 40), 1
+    )
+    cv2.putText(
+        image, "Hazard", (535, 18), cv2.FONT_HERSHEY_SIMPLEX,
+        0.38, (20, 20, 20), 1, cv2.LINE_AA,
+    )
+    cv2.putText(
+        image, "low", (600, 35), cv2.FONT_HERSHEY_SIMPLEX,
+        0.34, (20, 20, 20), 1, cv2.LINE_AA,
+    )
+    cv2.putText(
+        image, "high", (722, 35), cv2.FONT_HERSHEY_SIMPLEX,
+        0.34, (20, 20, 20), 1, cv2.LINE_AA,
+    )
+    cv2.rectangle(image, (805, 8), (821, 20), (180, 0, 255), -1)
+    cv2.rectangle(image, (805, 8), (821, 20), (80, 0, 160), 1)
+    cv2.putText(
+        image, "hard unsafe", (828, 19), cv2.FONT_HERSHEY_SIMPLEX,
+        0.34, (20, 20, 20), 1, cv2.LINE_AA,
+    )
+    if display_label:
+        cv2.putText(
+            image, str(display_label), (805, 36),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.34, (120, 0, 120), 1, cv2.LINE_AA,
+        )
+    return image
+
+
+def Visualize(
+    args,
+    step,
+    pose_pred,
+    map_pred,
+    exp_pred,
+    goal_name,
+    visited_vis,
+    map_edge,
+    goal_map,
+    top_view_map,
+    episode_n=0,
+    rank=0,
+    planning_risk=None,
+    hard_unsafe_mask=None,
+    hazard_display_label=None,
+):
     sem_map = np.zeros(map_pred.shape)
 
     map_mask = np.rint(map_pred) == 1
@@ -478,10 +634,15 @@ def Visualize(args, step, pose_pred, map_pred, exp_pred, goal_name, visited_vis,
                                     sem_map.shape[0]))
     sem_map_vis.putpalette(color_pal)
     sem_map_vis.putdata(sem_map.flatten().astype(np.uint8))
-    sem_map_vis = sem_map_vis.convert("RGB")
+    sem_map_vis = np.asarray(sem_map_vis.convert("RGB"))[:, :, [2, 1, 0]]
+    if planning_risk is not None:
+        sem_map_vis = overlay_hazard_on_obstacle_map(
+            sem_map_vis,
+            planning_risk,
+            hard_unsafe_mask=hard_unsafe_mask,
+            obstacle_mask=map_mask,
+        )
     sem_map_vis = np.flipud(sem_map_vis)
-
-    sem_map_vis = sem_map_vis[:, :, [2, 1, 0]]
     sem_map_vis = cv2.resize(sem_map_vis, (480, 480),
                                 interpolation=cv2.INTER_NEAREST)
 
@@ -492,6 +653,8 @@ def Visualize(args, step, pose_pred, map_pred, exp_pred, goal_name, visited_vis,
                     int(color_palette[9+3*i] * 255)))
 
     vis_image = init_multi_vis_image(goal_name, color, 537, 980)
+    if planning_risk is not None:
+        draw_hazard_legend(vis_image, hazard_display_label)
 
     vis_image[50:530, 15:495] = sem_map_vis
     top_view_map_nor = cv2.resize(top_view_map, (480, 480),

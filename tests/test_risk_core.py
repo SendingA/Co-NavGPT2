@@ -12,6 +12,7 @@ from utils.risk.model import GridFrame, RiskEvidence
 from utils.risk.projection import (
     compute_physical_risk,
     evidence_from_sensor_images,
+    hard_unsafe_mask,
     normalize_temperature_c,
     project_fire_fields,
 )
@@ -32,6 +33,11 @@ class RiskCoreTests(unittest.TestCase):
             risk_source=None,
         ))
         self.assertEqual(enabled.effective_source, "sensed")
+
+        temperature_veto = RiskConfig.from_namespace(SimpleNamespace(
+            risk_temperature_hard_enabled=1,
+        ))
+        self.assertTrue(temperature_veto.temperature_hard_enabled)
 
     def test_weights_and_temperature_have_explicit_units(self) -> None:
         with self.assertRaises(ValueError):
@@ -106,6 +112,61 @@ class RiskCoreTests(unittest.TestCase):
         self.assertFalse(layers.unknown.any())
         self.assertTrue(np.all(layers.physical_risk >= 0.0))
         self.assertTrue(np.all(layers.physical_risk <= 1.0))
+
+    def test_default_hard_mask_is_compact_flame_core_with_soft_gradient(
+        self,
+    ) -> None:
+        shape = (7, 7)
+        flame = np.zeros(shape, dtype=np.float32)
+        flame[3, 3] = 1.0
+        flame[3, 4] = 0.79
+        temperature = np.full(shape, 25.0, dtype=np.float32)
+        temperature[3, 3] = 150.0
+        temperature[3, 4] = 105.0
+        temperature[3, 5] = 65.0
+        # Even an extreme temperature is soft unless the compatibility veto
+        # is explicitly enabled.
+        temperature[0, 0] = 1000.0
+        config = RiskConfig()
+        frame = GridFrame(shape, 0.05, (0.0, 0.0))
+
+        hard = hard_unsafe_mask(flame, temperature, frame, config)
+        risk = compute_physical_risk(
+            temperature,
+            np.zeros(shape, dtype=np.float32),
+            config,
+        )
+
+        self.assertEqual(int(hard.sum()), 1)
+        self.assertTrue(hard[3, 3])
+        self.assertFalse(hard[3, 4])
+        self.assertFalse(hard[0, 0])
+        self.assertGreater(float(risk[3, 3]), float(risk[3, 4]))
+        self.assertGreater(float(risk[3, 4]), float(risk[3, 5]))
+        self.assertGreater(float(risk[3, 5]), 0.0)
+
+    def test_temperature_hard_mask_is_explicit_opt_in(self) -> None:
+        shape = (5, 5)
+        flame = np.zeros(shape, dtype=np.float32)
+        temperature = np.full(shape, 25.0, dtype=np.float32)
+        temperature[2, 2] = 300.0
+        frame = GridFrame(shape, 0.05, (0.0, 0.0))
+
+        default_hard = hard_unsafe_mask(
+            flame, temperature, frame, RiskConfig()
+        )
+        enabled_hard = hard_unsafe_mask(
+            flame,
+            temperature,
+            frame,
+            RiskConfig(
+                temperature_hard_enabled=True,
+                temperature_hard_c=250.0,
+            ),
+        )
+
+        self.assertFalse(default_hard.any())
+        self.assertTrue(enabled_hard[2, 2])
 
     def test_temperature_output_preserves_ambient_below_risk_reference(self) -> None:
         shape = (2, 2, 2)

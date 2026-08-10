@@ -359,9 +359,14 @@ def build_frontier_risk_reports(
     ] = None,
     thresholds: SeverityThresholds = SeverityThresholds(),
     label_offset: int = 1,
-    route_is_proxy: bool = False,
+    route_is_proxy: Union[bool, Sequence[bool], Mapping[int, bool]] = False,
 ) -> List[FrontierRiskReport]:
-    """Build zero-based reports from masks or a positive-integer label map."""
+    """Build zero-based reports from masks or a positive-integer label map.
+
+    ``route_is_proxy`` may be one shared flag or one flag per frontier.  The
+    latter lets a planner distinguish exact traversable routes from isolated
+    frontiers that had to retain a straight-line diagnostic proxy.
+    """
 
     risk = _as_unit_map(risk_map, nan_value=0.0)
     masks = _normalise_frontiers(frontiers, risk.shape, label_offset=label_offset)
@@ -383,6 +388,12 @@ def build_frontier_risk_reports(
             route = route_cells
         else:
             route = _optional_item(route_cells, frontier_id, ordinal)
+        if isinstance(route_is_proxy, (bool, np.bool_)):
+            proxy = bool(route_is_proxy)
+        else:
+            proxy = bool(
+                _optional_item(route_is_proxy, frontier_id, ordinal)
+            )
         reports.append(
             frontier_risk_report(
                 frontier_id,
@@ -392,7 +403,7 @@ def build_frontier_risk_reports(
                 hard_unsafe_map=hard_unsafe_map,
                 frontier_point=point,
                 route_cells=route,
-                route_is_proxy=route_is_proxy,
+                route_is_proxy=proxy,
                 thresholds=thresholds,
             )
         )

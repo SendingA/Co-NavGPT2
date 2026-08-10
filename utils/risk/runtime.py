@@ -26,6 +26,16 @@ from .providers import GroundTruthRiskProvider
 from .visualization import save_risk_snapshot
 
 
+_HABITAT_ACTION_NAMES = {
+    0: "stop",
+    1: "move_forward",
+    2: "turn_left",
+    3: "turn_right",
+    4: "look_up",
+    5: "look_down",
+}
+
+
 def navigation_grid_frame(reference_agent) -> GridFrame:
     """Build the exact shared Open3D/navigation frame used by the agents.
 
@@ -147,14 +157,19 @@ class RiskRuntime:
         self.run_dir = self.output_dir / self.run_id / f"rank_{self.rank:03d}"
         self.episode_dir = self.run_dir / f"ep_{self.episode_id:04d}"
         self.step_log_path = self.episode_dir / "risk_steps.jsonl"
+        self.action_log_path = self.episode_dir / "actions.jsonl"
+        self.action_list_path = self.episode_dir / "action_list.json"
         self.episode_dir.mkdir(parents=True, exist_ok=True)
         # A fresh benchmark run must not append onto an older episode trace.
         self.step_log_path.write_text("", encoding="utf-8")
+        self.action_log_path.write_text("", encoding="utf-8")
         for stale_path in self.episode_dir.glob("risk_step_*.png"):
             stale_path.unlink()
         stale_summary = self.episode_dir / "risk_summary.json"
         if stale_summary.exists():
             stale_summary.unlink()
+        if self.action_list_path.exists():
+            self.action_list_path.unlink()
         run_config_path = self.run_dir / "risk_config.json"
         run_config_path.write_text(
             json.dumps({
@@ -182,6 +197,7 @@ class RiskRuntime:
         self._last_planning_risk: Optional[np.ndarray] = None
         self._last_step_report: Dict[str, Dict[str, float]] = {}
         self._planner_event_counts: Dict[str, Dict[str, int]] = {}
+        self._action_steps = []
 
     def _append_record(self, record: Dict[str, object]) -> None:
         with self.step_log_path.open("a", encoding="utf-8") as stream:
@@ -198,6 +214,17 @@ class RiskRuntime:
     def shared_time(self, robot_step: int) -> float:
         """Sample FireClock exactly once for all agents in one outer step."""
         return float(self.fire_scene.t_sim(int(robot_step)))
+
+    def evaluator_visualization_state(self, timestamp_s: float) -> RiskLayers:
+        """Return GT hazard layers for an explicitly display-only overlay.
+
+        Evaluator-only ``source=none`` intentionally supplies a neutral map to
+        both planners. This accessor lets the navigation panel still explain
+        the robot's true exposure without routing the privileged GT layers
+        through :meth:`planner_state` or either planner context.
+        """
+
+        return self.gt_provider.snapshot(float(timestamp_s))
 
     def _validate_current_floor(self, agent_states: Sequence[object]) -> None:
         positions = _agent_positions(agent_states)
@@ -367,6 +394,8 @@ class RiskRuntime:
         *,
         step: Optional[int] = None,
         planner_statuses: Optional[Sequence[Optional[str]]] = None,
+        actions: Optional[Sequence[object]] = None,
+        wall_time_s: Optional[float] = None,
     ) -> Dict[str, Dict[str, float]]:
         if (
             planner_statuses is not None
@@ -375,10 +404,13 @@ class RiskRuntime:
             raise ValueError(
                 "planner_statuses and agent_states must have equal length"
             )
+        if actions is not None and len(actions) != len(agent_states):
+            raise ValueError("actions and agent_states must have equal length")
         self._validate_current_floor(agent_states)
+        positions = _agent_positions(agent_states)
         self._last_step_report = self.evaluator.update(
             float(timestamp_s),
-            _agent_positions(agent_states),
+            positions,
             floor_y_m=self.floor_y_m,
         )
         statuses = (
@@ -401,6 +433,39 @@ class RiskRuntime:
             }.get(str(status))
             if key is not None:
                 counts[key] += 1
+        if actions is not None:
+            action_entries = []
+            for agent_id, action in enumerate(actions):
+                action_id = int(action)
+                exposure = self._last_step_report[str(agent_id)]
+                action_entries.append({
+                    "agent_id": int(agent_id),
+                    "action": action_id,
+                    "action_name": _HABITAT_ACTION_NAMES.get(
+                        action_id, f"action_{action_id}"
+                    ),
+                    "position_after": [
+                        float(value) for value in positions[agent_id]
+                    ],
+                    "risk_after": float(exposure["risk"]),
+                    "hard_unsafe_after": bool(exposure["hard_unsafe"]),
+                    "planner_status": (
+                        None
+                        if statuses[agent_id] is None
+                        else str(statuses[agent_id])
+                    ),
+                })
+            action_record = {
+                "step": None if step is None else int(step),
+                "t_sim_s": float(timestamp_s),
+                "wall_time_s": (
+                    None if wall_time_s is None else float(wall_time_s)
+                ),
+                "actions": action_entries,
+            }
+            self._action_steps.append(action_record)
+            with self.action_log_path.open("a", encoding="utf-8") as stream:
+                stream.write(json.dumps(action_record, sort_keys=True) + "\n")
         if step is not None:
             self._append_record({
                 "record_type": "exposure",
@@ -509,10 +574,67 @@ class RiskRuntime:
         result["planner_events"]["team"] = {
             key: int(team[key]) for key in event_keys
         }
+        team["executed_actions"] = int(sum(
+            len(record["actions"]) for record in self._action_steps
+        ))
+        team["decision_wall_time_s"] = float(sum(
+            float(record["wall_time_s"])
+            for record in self._action_steps
+            if record["wall_time_s"] is not None
+        ))
+        result["action_trace_file"] = self.action_list_path.name
         return result
 
     def save_summary(self, summary: Dict[str, object]) -> Path:
         self.episode_dir.mkdir(parents=True, exist_ok=True)
+        num_agents = (
+            len(self._action_steps[0]["actions"])
+            if self._action_steps else 0
+        )
+        per_agent_action_ids = {
+            str(agent_id): [
+                int(action["action"])
+                for record in self._action_steps
+                for action in record["actions"]
+                if int(action["agent_id"]) == agent_id
+            ]
+            for agent_id in range(num_agents)
+        }
+        per_agent_action_names = {
+            str(agent_id): [
+                str(action["action_name"])
+                for record in self._action_steps
+                for action in record["actions"]
+                if int(action["agent_id"]) == agent_id
+            ]
+            for agent_id in range(num_agents)
+        }
+        action_payload = {
+            "metric_version": self.evaluator.metric_version,
+            "episode_id": self.episode_id,
+            "scene_id": getattr(self.fire_scene, "scene_id", None),
+            "fire_plan_id": _active_fire_plan_id(self.args),
+            "planner_source": self.source,
+            "num_steps": len(self._action_steps),
+            "num_agents": num_agents,
+            "total_actions": int(sum(
+                len(record["actions"]) for record in self._action_steps
+            )),
+            "total_wall_time_s": float(sum(
+                float(record["wall_time_s"])
+                for record in self._action_steps
+                if record["wall_time_s"] is not None
+            )),
+            "action_name_by_id": {
+                str(key): value for key, value in _HABITAT_ACTION_NAMES.items()
+            },
+            "per_agent_action_ids": per_agent_action_ids,
+            "per_agent_action_names": per_agent_action_names,
+            "steps": list(self._action_steps),
+        }
+        with self.action_list_path.open("w", encoding="utf-8") as stream:
+            json.dump(action_payload, stream, indent=2, sort_keys=True)
+            stream.write("\n")
         path = self.episode_dir / "risk_summary.json"
         with path.open("w", encoding="utf-8") as stream:
             json.dump(summary, stream, indent=2, sort_keys=True)

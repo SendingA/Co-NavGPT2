@@ -575,8 +575,10 @@ python main.py --num_agents 2 --nav_mode co_ut \
 
 连续风险只融合温度与烟雾，默认
 `H_phys = 0.60 * temperature_risk + 0.40 * smoke_risk`。火焰不再使用连续
-权重，但仍作为硬不可通行区域，并向外膨胀 `0.45m`，因此不要再传
-`--risk_weight_flame`。
+权重；默认只有 `flame>=0.80` 的高强度核心是硬不可通行区域，且不再向外做
+二值膨胀，外围温度/烟雾保留连续梯度。旧式保守温度 veto 和火焰安全环仍可
+通过 `--risk_temperature_hard_enabled 1` 与
+`--risk_flame_safety_distance_m` 显式启用。不要再传 `--risk_weight_flame`。
 
 主 benchmark 报告 Habitat `Success`、Habitat `SPL`、Habitat `num_steps`、
 `risk/safe_success` 和 `risk/che`。完整定义、实验边界和 Habitat 原生

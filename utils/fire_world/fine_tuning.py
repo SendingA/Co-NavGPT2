@@ -130,6 +130,7 @@ class CuratedFireProfile:
     source_radius_m: float
     source_temp_c: float
     smoke_yield: float
+    num_initial_ignitions: int
     synthetic_core_radius_m: float
     synthetic_risk_radius_m: float
     thresholds: RouteContrastThresholds
@@ -140,6 +141,8 @@ class CuratedFireProfile:
             raise ValueError("curated profile must be stable or dynamic")
         if float(self.duration_s) <= 0.0:
             raise ValueError("duration_s must be positive")
+        if int(self.num_initial_ignitions) < 1:
+            raise ValueError("num_initial_ignitions must be positive")
         if not 0.0 < float(self.synthetic_core_radius_m):
             raise ValueError("synthetic_core_radius_m must be positive")
         if (
@@ -181,9 +184,13 @@ CURATED_FIRE_PROFILES: Dict[str, CuratedFireProfile] = {
     "stable": CuratedFireProfile(
         name="stable",
         duration_s=300.0,
-        source_radius_m=0.42,
+        source_radius_m=0.58,
         source_temp_c=820.0,
         smoke_yield=0.48,
+        num_initial_ignitions=2,
+        # Keep the candidate-screening surrogate stable so this remains an
+        # optimization of the accepted trashcan route topology. The larger
+        # real source radius and extra sources are validated after baking.
         synthetic_core_radius_m=0.55,
         synthetic_risk_radius_m=1.55,
         thresholds=RouteContrastThresholds(),
@@ -203,6 +210,7 @@ CURATED_FIRE_PROFILES: Dict[str, CuratedFireProfile] = {
         source_radius_m=0.32,
         source_temp_c=850.0,
         smoke_yield=0.52,
+        num_initial_ignitions=1,
         # The surrogate core includes the runtime 0.50 m flame-safety
         # dilation plus the expected local floor-fire footprint.  The first
         # real TEEsav bake showed that a 0.65 m core was optimistic and could
@@ -531,32 +539,44 @@ def build_curated_plan(
     *,
     seed: int,
     curation: Mapping[str, object],
+    additional_ignition_instances: Sequence[Mapping[str, object]] = (),
 ) -> Dict[str, object]:
-    """Create one canonical route-contrast plan from a semantic object."""
+    """Create a canonical route-contrast plan from semantic fire sources."""
 
     scene_id = str(inventory["scene_id"])
-    position = _instance_value(ignition_instance, "centroid", "position")
-    if position is None or len(position) < 3:
-        raise ValueError("ignition instance must expose a 3-D centroid")
-    object_id = _instance_value(
-        ignition_instance, "instance_id", "object_id", "id"
-    )
-    if object_id is None:
-        raise ValueError("ignition instance must expose an object id")
-    category = str(ignition_instance.get("category") or "curated fuel")
-    ignition = {
-        "object_id": int(object_id),
-        "category": category,
-        "position": [float(value) for value in position[:3]],
-        "ignite_time_s": 0.0,
-        "source_radius_m": float(profile.source_radius_m),
-        "source_temp_c": float(profile.source_temp_c),
-        "fuel_kg": 1.0,
-        "smoke_yield": float(profile.smoke_yield),
-        "sustain_s": float(profile.duration_s),
-        "floor_spread_scale": 1.0,
-        "ignition_role": "initial",
-    }
+    instances = [ignition_instance, *additional_ignition_instances]
+    expected_sources = int(profile.num_initial_ignitions)
+    if len(instances) != expected_sources:
+        raise ValueError(
+            f"profile {profile.name!r} requires {expected_sources} initial "
+            f"ignitions, got {len(instances)}"
+        )
+    ignitions = []
+    object_ids = set()
+    for instance in instances:
+        position = _instance_value(instance, "centroid", "position")
+        if position is None or len(position) < 3:
+            raise ValueError("ignition instance must expose a 3-D centroid")
+        object_id = _instance_value(instance, "instance_id", "object_id", "id")
+        if object_id is None:
+            raise ValueError("ignition instance must expose an object id")
+        object_id = int(object_id)
+        if object_id in object_ids:
+            raise ValueError(f"duplicate ignition object id {object_id}")
+        object_ids.add(object_id)
+        ignitions.append({
+            "object_id": object_id,
+            "category": str(instance.get("category") or "curated fuel"),
+            "position": [float(value) for value in position[:3]],
+            "ignite_time_s": 0.0,
+            "source_radius_m": float(profile.source_radius_m),
+            "source_temp_c": float(profile.source_temp_c),
+            "fuel_kg": 1.0,
+            "smoke_yield": float(profile.smoke_yield),
+            "sustain_s": float(profile.duration_s),
+            "floor_spread_scale": 1.0,
+            "ignition_role": "initial",
+        })
     payload: Dict[str, object] = {
         "schema_version": 4,
         "scene_id": scene_id,
@@ -567,10 +587,10 @@ def build_curated_plan(
         "seed": int(seed),
         "template_version": 1,
         "duration_s": float(profile.duration_s),
-        "num_initial_ignitions": 1,
+        "num_initial_ignitions": len(ignitions),
         "ignition_selection_mode": "curated_route_contrast",
         "ignition_selection_version": 1,
-        "ignitions": [ignition],
+        "ignitions": ignitions,
         "propagation_rules": dict(profile.propagation_rules),
         "curation": dict(curation),
     }
@@ -633,6 +653,7 @@ def route_overlay(
     start: Sequence[int],
     goal: Sequence[int],
     ignition: Optional[Sequence[int]] = None,
+    ignitions: Optional[Iterable[Sequence[int]]] = None,
 ) -> np.ndarray:
     """Render a compact RGB diagnostic without plotting dependencies."""
 
@@ -654,6 +675,9 @@ def route_overlay(
     image[_as_cell(goal, domain.shape)] = (170, 50, 220)
     if ignition is not None:
         image[_as_cell(ignition, domain.shape)] = (255, 220, 0)
+    if ignitions is not None:
+        for cell in ignitions:
+            image[_as_cell(cell, domain.shape)] = (255, 220, 0)
     return image
 
 

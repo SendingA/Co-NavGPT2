@@ -14,6 +14,7 @@ from .risk_aware import (
     SharedRiskAwareness,
     grid_line_cells,
     low_risk_fallback_goal,
+    risk_aware_route_cells,
     risk_utility_weights,
 )
 from .risk_module import RiskAwareAssignment
@@ -31,6 +32,7 @@ __all__ = [
     "create_global_planner",
     "grid_line_cells",
     "low_risk_fallback_goal",
+    "risk_aware_route_cells",
     "merge_agent_frontier_maps",
     "risk_utility_weights",
 ]

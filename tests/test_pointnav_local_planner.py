@@ -22,6 +22,7 @@ from utils.local_planners.pointnav import (
     frontier_grid_to_world,
     load_pointnav_policy_adapter,
     shield_pointnav_action,
+    world_to_frontier_grid,
 )
 from utils.visualization import fit_image_to_panel
 
@@ -212,6 +213,15 @@ class PointGoalConventionTests(unittest.TestCase):
         )
         expected = rx.T @ np.asarray([0.1, 1.25, 0.15]) + [1, 2, 3]
         np.testing.assert_allclose(result, expected, atol=1e-6)
+
+        recovered = world_to_frontier_grid(
+            result,
+            origins_grid=[10, 20],
+            map_resolution_cm=5,
+            initial_agent_position=[1, 2, 3],
+            initial_sensor_rotation=np.eye(3),
+        )
+        np.testing.assert_allclose(recovered, [12, 23], atol=1e-5)
 
 
 class PointNavSchemaTests(unittest.TestCase):

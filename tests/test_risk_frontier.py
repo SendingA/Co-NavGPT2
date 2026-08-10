@@ -19,6 +19,25 @@ from utils.risk.frontier import (
 
 
 class FrontierRiskReportTests(unittest.TestCase):
+    def test_each_frontier_can_report_its_own_route_provenance(self) -> None:
+        risk = np.zeros((5, 5), dtype=np.float32)
+        labels = np.zeros((5, 5), dtype=np.int32)
+        labels[1, 1] = 1
+        labels[3, 3] = 2
+
+        reports = build_frontier_risk_reports(
+            labels,
+            risk,
+            frontier_points=((1, 1), (3, 3)),
+            route_cells=(((0, 0), (1, 1)), ((4, 4), (3, 3))),
+            route_is_proxy=(False, True),
+        )
+
+        self.assertEqual(
+            [report.route_is_proxy for report in reports],
+            [False, True],
+        )
+
     def test_report_includes_distribution_route_confidence_and_hard_block(self):
         risk = np.zeros((5, 6), dtype=np.float32)
         risk[1, 1:4] = [0.10, 0.20, 0.30]

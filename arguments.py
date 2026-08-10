@@ -433,13 +433,19 @@ def get_args() -> argparse.Namespace:
                              "survival threshold)")
     parser.add_argument("--risk_temperature_hard_c", type=float,
                         default=250.0,
-                        help="temperature that makes a planner cell hard "
-                             "unsafe (deg C)")
+                        help="temperature threshold used only when "
+                             "--risk_temperature_hard_enabled=1 (deg C)")
+    parser.add_argument("--risk_temperature_hard_enabled", type=int,
+                        default=0, choices=[0, 1],
+                        help="opt-in legacy temperature hard blocking; the "
+                             "default keeps heat as continuous soft risk")
     parser.add_argument("--risk_flame_hard_threshold", type=float,
-                        default=0.20)
+                        default=0.80,
+                        help="high-intensity flame core threshold")
     parser.add_argument("--risk_flame_safety_distance_m", type=float,
-                        default=0.45,
-                        help="hard-unsafe dilation around flame cells (m)")
+                        default=0.0,
+                        help="optional hard-core dilation around flame cells "
+                             "(m); 0 keeps only the flame core hard")
     parser.add_argument("--risk_danger_threshold", type=float, default=0.55)
     parser.add_argument("--risk_critical_threshold", type=float, default=0.80)
     parser.add_argument("--risk_decay_tau_s", type=float, default=20.0,
@@ -465,9 +471,15 @@ def get_args() -> argparse.Namespace:
                              "clean is the smoke-robust radar/depth geometry "
                              "surrogate used by main; smoke is the degraded "
                              "vision-depth ablation")
-    parser.add_argument("--risk_alpha", type=float, default=4.0,
+    parser.add_argument("--risk_alpha", type=float, default=1.0,
                         help="hazard strength in FMM speed=1/(1+alpha*risk)")
-    parser.add_argument("--risk_frontier_weight", type=float, default=2.0)
+    parser.add_argument(
+        "--risk_frontier_weight",
+        type=float,
+        default=0.5,
+        help="soft global frontier-risk bias; local --risk_alpha remains "
+             "the primary route/action avoidance strength",
+    )
     parser.add_argument("--risk_hard_frontier_threshold", type=float,
                         default=0.80)
     parser.add_argument("--risk_dump_dir", type=str,

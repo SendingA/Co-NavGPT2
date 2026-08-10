@@ -19,6 +19,7 @@ from .risk_module import (
     SharedRiskAwareness,
     grid_line_cells,
     low_risk_fallback_goal,
+    risk_aware_route_cells,
 )
 
 
@@ -366,5 +367,6 @@ __all__ = [
     "SharedRiskAwareness",
     "grid_line_cells",
     "low_risk_fallback_goal",
+    "risk_aware_route_cells",
     "risk_utility_weights",
 ]

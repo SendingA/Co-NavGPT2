@@ -8,6 +8,8 @@ zero-valued risk map preserves the corresponding normal planner's ordering.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import heapq
+import itertools
 from typing import Dict, List, Mapping, Optional, Sequence
 
 import cv2
@@ -38,6 +40,151 @@ def grid_line_cells(start, goal, shape) -> List[List[int]]:
         thickness=1,
     )
     return np.argwhere(canvas > 0).astype(int).tolist()
+
+
+def risk_aware_route_cells(
+    start,
+    goal,
+    obstacle_map,
+    explored_map,
+    planning_risk,
+    hard_unsafe,
+    *,
+    risk_alpha: float = 4.0,
+) -> Optional[List[List[int]]]:
+    """Find an explored free-space route used to score a frontier.
+
+    The former one-cell straight-line proxy frequently crossed walls or a
+    fire core even when the local planner could go around it.  This search
+    uses the same eight-connected, risk-weighted edge objective as the local
+    A* planner and forbids diagonal corner cutting.  ``None`` deliberately
+    means that the caller should retain the conservative line *proxy* rather
+    than pretending that an unreachable route is exact.
+    """
+
+    risk = np.asarray(planning_risk, dtype=np.float32)
+    shape = risk.shape
+    for name, value in (
+        ("obstacle_map", obstacle_map),
+        ("explored_map", explored_map),
+        ("hard_unsafe", hard_unsafe),
+    ):
+        if np.asarray(value).shape != shape:
+            raise ValueError(f"{name} shape must match planning_risk")
+
+    obstacle = np.asarray(obstacle_map) > 0.5
+    explored = np.asarray(explored_map) > 0.0
+    hard = np.asarray(hard_unsafe, dtype=bool)
+    traversable = explored & ~obstacle & ~hard
+
+    def _cell(value):
+        return (
+            int(np.clip(round(float(value[0])), 0, shape[0] - 1)),
+            int(np.clip(round(float(value[1])), 0, shape[1] - 1)),
+        )
+
+    source = _cell(start)
+    target = _cell(goal)
+    # Mapping lag can leave the robot's current cell just outside the latest
+    # explored mask.  It is still a valid source unless physically blocked.
+    if obstacle[source] or hard[source]:
+        return None
+    traversable[source] = True
+
+    targets = []
+    if traversable[target]:
+        targets.append(target)
+    else:
+        # Frontier centroids can fall one or two cells into the unknown side
+        # of a thick component.  Route to the nearest free approach cell;
+        # the frontier footprint itself is still risk-scored separately.
+        for radius in (1, 2):
+            row0 = max(0, target[0] - radius)
+            row1 = min(shape[0], target[0] + radius + 1)
+            col0 = max(0, target[1] - radius)
+            col1 = min(shape[1], target[1] + radius + 1)
+            local = np.argwhere(traversable[row0:row1, col0:col1])
+            if local.size:
+                targets = [
+                    (int(cell[0] + row0), int(cell[1] + col0))
+                    for cell in local
+                ]
+                break
+    if not targets:
+        return None
+
+    target_set = set(targets)
+    target_array = np.asarray(targets, dtype=np.float32)
+
+    def _heuristic(cell) -> float:
+        delta = target_array - np.asarray(cell, dtype=np.float32)[None, :]
+        return float(np.sqrt(np.sum(delta * delta, axis=1)).min())
+
+    moves = (
+        (-1, 0, 1.0),
+        (1, 0, 1.0),
+        (0, -1, 1.0),
+        (0, 1, 1.0),
+        (-1, -1, np.sqrt(2.0)),
+        (-1, 1, np.sqrt(2.0)),
+        (1, -1, np.sqrt(2.0)),
+        (1, 1, np.sqrt(2.0)),
+    )
+    alpha = max(0.0, float(risk_alpha))
+    counter = itertools.count()
+    queue = [(_heuristic(source), 0.0, next(counter), source)]
+    costs = {source: 0.0}
+    parents = {source: None}
+    reached = None
+
+    while queue:
+        _, current_cost, _, current = heapq.heappop(queue)
+        if current_cost > costs[current] + 1e-9:
+            continue
+        if current in target_set:
+            reached = current
+            break
+        for drow, dcol, geometric in moves:
+            nxt = (current[0] + drow, current[1] + dcol)
+            if not (
+                0 <= nxt[0] < shape[0]
+                and 0 <= nxt[1] < shape[1]
+                and traversable[nxt]
+            ):
+                continue
+            if drow != 0 and dcol != 0:
+                if not (
+                    traversable[current[0] + drow, current[1]]
+                    and traversable[current[0], current[1] + dcol]
+                ):
+                    continue
+            mean_risk = 0.5 * (float(risk[current]) + float(risk[nxt]))
+            candidate = current_cost + geometric * (
+                1.0 + alpha * mean_risk
+            )
+            if candidate + 1e-9 >= costs.get(nxt, np.inf):
+                continue
+            costs[nxt] = candidate
+            parents[nxt] = current
+            heapq.heappush(
+                queue,
+                (
+                    candidate + _heuristic(nxt),
+                    candidate,
+                    next(counter),
+                    nxt,
+                ),
+            )
+
+    if reached is None:
+        return None
+    route = []
+    cursor = reached
+    while cursor is not None:
+        route.append([int(cursor[0]), int(cursor[1])])
+        cursor = parents[cursor]
+    route.reverse()
+    return route
 
 
 def low_risk_fallback_goal(
@@ -148,6 +295,7 @@ class SharedRiskAwareness:
             for cell in self.context.agent_cells[: self.context.num_agents]
         ]
         route_cells = []
+        route_is_proxy = []
         for frontier in self.context.target_points:
             nearest_cell = min(
                 agent_cells,
@@ -155,13 +303,24 @@ class SharedRiskAwareness:
                     np.asarray(cell) - np.asarray(frontier)
                 ),
             )
-            route_cells.append(
-                grid_line_cells(
+            route = risk_aware_route_cells(
+                nearest_cell,
+                frontier,
+                self.context.obstacle_map,
+                self.context.explored_map,
+                self.risk.planning_risk,
+                self.risk.hard_unsafe,
+                risk_alpha=self.risk.route_risk_alpha,
+            )
+            is_proxy = route is None
+            if is_proxy:
+                route = grid_line_cells(
                     nearest_cell,
                     frontier,
                     np.asarray(self.risk.planning_risk).shape,
                 )
-            )
+            route_cells.append(route)
+            route_is_proxy.append(is_proxy)
         return build_frontier_risk_reports(
             self.context.target_edge_map,
             self.risk.planning_risk,
@@ -169,7 +328,7 @@ class SharedRiskAwareness:
             hard_unsafe_map=self.risk.hard_unsafe,
             frontier_points=self.context.target_points,
             route_cells=route_cells,
-            route_is_proxy=True,
+            route_is_proxy=route_is_proxy,
             thresholds=self.thresholds,
         )
 
@@ -279,4 +438,5 @@ __all__ = [
     "SharedRiskAwareness",
     "grid_line_cells",
     "low_risk_fallback_goal",
+    "risk_aware_route_cells",
 ]

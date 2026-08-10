@@ -15,6 +15,7 @@ from .pointnav import (
     frontier_grid_to_world,
     load_pointnav_runtime_spec,
     shield_pointnav_action,
+    world_to_frontier_grid,
 )
 from .rl import (
     RL_CHECKPOINT_VERSION,
@@ -44,4 +45,5 @@ __all__ = [
     "save_rl_checkpoint",
     "validate_local_planner_config",
     "shield_pointnav_action",
+    "world_to_frontier_grid",
 ]

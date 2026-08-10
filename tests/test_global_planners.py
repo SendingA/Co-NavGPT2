@@ -21,6 +21,10 @@ from utils.global_planners.errors import GPTResponseError
 from utils.global_planners.gpt import GPTGlobalPlanner
 from utils.global_planners.risk_aware import RiskAwareGlobalPlanner
 from utils.global_planners.risk_aware import risk_utility_weights
+from utils.global_planners.risk_module import (
+    grid_line_cells,
+    risk_aware_route_cells,
+)
 
 
 def _context(
@@ -465,6 +469,72 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
         self.assertEqual(result.goal_points, [[8, 8], [8, 8]])
         self.assertTrue(result.frontier_reports[0].hard_blocked)
         self.assertEqual(result.frontier_computed_step, 37)
+
+    def test_frontier_route_goes_around_fire_instead_of_scoring_a_line(self) -> None:
+        shape = (15, 15)
+        risk = np.zeros(shape, dtype=np.float32)
+        hard = np.zeros(shape, dtype=bool)
+        risk[7, 3:12] = 1.0
+        hard[7, 3:12] = True
+
+        route = risk_aware_route_cells(
+            (7, 1),
+            (7, 13),
+            np.zeros(shape, dtype=np.float32),
+            np.ones(shape, dtype=np.float32),
+            risk,
+            hard,
+            risk_alpha=4.0,
+        )
+
+        self.assertIsNotNone(route)
+        route_array = np.asarray(route, dtype=int)
+        self.assertTrue(np.any(route_array[:, 0] != 7))
+        self.assertTrue(
+            np.any(
+                risk[
+                    np.asarray(grid_line_cells((7, 1), (7, 13), shape))[:, 0],
+                    np.asarray(grid_line_cells((7, 1), (7, 13), shape))[:, 1],
+                ]
+                > 0.0
+            )
+        )
+        self.assertFalse(np.any(hard[route_array[:, 0], route_array[:, 1]]))
+        self.assertEqual(
+            float(risk[route_array[:, 0], route_array[:, 1]].max()),
+            0.0,
+        )
+
+    def test_co_ut_keeps_valuable_frontier_when_safe_detour_exists(self) -> None:
+        shape = (12, 12)
+        planning_risk = np.zeros(shape, dtype=np.float32)
+        hard = np.zeros(shape, dtype=bool)
+        planning_risk[6, 2:9] = 1.0
+        hard[6, 2:9] = True
+        risk = RiskPlanningContext(
+            planning_risk=planning_risk,
+            confidence=np.ones(shape, dtype=np.float32),
+            hard_unsafe=hard,
+            danger_threshold=0.55,
+            hard_frontier_threshold=0.85,
+            frontier_weight=2.0,
+            map_resolution_cm=5.0,
+            route_risk_alpha=4.0,
+        )
+
+        result = create_global_planner("co_ut").plan(
+            _context(
+                points=((6, 10), (2, 2)),
+                scores=(50.0, 1.0),
+                poses=((6, 1, 0.0),),
+                cells=((6, 1),),
+                risk=risk,
+            )
+        )
+
+        self.assertEqual(result.frontier_assignments, {0: 0})
+        self.assertFalse(result.frontier_reports[0].route_is_proxy)
+        self.assertEqual(result.frontier_reports[0].route_max_risk, 0.0)
 
     def test_risk_reports_remain_in_each_agent_frontier_namespace(
         self,

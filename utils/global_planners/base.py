@@ -100,6 +100,7 @@ class RiskPlanningContext:
     hard_frontier_threshold: float
     frontier_weight: float
     map_resolution_cm: float
+    route_risk_alpha: float = 4.0
 
     def __post_init__(self) -> None:
         shape = np.asarray(self.planning_risk).shape
@@ -116,6 +117,8 @@ class RiskPlanningContext:
                 )
         if float(self.map_resolution_cm) <= 0.0:
             raise ValueError("map_resolution_cm must be positive")
+        if float(self.route_risk_alpha) < 0.0:
+            raise ValueError("route_risk_alpha must be non-negative")
 
 
 @dataclass(frozen=True)

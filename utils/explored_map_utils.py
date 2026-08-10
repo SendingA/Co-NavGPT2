@@ -258,7 +258,13 @@ class Global_Map_Proc():
                 dict_cost[i] = props[i].area
 
         if dict_cost:
-            dict_cost = sorted(dict_cost.items(), key=lambda x: x[1], reverse=False)
+            # The candidate budget is capped at six.  Retain the largest
+            # unexplored boundary components instead of tiny contour slivers;
+            # otherwise a hazard can permanently starve the only frontier
+            # leading around it to the target room.
+            dict_cost = sorted(
+                dict_cost.items(), key=lambda x: x[1], reverse=True
+            )
 
             for i, (key, value) in enumerate(dict_cost):
                 Goal_edge[img_label == key + 1] = i + 1
