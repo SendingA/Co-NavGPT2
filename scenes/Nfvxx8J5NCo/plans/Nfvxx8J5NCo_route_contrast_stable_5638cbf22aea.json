@@ -1,0 +1,781 @@
+{
+  "curation": {
+    "chosen_goal_cell": [
+      42,
+      78
+    ],
+    "combined_contrast": {
+      "accepted": true,
+      "aware": {
+        "cells": [
+          [
+            65,
+            21
+          ],
+          [
+            65,
+            22
+          ],
+          [
+            65,
+            23
+          ],
+          [
+            65,
+            24
+          ],
+          [
+            65,
+            25
+          ],
+          [
+            65,
+            26
+          ],
+          [
+            65,
+            27
+          ],
+          [
+            65,
+            28
+          ],
+          [
+            65,
+            29
+          ],
+          [
+            65,
+            30
+          ],
+          [
+            65,
+            31
+          ],
+          [
+            66,
+            32
+          ],
+          [
+            67,
+            33
+          ],
+          [
+            68,
+            34
+          ],
+          [
+            69,
+            35
+          ],
+          [
+            70,
+            36
+          ],
+          [
+            71,
+            37
+          ],
+          [
+            72,
+            38
+          ],
+          [
+            73,
+            39
+          ],
+          [
+            73,
+            40
+          ],
+          [
+            74,
+            41
+          ],
+          [
+            74,
+            42
+          ],
+          [
+            74,
+            43
+          ],
+          [
+            75,
+            44
+          ],
+          [
+            75,
+            45
+          ],
+          [
+            75,
+            46
+          ],
+          [
+            76,
+            47
+          ],
+          [
+            77,
+            48
+          ],
+          [
+            77,
+            49
+          ],
+          [
+            77,
+            50
+          ],
+          [
+            77,
+            51
+          ],
+          [
+            77,
+            52
+          ],
+          [
+            77,
+            53
+          ],
+          [
+            77,
+            54
+          ],
+          [
+            77,
+            55
+          ],
+          [
+            77,
+            56
+          ],
+          [
+            77,
+            57
+          ],
+          [
+            77,
+            58
+          ],
+          [
+            77,
+            59
+          ],
+          [
+            77,
+            60
+          ],
+          [
+            77,
+            61
+          ],
+          [
+            77,
+            62
+          ],
+          [
+            76,
+            62
+          ],
+          [
+            75,
+            62
+          ],
+          [
+            74,
+            62
+          ],
+          [
+            73,
+            62
+          ],
+          [
+            72,
+            62
+          ],
+          [
+            71,
+            62
+          ],
+          [
+            70,
+            62
+          ],
+          [
+            69,
+            62
+          ],
+          [
+            68,
+            62
+          ],
+          [
+            67,
+            62
+          ],
+          [
+            66,
+            62
+          ],
+          [
+            65,
+            62
+          ],
+          [
+            64,
+            62
+          ],
+          [
+            63,
+            62
+          ],
+          [
+            62,
+            63
+          ],
+          [
+            61,
+            63
+          ],
+          [
+            60,
+            63
+          ],
+          [
+            59,
+            63
+          ],
+          [
+            58,
+            63
+          ],
+          [
+            57,
+            63
+          ],
+          [
+            56,
+            63
+          ],
+          [
+            55,
+            63
+          ],
+          [
+            54,
+            64
+          ],
+          [
+            53,
+            65
+          ],
+          [
+            52,
+            66
+          ],
+          [
+            51,
+            66
+          ],
+          [
+            50,
+            67
+          ],
+          [
+            49,
+            67
+          ],
+          [
+            48,
+            68
+          ],
+          [
+            47,
+            69
+          ],
+          [
+            47,
+            70
+          ],
+          [
+            47,
+            71
+          ],
+          [
+            47,
+            72
+          ],
+          [
+            47,
+            73
+          ],
+          [
+            46,
+            74
+          ],
+          [
+            45,
+            75
+          ],
+          [
+            44,
+            76
+          ],
+          [
+            43,
+            77
+          ],
+          [
+            42,
+            78
+          ]
+        ],
+        "cumulative_exposure": 0.0,
+        "hard_unsafe_cells": 0,
+        "length_cells": 89.94112549695426,
+        "length_m": 8.994112549695426,
+        "max_risk": 0.0,
+        "mean_risk": 0.0,
+        "objective_cost": 89.94112549695426
+      },
+      "blind": {
+        "cells": [
+          [
+            65,
+            21
+          ],
+          [
+            65,
+            22
+          ],
+          [
+            65,
+            23
+          ],
+          [
+            65,
+            24
+          ],
+          [
+            65,
+            25
+          ],
+          [
+            65,
+            26
+          ],
+          [
+            65,
+            27
+          ],
+          [
+            65,
+            28
+          ],
+          [
+            65,
+            29
+          ],
+          [
+            64,
+            30
+          ],
+          [
+            63,
+            31
+          ],
+          [
+            62,
+            32
+          ],
+          [
+            61,
+            33
+          ],
+          [
+            60,
+            34
+          ],
+          [
+            59,
+            35
+          ],
+          [
+            58,
+            36
+          ],
+          [
+            57,
+            37
+          ],
+          [
+            56,
+            38
+          ],
+          [
+            55,
+            39
+          ],
+          [
+            54,
+            40
+          ],
+          [
+            53,
+            41
+          ],
+          [
+            52,
+            42
+          ],
+          [
+            51,
+            43
+          ],
+          [
+            50,
+            44
+          ],
+          [
+            49,
+            45
+          ],
+          [
+            48,
+            46
+          ],
+          [
+            47,
+            47
+          ],
+          [
+            46,
+            48
+          ],
+          [
+            46,
+            49
+          ],
+          [
+            45,
+            50
+          ],
+          [
+            44,
+            51
+          ],
+          [
+            43,
+            52
+          ],
+          [
+            43,
+            53
+          ],
+          [
+            43,
+            54
+          ],
+          [
+            43,
+            55
+          ],
+          [
+            43,
+            56
+          ],
+          [
+            43,
+            57
+          ],
+          [
+            43,
+            58
+          ],
+          [
+            43,
+            59
+          ],
+          [
+            43,
+            60
+          ],
+          [
+            43,
+            61
+          ],
+          [
+            43,
+            62
+          ],
+          [
+            43,
+            63
+          ],
+          [
+            43,
+            64
+          ],
+          [
+            43,
+            65
+          ],
+          [
+            43,
+            66
+          ],
+          [
+            43,
+            67
+          ],
+          [
+            43,
+            68
+          ],
+          [
+            43,
+            69
+          ],
+          [
+            43,
+            70
+          ],
+          [
+            43,
+            71
+          ],
+          [
+            43,
+            72
+          ],
+          [
+            43,
+            73
+          ],
+          [
+            43,
+            74
+          ],
+          [
+            43,
+            75
+          ],
+          [
+            43,
+            76
+          ],
+          [
+            43,
+            77
+          ],
+          [
+            42,
+            78
+          ]
+        ],
+        "cumulative_exposure": 31.07845827735372,
+        "hard_unsafe_cells": 15,
+        "length_cells": 66.52691193458118,
+        "length_m": 6.652691193458118,
+        "max_risk": 1.0,
+        "mean_risk": 0.43670615300150784,
+        "objective_cost": 66.52691193458118
+      },
+      "detour_ratio": 1.3519510057132562,
+      "exposure_reduction": 1.0,
+      "path_divergence": 0.9140625,
+      "reasons": [],
+      "score": 0.9027931669773884
+    },
+    "combined_max_goal_risk": 0.0,
+    "episode_id": "5",
+    "generator": "scripts/generate_episode_fire_plan.py",
+    "goal_cell_count": 611,
+    "native_goal_viewpoint_count": 812,
+    "object_category": "bed",
+    "protection": {
+      "allow_target_category_sources": false,
+      "max_goal_risk": 0.35,
+      "min_goal_centre_clearance_m": 1.5,
+      "min_goal_viewpoint_clearance_m": 1.2
+    },
+    "scene_id": "Nfvxx8J5NCo",
+    "schema_version": 1,
+    "source_progress_span_m": 1.3727922061357845,
+    "sources": [
+      {
+        "blind_path_progress_m": 3.8698484809834994,
+        "category": "trashcan",
+        "cell": [
+          44,
+          52
+        ],
+        "distance_to_blind_path_m": 0.1,
+        "distance_to_start_m": 3.8200968384289964,
+        "flammability": 0.45,
+        "nearest_goal_centre_clearance_m": 4.6252434142415195,
+        "nearest_goal_viewpoint_clearance_m": 2.0075494193628565,
+        "object_id": 51,
+        "position": [
+          -10.941875457763672,
+          0.2975989580154419,
+          1.1879395246505737
+        ]
+      },
+      {
+        "blind_path_progress_m": 3.204163056034263,
+        "category": "chair",
+        "cell": [
+          50,
+          48
+        ],
+        "distance_to_blind_path_m": 0.28284271247461906,
+        "distance_to_start_m": 3.1195008822485937,
+        "flammability": 0.55,
+        "nearest_goal_centre_clearance_m": 5.3708651702615935,
+        "nearest_goal_viewpoint_clearance_m": 2.762025637568844,
+        "object_id": 339,
+        "position": [
+          -10.312944412231445,
+          0.30985504388809204,
+          0.7187202572822571
+        ]
+      },
+      {
+        "blind_path_progress_m": 2.497056274847715,
+        "category": "chair",
+        "cell": [
+          59,
+          47
+        ],
+        "distance_to_blind_path_m": 0.848528137423857,
+        "distance_to_start_m": 2.964564115069738,
+        "flammability": 0.55,
+        "nearest_goal_centre_clearance_m": 5.722142002231492,
+        "nearest_goal_viewpoint_clearance_m": 3.1560068311428573,
+        "object_id": 340,
+        "position": [
+          -9.715981483459473,
+          0.25280219316482544,
+          0.7502775192260742
+        ]
+      }
+    ],
+    "start_cell": [
+      65,
+      21
+    ],
+    "start_position": [
+      -9.07278,
+      0.03086,
+      -2.14367
+    ]
+  },
+  "duration_s": 300.0,
+  "fire_type": "route_contrast",
+  "ignition_selection_mode": "curated_route_contrast",
+  "ignition_selection_version": 1,
+  "ignitions": [
+    {
+      "category": "trashcan",
+      "floor_spread_scale": 1.0,
+      "fuel_kg": 1.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 51,
+      "position": [
+        -10.941875457763672,
+        0.2975989580154419,
+        1.1879395246505737
+      ],
+      "smoke_yield": 0.48,
+      "source_radius_m": 0.58,
+      "source_temp_c": 820.0,
+      "sustain_s": 300.0
+    },
+    {
+      "category": "chair",
+      "floor_spread_scale": 1.0,
+      "fuel_kg": 1.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 339,
+      "position": [
+        -10.312944412231445,
+        0.30985504388809204,
+        0.7187202572822571
+      ],
+      "smoke_yield": 0.48,
+      "source_radius_m": 0.58,
+      "source_temp_c": 820.0,
+      "sustain_s": 300.0
+    },
+    {
+      "category": "chair",
+      "floor_spread_scale": 1.0,
+      "fuel_kg": 1.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 340,
+      "position": [
+        -9.715981483459473,
+        0.25280219316482544,
+        0.7502775192260742
+      ],
+      "smoke_yield": 0.48,
+      "source_radius_m": 0.58,
+      "source_temp_c": 820.0,
+      "sustain_s": 300.0
+    }
+  ],
+  "intensity": "stable",
+  "num_initial_ignitions": 3,
+  "plan_hash": "5638cbf22aea",
+  "plan_id": "Nfvxx8J5NCo_route_contrast_stable_5638cbf22aea",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.5,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 0,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.18,
+    "floor_fuel_value": 0.28,
+    "floor_ignite_radius_cells": 1,
+    "floor_ignite_temp_c": 275.0,
+    "floor_max_spread_radius_m": 0.95,
+    "floor_seed_flame_max": 0.45,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_speed_m_per_s": 0.0025,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.0,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 250.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "radiative_gain_c": 150.0,
+    "radiative_radius_cells": 2,
+    "secondary_floor_spread_scale": 0.45,
+    "spread_kernel": "gaussian",
+    "spread_speed_m_per_s": 0.035,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00880-Nfvxx8J5NCo/Nfvxx8J5NCo.basis.glb",
+  "scene_id": "Nfvxx8J5NCo",
+  "schema_version": 4,
+  "seed": 42,
+  "template_version": 1,
+  "world_aabb": [
+    -16.11662483215332,
+    -0.7191430032253265,
+    -4.802337169647217,
+    5.123380184173584,
+    3.3900370597839355,
+    6.8524489402771
+  ]
+}

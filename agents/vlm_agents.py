@@ -260,6 +260,7 @@ class VLM_Agent():
         self.risk_navigation_enabled = False
         self._risk_escape_active = False
         self._risk_escape_reason = None
+        self._local_goal_recovery_active = False
         
         self.upstair_flag = False
         self.downstair_flag = False
@@ -496,29 +497,10 @@ class VLM_Agent():
             self.curr_frontier_count = 0
                     
         act_time = time.time()
-        has_navigation_goal = len(self.object_pcd.points) > 0
-        if has_navigation_goal:
-            goal_pcd = process_pcd(self.object_pcd)
-            if self.found_goal == False:
-                self.goal_map = np.zeros((self.local_w, self.local_h))
-            self.goal_map[self.object_map_building(goal_pcd)] = 1
-            self.nearest_point = self.find_nearest_point_cloud(
-                goal_pcd, self.camera_position
-            )
-            x, y, z = self.nearest_point
-
-        if has_navigation_goal:
-            self.found_goal = True
-        else:
-            self.found_goal = False
-            self.goal_map = np.zeros((self.local_w, self.local_h))
-            self.goal_map[goal_points[0], goal_points[1]] = 1
-
-            x = ((goal_points[0] - int(self.origins_grid[0]))
-                 * self.args.map_resolution / 100.0)
-            y = self.camera_position[1]
-            z = ((goal_points[1] - int(self.origins_grid[1]))
-                 * self.args.map_resolution / 100.0)
+        has_navigation_goal, navigation_target = (
+            self._select_navigation_target(goal_points)
+        )
+        x, y, z = navigation_target
    
    
         Open3d_goal_pose = [x, y, z]
@@ -787,7 +769,11 @@ class VLM_Agent():
         if self.is_running == False:
             return None
         
-        if self.stop and getattr(self, '_risk_escape_active', False):
+        if getattr(self, '_local_goal_recovery_active', False):
+            # An empty local goal is a recoverable mapping condition, never
+            # ObjectNav completion. Rotate once for a fresh observation.
+            action = 2
+        elif self.stop and getattr(self, '_risk_escape_active', False):
             # Reaching an emergency waypoint is not task completion. Rotate
             # once so the next observation/act cycle can restore the original
             # goal without emitting Habitat STOP inside a hazard episode.
@@ -1003,7 +989,39 @@ class VLM_Agent():
 
         self._risk_escape_active = False
         self._risk_escape_reason = None
-        coordinate_offset = 0
+        self._local_goal_recovery_active = False
+        coordinate_offset = (
+            1 if risk_navigation_enabled or planner_name != 'fmm' else 0
+        )
+        if not np.any(goal == 1):
+            # Keep the lower-level planner mathematically well-defined while
+            # explicitly preventing this holding waypoint from becoming task
+            # STOP. The next act cycle falls back to frontier exploration.
+            held = (
+                int(np.clip(
+                    start[0] - x1 + coordinate_offset,
+                    0,
+                    goal.shape[0] - 1,
+                )),
+                int(np.clip(
+                    start[1] - y1 + coordinate_offset,
+                    0,
+                    goal.shape[1] - 1,
+                )),
+            )
+            logging.warning(
+                "[agent %d step %d] empty local goal; "
+                "holding at %s and requesting frontier recovery",
+                self.agent_id,
+                int(self.l_step),
+                held,
+            )
+            goal = np.zeros_like(goal)
+            goal[held] = 1
+            self._local_goal_recovery_active = True
+            self.found_goal = False
+            self.object_pcd.clear()
+
         if risk_navigation_enabled or planner_name != 'fmm':
             # Risk arrays follow the padded map exactly. The legacy branch
             # historically omitted this +1 offset, so correct it only for the
@@ -1221,6 +1239,105 @@ class VLM_Agent():
         nearest_point = np.asarray(point_cloud.points)[idx[0]]
         
         return nearest_point
+
+    def _reject_object_navigation_goal(
+        self, reason, raw_point_count, processed_point_count
+    ):
+        logging.warning(
+            "[agent %d step %d] reject detected-object goal: "
+            "reason=%s raw_points=%d processed_points=%d "
+            "map_xz=[%.2f, %.2f]x[%.2f, %.2f]",
+            self.agent_id,
+            int(self.l_step),
+            reason,
+            int(raw_point_count),
+            int(processed_point_count),
+            float(self.origins_real[0] - self.map_real_halfsize),
+            float(self.origins_real[0] + self.map_real_halfsize),
+            float(self.origins_real[1] - self.map_real_halfsize),
+            float(self.origins_real[1] + self.map_real_halfsize),
+        )
+        self.object_pcd.clear()
+        self.goal_map = np.zeros((self.local_w, self.local_h))
+        self.nearest_point = None
+        return None
+
+    def _detected_object_navigation_target(self):
+        """Return a usable detected-object target or reject it safely."""
+
+        raw_point_count = len(self.object_pcd.points)
+        if raw_point_count == 0:
+            return None
+
+        goal_pcd = process_pcd(self.object_pcd)
+        processed_point_count = len(goal_pcd.points)
+        if processed_point_count == 0:
+            return self._reject_object_navigation_goal(
+                "empty_after_denoising",
+                raw_point_count,
+                processed_point_count,
+            )
+
+        goal_indices = self.object_map_building(goal_pcd)
+        if len(goal_indices[0]) == 0:
+            return self._reject_object_navigation_goal(
+                "outside_local_map",
+                raw_point_count,
+                processed_point_count,
+            )
+
+        if not self.found_goal:
+            self.goal_map = np.zeros((self.local_w, self.local_h))
+        self.goal_map[goal_indices] = 1
+        if not np.any(self.goal_map):
+            return self._reject_object_navigation_goal(
+                "empty_projected_goal_map",
+                raw_point_count,
+                processed_point_count,
+            )
+
+        nearest_point = np.asarray(
+            self.find_nearest_point_cloud(goal_pcd, self.camera_position),
+            dtype=np.float64,
+        )
+        if nearest_point.shape != (3,) or not np.all(np.isfinite(nearest_point)):
+            return self._reject_object_navigation_goal(
+                "invalid_nearest_point",
+                raw_point_count,
+                processed_point_count,
+            )
+        self.nearest_point = nearest_point
+        return nearest_point
+
+    def _select_navigation_target(self, goal_points):
+        """Choose a valid object target, otherwise retain frontier motion."""
+
+        object_target = self._detected_object_navigation_target()
+        if object_target is not None:
+            self.found_goal = True
+            return True, object_target
+
+        self.found_goal = False
+        row, col = int(goal_points[0]), int(goal_points[1])
+        if not (0 <= row < self.local_w and 0 <= col < self.local_h):
+            raise ValueError(
+                "frontier goal {} is outside agent map {}".format(
+                    [row, col], (self.local_w, self.local_h)
+                )
+            )
+        self.goal_map = np.zeros((self.local_w, self.local_h))
+        self.goal_map[row, col] = 1
+        target = np.asarray(
+            [
+                (row - int(self.origins_grid[0]))
+                * self.args.map_resolution / 100.0,
+                self.camera_position[1],
+                (col - int(self.origins_grid[1]))
+                * self.args.map_resolution / 100.0,
+            ],
+            dtype=np.float64,
+        )
+        return False, target
     
     
     def object_map_building(self, point_sum):
@@ -1228,7 +1345,8 @@ class VLM_Agent():
         points = np.asarray(point_sum.points)
         colors = np.asarray(point_sum.colors)
 
-        mask = (points[:, 0] >= self.origins_real[0] - self.map_real_halfsize) & \
+        mask = np.isfinite(points[:, 0]) & np.isfinite(points[:, 2]) & \
+                (points[:, 0] >= self.origins_real[0] - self.map_real_halfsize) & \
                 (points[:, 0] <= self.origins_real[0] + self.map_real_halfsize) & \
                 (points[:, 2] >= self.origins_real[1] - self.map_real_halfsize) & \
                 (points[:, 2] <= self.origins_real[1] + self.map_real_halfsize)
@@ -1239,8 +1357,13 @@ class VLM_Agent():
         # 计算二维地图的索引ww
         i_values = np.floor((points_filtered[:, 0])*100 / self.args.map_resolution).astype(int) + int(self.origins_grid[0])
         j_values = np.floor((points_filtered[:, 2])*100 / self.args.map_resolution).astype(int) + int(self.origins_grid[1])
-        
-        return i_values, j_values
+        valid = (
+            (i_values >= 0)
+            & (i_values < self.local_w)
+            & (j_values >= 0)
+            & (j_values < self.local_h)
+        )
+        return i_values[valid], j_values[valid]
 
       
     def remove_full_points_cell(self, point_sum, camera_position):

@@ -274,6 +274,10 @@ class FMMPlanner():
             )
         traversible_ma = ma.masked_values(self.traversible * 1, 0) #mask掉障碍物层(0),只剩空白区域
         goal_cells = goal_map == 1
+        if not np.any(goal_cells):
+            raise ValueError(
+                "goal_map must contain at least one goal cell before FMM solve"
+            )
         self.traversible[goal_cells] = 1.0
         self.hard_unsafe_mask[goal_cells] = False
         traversible_ma[goal_cells] = 0 # 除去障碍物层的地图，目标为0，其他为1

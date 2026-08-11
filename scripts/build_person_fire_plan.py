@@ -33,9 +33,11 @@ from utils.fire_world.fine_tuning import (  # noqa: E402
     build_curated_plan,
     evaluate_fireworld_snapshot,
     evaluate_route_contrast,
-    radial_hazard_map,
     route_overlay,
     write_curated_plan,
+)
+from utils.fire_world.episode_plan import (  # noqa: E402
+    combined_radial_hazard_map,
 )
 from utils.fire_world.runtime import FireWorld  # noqa: E402
 
@@ -149,19 +151,15 @@ def combined_surrogate(
     core_radius_m: float,
     risk_radius_m: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    risk = np.zeros(shape, dtype=np.float32)
-    hard = np.zeros(shape, dtype=bool)
-    for cell in ignition_cells:
-        source_risk, source_hard = radial_hazard_map(
-            shape,
-            cell,
-            resolution_m=resolution_m,
-            core_radius_m=core_radius_m,
-            risk_radius_m=risk_radius_m,
-        )
-        risk = np.maximum(risk, source_risk)
-        hard |= source_hard
-    return risk, hard
+    """Backward-compatible wrapper around the generic multi-source union."""
+
+    return combined_radial_hazard_map(
+        shape,
+        ignition_cells,
+        resolution_m=resolution_m,
+        core_radius_m=core_radius_m,
+        risk_radius_m=risk_radius_m,
+    )
 
 
 def _mark_person(
