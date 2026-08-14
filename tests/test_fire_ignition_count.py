@@ -11,12 +11,16 @@ from utils.fire_world.planner import (
     build_plan,
     plan_hash_for,
     plan_id_for,
+    scenario_rng_seed,
     write_plan,
 )
 from utils.fire_world.plan_ids import semantic_plan_id
 from utils.fire_world.templates import (
     IGNITION_SELECTION_VERSION,
-    MULTI_ORIGIN_INITIAL_CATEGORIES,
+    MULTI_ORIGIN_AREAS_MAX,
+    MULTI_ORIGIN_AREAS_MIN,
+    MULTI_ORIGIN_SOURCES_PER_AREA_MAX,
+    MULTI_ORIGIN_SOURCES_PER_AREA_MIN,
     TEMPLATE_VERSION,
 )
 
@@ -31,8 +35,9 @@ def _instance(
     x,
     z=0.0,
     flammability=0.8,
+    region_id=None,
 ):
-    return {
+    instance = {
         "instance_id": object_id,
         "category": category,
         "centroid": [x, 0.5, z],
@@ -42,6 +47,9 @@ def _instance(
         "smoke_yield": 0.6,
         "structural": False,
     }
+    if region_id is not None:
+        instance["region_id"] = region_id
+    return instance
 
 
 def _inventory(instances):
@@ -121,8 +129,61 @@ class FireIgnitionCountTests(unittest.TestCase):
             plan["ignition_selection_version"],
             IGNITION_SELECTION_VERSION,
         )
-        self.assertIn(plan["num_initial_ignitions"], (2, 3))
+        self.assertGreaterEqual(plan["num_initial_ignitions"], 7)
+        self.assertLessEqual(plan["num_initial_ignitions"], 10)
+        self.assertEqual(
+            plan["default_initial_ignition_range"],
+            {"min": 7, "max": 10},
+        )
         self._assert_initial_only(plan)
+
+    def test_default_intensity_source_count_tiers(self):
+        for intensity, expected_min, expected_max in (
+            ("light", 2, 2),
+            ("medium", 4, 6),
+            ("severe", 7, 10),
+        ):
+            with self.subTest(intensity=intensity):
+                plan = build_plan(
+                    self.inventory,
+                    "bedroom_textile",
+                    intensity,
+                    seed=19,
+                )
+                self.assertGreaterEqual(
+                    plan["num_initial_ignitions"], expected_min
+                )
+                self.assertLessEqual(
+                    plan["num_initial_ignitions"], expected_max
+                )
+                self.assertEqual(
+                    plan["default_initial_ignition_range"],
+                    {"min": expected_min, "max": expected_max},
+                )
+                self._assert_initial_only(plan)
+
+    def test_scenario_rng_is_stable_and_scene_specific(self):
+        seed_a = scenario_rng_seed(
+            "scene_a", "bedroom_textile", "medium", 42
+        )
+        self.assertEqual(
+            seed_a,
+            scenario_rng_seed(
+                "scene_a", "bedroom_textile", "medium", 42
+            ),
+        )
+        self.assertNotEqual(
+            seed_a,
+            scenario_rng_seed(
+                "scene_b", "bedroom_textile", "medium", 42
+            ),
+        )
+        self.assertNotEqual(
+            seed_a,
+            scenario_rng_seed(
+                "scene_a", "bedroom_textile", "severe", 42
+            ),
+        )
 
     def test_explicit_count_is_exact_total_plan_count(self):
         requested = 4
@@ -207,14 +268,14 @@ class FireIgnitionCountTests(unittest.TestCase):
         self.assertEqual(plan_a["plan_id"], expected_id)
         self.assertEqual(plan_a["plan_hash"], expected_hash)
 
-    def test_multi_origin_honors_exact_initial_count_and_same_floor(self):
-        with self.assertRaisesRegex(ValueError, "requires num_ignitions >= 2"):
+    def test_multi_origin_honors_exact_count_with_area_stratification(self):
+        with self.assertRaisesRegex(RuntimeError, "cannot distribute"):
             build_plan(
                 self.inventory,
                 "multi_origin",
                 "light",
                 seed=7,
-                num_ignitions=1,
+                num_ignitions=3,
             )
 
         plan = build_plan(
@@ -225,14 +286,83 @@ class FireIgnitionCountTests(unittest.TestCase):
             num_ignitions=8,
         )
         self._assert_initial_only(plan, expected_count=8)
+        self.assertEqual(
+            plan["ignition_selection_mode"],
+            "area_stratified_initial_only",
+        )
+        policy = plan["multi_origin_area_policy"]
+        area_counts = {
+            int(area_id): int(count)
+            for area_id, count in policy["sources_per_area"].items()
+        }
+        self.assertGreaterEqual(len(area_counts), MULTI_ORIGIN_AREAS_MIN)
+        self.assertLessEqual(len(area_counts), MULTI_ORIGIN_AREAS_MAX)
+        self.assertEqual(sum(area_counts.values()), 8)
         self.assertTrue(
             all(
-                item["category"] in MULTI_ORIGIN_INITIAL_CATEGORIES
-                for item in plan["ignitions"]
+                MULTI_ORIGIN_SOURCES_PER_AREA_MIN
+                <= count
+                <= MULTI_ORIGIN_SOURCES_PER_AREA_MAX
+                for count in area_counts.values()
             )
         )
-        ys = [item["position"][1] for item in plan["ignitions"]]
-        self.assertLessEqual(max(ys) - min(ys), 1.5 + 1e-6)
+        observed = {}
+        for ignition in plan["ignitions"]:
+            region_id = int(ignition["region_id"])
+            observed[region_id] = observed.get(region_id, 0) + 1
+        self.assertEqual(observed, area_counts)
+
+    def test_multi_origin_default_uses_four_to_six_areas(self):
+        for intensity in ("light", "medium", "severe"):
+            with self.subTest(intensity=intensity):
+                plan = build_plan(
+                    self.inventory,
+                    "multi_origin",
+                    intensity,
+                    seed=31,
+                )
+                policy = plan["multi_origin_area_policy"]
+                area_counts = list(policy["sources_per_area"].values())
+                self.assertGreaterEqual(
+                    len(area_counts), MULTI_ORIGIN_AREAS_MIN
+                )
+                self.assertLessEqual(
+                    len(area_counts), MULTI_ORIGIN_AREAS_MAX
+                )
+                self.assertTrue(
+                    all(
+                        MULTI_ORIGIN_SOURCES_PER_AREA_MIN
+                        <= count
+                        <= MULTI_ORIGIN_SOURCES_PER_AREA_MAX
+                        for count in area_counts
+                    )
+                )
+                self.assertEqual(sum(area_counts), len(plan["ignitions"]))
+                self.assertEqual(
+                    plan["default_initial_ignition_range"],
+                    {"min": 4, "max": 12},
+                )
+
+    def test_multi_origin_does_not_use_a_category_whitelist(self):
+        scene = _inventory([
+            _instance(1, "cabinet", 0.0, region_id=10),
+            _instance(2, "lamp", 2.0, region_id=20),
+            _instance(3, "laptop", 4.0, region_id=30),
+            _instance(4, "curtain", 6.0, region_id=40),
+        ])
+
+        plan = build_plan(
+            scene,
+            "multi_origin",
+            "light",
+            seed=9,
+        )
+
+        self.assertEqual(
+            {item["category"] for item in plan["ignitions"]},
+            {"cabinet", "lamp", "laptop", "curtain"},
+        )
+        self.assertEqual(len(plan["ignitions"]), 4)
 
     def test_invalid_count_and_initial_shortage_fail_clearly(self):
         for invalid in (0, -1):

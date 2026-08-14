@@ -19,9 +19,9 @@ from typing import Callable, Dict, List, Optional
 import numpy as np
 
 
-TEMPLATE_VERSION = 10
+TEMPLATE_VERSION = 12
 # Version of the contract in which templates select t=0 sources only.
-IGNITION_SELECTION_VERSION = 1
+IGNITION_SELECTION_VERSION = 2
 
 
 # Exact HM3D semantic.txt category spellings.  Keep these as raw lowercase
@@ -81,25 +81,14 @@ LIVING_ELECTRIC_FALLBACK_CATEGORIES = (
     "record player",
     "radio",
 )
-# multi_origin sources should be stable, low floor-standing furniture.
-# Cabinets/wardrobes and small or elevated objects (lamp, pillow, laptop,
-# wall TV, curtain) create implausible initial flames near head/ceiling height,
-# so they are excluded from the planner's t=0 source pool. They may still
-# ignite later when the propagation solver heats their fuel voxels.
-MULTI_ORIGIN_INITIAL_CATEGORIES = (
-    "bed",
-    "bed small",
-    "bedframe",
-    "sofa",
-    "couch",
-    "armchair",
-    "chair",
-    "table",
-    "rug",
-    "carpet",
-    "desk",
-    "ottoman",
-)
+# ``multi_origin`` is area-stratified rather than category-stratified. It
+# samples HM3D semantic regions first, then any non-structural object whose
+# material flammability meets the physical threshold. No furniture whitelist
+# is used for this template.
+MULTI_ORIGIN_AREAS_MIN = 4
+MULTI_ORIGIN_AREAS_MAX = 6
+MULTI_ORIGIN_SOURCES_PER_AREA_MIN = 1
+MULTI_ORIGIN_SOURCES_PER_AREA_MAX = 2
 
 TEMPLATE_CATEGORY_GROUPS = {
     "kitchen_grease_fire": {
@@ -131,17 +120,17 @@ class IntensityPreset:
 
 INTENSITIES: Dict[str, IntensityPreset] = {
     "light": IntensityPreset(
-        n_ignitions_min=1, n_ignitions_max=1,
+        n_ignitions_min=2, n_ignitions_max=2,
         source_temp_c=550.0, fuel_kg=2.0,
         duration_s=300.0,
     ),
     "medium": IntensityPreset(
-        n_ignitions_min=1, n_ignitions_max=2,
+        n_ignitions_min=4, n_ignitions_max=6,
         source_temp_c=750.0, fuel_kg=5.0,
         duration_s=600.0,
     ),
     "severe": IntensityPreset(
-        n_ignitions_min=2, n_ignitions_max=3,
+        n_ignitions_min=7, n_ignitions_max=10,
         source_temp_c=950.0, fuel_kg=10.0,
         duration_s=900.0,
     ),
@@ -215,7 +204,7 @@ def _make_ignition(obj: Dict, t_s: float, preset: IntensityPreset, rng: np.rando
     smoke_yield = float(np.clip(obj.get("smoke_yield", 0.4), 0.05, 1.0))
     # Temperature: small object-level jitter for variety, deterministic by RNG.
     temp = float(preset.source_temp_c + rng.uniform(-30.0, 30.0))
-    return {
+    ignition = {
         "object_id": int(obj["object_id"]),
         "category": obj["category"],
         "position": list(map(float, _object_center(obj))),
@@ -225,6 +214,11 @@ def _make_ignition(obj: Dict, t_s: float, preset: IntensityPreset, rng: np.rando
         "fuel_kg": float(round(fuel, 3)),
         "smoke_yield": float(round(smoke_yield, 3)),
     }
+    if obj.get("region_id") is not None:
+        ignition["region_id"] = int(obj["region_id"])
+    if obj.get("floor_id") is not None:
+        ignition["floor_id"] = int(obj["floor_id"])
+    return ignition
 
 
 def _weighted_sample_without_replacement(
@@ -277,67 +271,137 @@ def _pick_explicit_initials(
             )
         return _weighted_sample_without_replacement(pool, n_initial, rng)
 
-    initial_categories = {
-        category.lower() for category in MULTI_ORIGIN_INITIAL_CATEGORIES
+    return _pick_multi_origin_area_initials(
+        objects,
+        rng,
+        n_initial=n_initial,
+    )
+
+
+def _multi_origin_candidates_by_area(
+    objects: List[Dict],
+) -> Dict[int, List[Dict]]:
+    """Group all physically eligible multi-origin objects by HM3D region."""
+    grouped: Dict[int, List[Dict]] = {}
+    for obj in objects:
+        region_id = obj.get("region_id")
+        if region_id is None or obj.get("flammability", 0.0) < 0.4:
+            continue
+        grouped.setdefault(int(region_id), []).append(obj)
+    return {
+        region_id: sorted(items, key=lambda obj: int(obj["object_id"]))
+        for region_id, items in sorted(grouped.items())
     }
-    raw_candidates = [
-        o
-        for o in objects
-        if o.get("flammability", 0.0) >= 0.4
-        and o["category"].lower() in initial_categories
-    ]
-    if len(raw_candidates) < n_initial:
+
+
+def _sample_objects_from_area(
+    objects: List[Dict],
+    count: int,
+    rng: np.random.Generator,
+) -> List[Dict]:
+    indices = rng.choice(len(objects), size=count, replace=False)
+    return [objects[int(index)] for index in np.atleast_1d(indices)]
+
+
+def _pick_multi_origin_area_initials(
+    objects: List[Dict],
+    rng: np.random.Generator,
+    n_initial: Optional[int] = None,
+) -> List[Dict]:
+    """Choose 4-6 random areas and 1-2 random sources in each area."""
+    by_area = _multi_origin_candidates_by_area(objects)
+    area_ids = sorted(by_area)
+    maximum_areas = min(MULTI_ORIGIN_AREAS_MAX, len(area_ids))
+    if maximum_areas < MULTI_ORIGIN_AREAS_MIN:
         raise RuntimeError(
-            f"template {fire_type!r} could not satisfy "
-            f"num_ignitions={n_initial}: only {len(raw_candidates)} eligible "
-            "flammable initial ignition objects are available"
+            "template 'multi_origin' needs at least "
+            f"{MULTI_ORIGIN_AREAS_MIN} areas with flammable non-structural "
+            f"objects, but only {len(area_ids)} are available"
         )
 
-    # multi_origin remains a same-floor stress test. Choose the floor with the
-    # richest eligible pool, then use farthest-point sampling so the t=0
-    # sources cover distinct areas rather than collapsing into one corner.
-    ys = np.asarray([_object_center(o)[1] for o in raw_candidates])
-    bins = np.round(ys / 1.5).astype(int)
-    counts = {
-        int(bin_id): int(np.sum(bins == bin_id))
-        for bin_id in sorted(set(bins.tolist()))
-    }
-    valid_bins = [bin_id for bin_id, count in counts.items()
-                  if count >= n_initial]
-    if not valid_bins:
-        largest_floor_pool = max(counts.values(), default=0)
-        raise RuntimeError(
-            f"template {fire_type!r} could not satisfy "
-            f"num_ignitions={n_initial}: the largest same-floor group has "
-            f"only {largest_floor_pool} eligible initial ignition objects"
+    sources_per_area: Dict[int, int] = {}
+    if n_initial is None:
+        area_count = int(
+            rng.integers(MULTI_ORIGIN_AREAS_MIN, maximum_areas + 1)
         )
-    best_bin = max(valid_bins, key=lambda bin_id: (counts[bin_id], -bin_id))
-    floor_objects = [
-        obj for obj, bin_id in zip(raw_candidates, bins)
-        if int(bin_id) == best_bin
-    ]
-    centres = np.asarray([_object_center(o) for o in floor_objects])
-    weights = np.asarray(
-        [max(0.05, obj.get("flammability", 0.3)) for obj in floor_objects],
-        dtype=np.float64,
-    )
-    weights /= weights.sum()
-    first = int(rng.choice(len(floor_objects), p=weights))
-    selected = [first]
-    for _ in range(1, n_initial):
-        distances = np.min(
-            np.linalg.norm(
-                centres[:, None, [0, 2]]
-                - centres[selected][None, :, [0, 2]],
-                axis=-1,
-            ),
-            axis=1,
+        selected_area_ids = [
+            int(area_id)
+            for area_id in np.atleast_1d(
+                rng.choice(area_ids, size=area_count, replace=False)
+            )
+        ]
+        for area_id in selected_area_ids:
+            upper = min(
+                MULTI_ORIGIN_SOURCES_PER_AREA_MAX,
+                len(by_area[area_id]),
+            )
+            sources_per_area[area_id] = int(
+                rng.integers(MULTI_ORIGIN_SOURCES_PER_AREA_MIN, upper + 1)
+            )
+    else:
+        requested = int(n_initial)
+        feasible_area_counts = []
+        two_source_areas = sum(len(items) >= 2 for items in by_area.values())
+        for area_count in range(MULTI_ORIGIN_AREAS_MIN, maximum_areas + 1):
+            if (
+                area_count <= requested <= 2 * area_count
+                and requested - area_count <= two_source_areas
+            ):
+                feasible_area_counts.append(area_count)
+        if not feasible_area_counts:
+            capacity = sum(
+                min(MULTI_ORIGIN_SOURCES_PER_AREA_MAX, len(items))
+                for items in sorted(
+                    by_area.values(), key=len, reverse=True
+                )[:maximum_areas]
+            )
+            raise RuntimeError(
+                "template 'multi_origin' cannot distribute "
+                f"num_ignitions={requested} across "
+                f"{MULTI_ORIGIN_AREAS_MIN}-{maximum_areas} areas with "
+                "1-2 sources per area; current capacity is "
+                f"{capacity} sources"
+            )
+        area_count = int(rng.choice(feasible_area_counts))
+        double_count = requested - area_count
+        double_candidates = [
+            area_id for area_id in area_ids if len(by_area[area_id]) >= 2
+        ]
+        double_areas = set(
+            int(area_id)
+            for area_id in np.atleast_1d(
+                rng.choice(
+                    double_candidates,
+                    size=double_count,
+                    replace=False,
+                )
+            )
         )
-        distances[selected] = -1.0
-        # Prefer high flammability only when spatial distances tie.
-        score = distances + 1e-6 * weights
-        selected.append(int(np.argmax(score)))
-    return [floor_objects[index] for index in selected]
+        remaining = [area_id for area_id in area_ids if area_id not in double_areas]
+        single_count = area_count - double_count
+        single_areas = set(
+            int(area_id)
+            for area_id in np.atleast_1d(
+                rng.choice(remaining, size=single_count, replace=False)
+            )
+        )
+        selected_area_ids = [
+            int(area_id)
+            for area_id in rng.permutation(sorted(double_areas | single_areas))
+        ]
+        sources_per_area = {
+            area_id: 2 if area_id in double_areas else 1
+            for area_id in selected_area_ids
+        }
+
+    selected: List[Dict] = []
+    for area_id in selected_area_ids:
+        selected.extend(
+            _sample_objects_from_area(
+                by_area[area_id], sources_per_area[area_id], rng
+            )
+        )
+    return selected
 
 
 def _initial_candidate_capacity(objects: List[Dict], fire_type: str) -> int:
@@ -353,22 +417,14 @@ def _initial_candidate_capacity(objects: List[Dict], fire_type: str) -> int:
             for obj in objects
         )
 
-    initial_categories = {
-        category.lower() for category in MULTI_ORIGIN_INITIAL_CATEGORIES
-    }
-    raw_candidates = [
-        obj
-        for obj in objects
-        if obj.get("flammability", 0.0) >= 0.4
-        and obj["category"].lower() in initial_categories
-    ]
-    if not raw_candidates:
+    by_area = _multi_origin_candidates_by_area(objects)
+    if len(by_area) < MULTI_ORIGIN_AREAS_MIN:
         return 0
-    ys = np.asarray([_object_center(obj)[1] for obj in raw_candidates])
-    bins = np.round(ys / 1.5).astype(int)
-    return max(
-        (int(np.sum(bins == bin_id)) for bin_id in set(bins.tolist())),
-        default=0,
+    return sum(
+        min(MULTI_ORIGIN_SOURCES_PER_AREA_MAX, len(items))
+        for items in sorted(by_area.values(), key=len, reverse=True)[
+            :MULTI_ORIGIN_AREAS_MAX
+        ]
     )
 
 
@@ -386,20 +442,26 @@ def build_template_ignitions(
     initial-object capacity. An explicit value is never reduced silently.
     No later object is scheduled here.
     """
-    if fire_type == "multi_origin" and n_initial is not None and n_initial < 2:
-        raise ValueError(
-            "fire_type='multi_origin' requires at least two initial sources"
+    objects = _inventory_pool(inv)
+    if fire_type == "multi_origin":
+        selected = _pick_multi_origin_area_initials(
+            objects,
+            rng,
+            n_initial=n_initial,
         )
+        ignitions = []
+        for obj in selected:
+            ignition = _make_ignition(obj, 0.0, preset, rng)
+            ignition["ignition_role"] = "initial"
+            ignitions.append(ignition)
+        return ignitions
+
     if n_initial is None:
         capacity = _initial_candidate_capacity(
-            _inventory_pool(inv), fire_type
+            objects, fire_type
         )
         minimum = int(preset.n_ignitions_min)
-        if fire_type == "multi_origin":
-            minimum = max(2, minimum)
         preset_maximum = int(preset.n_ignitions_max)
-        if fire_type == "multi_origin":
-            preset_maximum = max(2, preset_maximum)
         maximum = min(preset_maximum, capacity)
         if maximum < minimum:
             raise RuntimeError(
@@ -412,7 +474,6 @@ def build_template_ignitions(
         else:
             n_initial = int(rng.integers(minimum, maximum + 1))
 
-    objects = _inventory_pool(inv)
     selected = _pick_explicit_initials(
         objects, fire_type, int(n_initial), rng
     )

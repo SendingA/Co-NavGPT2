@@ -1,0 +1,157 @@
+{
+  "default_initial_ignition_range": {
+    "max": 6,
+    "min": 4
+  },
+  "duration_s": 600.0,
+  "fire_type": "living_room_electric",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "led tv",
+      "floor_id": 0,
+      "fuel_kg": 4.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 89,
+      "position": [
+        6.674997806549072,
+        1.3776969909667969,
+        11.074238777160645
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.6,
+      "source_temp_c": 773.3
+    },
+    {
+      "category": "tv",
+      "floor_id": 0,
+      "fuel_kg": 4.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 563,
+      "position": [
+        4.393924713134766,
+        1.1900286674499512,
+        11.912920951843262
+      ],
+      "region_id": 13,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.477,
+      "source_temp_c": 745.2
+    },
+    {
+      "category": "tv",
+      "floor_id": 0,
+      "fuel_kg": 4.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 403,
+      "position": [
+        -10.392313957214355,
+        1.1850244998931885,
+        8.130635261535645
+      ],
+      "region_id": 9,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.522,
+      "source_temp_c": 739.9
+    },
+    {
+      "category": "led tv",
+      "floor_id": 0,
+      "fuel_kg": 4.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 222,
+      "position": [
+        10.496600151062012,
+        1.5056884288787842,
+        2.346134662628174
+      ],
+      "region_id": 4,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.522,
+      "source_temp_c": 751.2
+    },
+    {
+      "category": "tv",
+      "floor_id": 0,
+      "fuel_kg": 4.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 463,
+      "position": [
+        -10.287373542785645,
+        1.2369372844696045,
+        16.101198196411133
+      ],
+      "region_id": 11,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.489,
+      "source_temp_c": 720.9
+    }
+  ],
+  "intensity": "medium",
+  "num_initial_ignitions": 5,
+  "plan_hash": "b62b867d0831",
+  "plan_id": "mv2HUxq3B53_living_room_electric_medium_b62b867d0831",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.5,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.5,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.2,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0044,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.3,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.008,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.75,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.35,
+    "object_spread_speed_m_per_s": 0.0066,
+    "radiative_gain_c": 200.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.12,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00876-mv2HUxq3B53/mv2HUxq3B53.basis.glb",
+  "scene_id": "mv2HUxq3B53",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -11.273249626159668,
+    -0.6496459990739822,
+    -5.181603908538818,
+    12.676860809326172,
+    3.69582200050354,
+    19.19385528564453
+  ]
+}

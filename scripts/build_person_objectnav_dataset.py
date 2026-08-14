@@ -109,6 +109,39 @@ class ViewPointSamplingConfig:
                 raise ValueError("explicit view radii must be finite and non-negative")
 
 
+@dataclass(frozen=True)
+class AgentNavMeshConfig:
+    """Navmesh contract shared with the active HM3D ObjectNav runtime.
+
+    Habitat-Lab sets ``SimulatorConfiguration.navmesh_settings`` from the
+    configured navigation agent.  A bare Habitat-Sim instance otherwise loads
+    the asset's precomputed navmesh, which can have different connectivity.
+    Person goals and starts must be generated against the runtime navmesh.
+    """
+
+    radius: float = 0.18
+    height: float = 0.88
+    max_climb: float = 0.20
+    max_slope: float = 45.0
+    include_static_objects: bool = False
+
+    def __post_init__(self) -> None:
+        values = {
+            "radius": self.radius,
+            "height": self.height,
+            "max_climb": self.max_climb,
+            "max_slope": self.max_slope,
+        }
+        if any(not math.isfinite(float(value)) for value in values.values()):
+            raise ValueError("agent navmesh values must be finite")
+        if self.radius <= 0.0 or self.height <= 0.0:
+            raise ValueError("agent radius and height must be positive")
+        if self.max_climb < 0.0:
+            raise ValueError("agent max_climb must be non-negative")
+        if not 0.0 <= self.max_slope <= 90.0:
+            raise ValueError("agent max_slope must be in [0, 90]")
+
+
 def _read_json_gz(path: Path) -> dict:
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         return json.load(handle)
@@ -148,7 +181,11 @@ def _dataset_scene_id(scene_path: Path, scenes_dir: Path) -> str:
         return str(scene_path)
 
 
-def _make_simulator(scene_path: Path, scene_dataset_config: Path):
+def _make_simulator(
+    scene_path: Path,
+    scene_dataset_config: Path,
+    navmesh_config: AgentNavMeshConfig = AgentNavMeshConfig(),
+):
     try:
         import habitat_sim
     except ImportError as exc:
@@ -163,7 +200,23 @@ def _make_simulator(scene_path: Path, scene_dataset_config: Path):
     # Bullet ray casts are used to reject view points occluded by walls.
     backend.enable_physics = True
 
+    # Match Habitat-Lab's HabitatSim.create_sim_config() path.  Omitting this
+    # block silently loads the asset's precomputed navmesh; for some HM3D
+    # scenes that connects islands which the radius-0.18 runtime separates.
+    navmesh_settings = habitat_sim.nav.NavMeshSettings()
+    navmesh_settings.set_defaults()
+    navmesh_settings.agent_radius = float(navmesh_config.radius)
+    navmesh_settings.agent_height = float(navmesh_config.height)
+    navmesh_settings.agent_max_climb = float(navmesh_config.max_climb)
+    navmesh_settings.agent_max_slope = float(navmesh_config.max_slope)
+    navmesh_settings.include_static_objects = bool(
+        navmesh_config.include_static_objects
+    )
+    backend.navmesh_settings = navmesh_settings
+
     agent = habitat_sim.agent.AgentConfiguration()
+    agent.radius = float(navmesh_config.radius)
+    agent.height = float(navmesh_config.height)
     return habitat_sim.Simulator(habitat_sim.Configuration(backend, [agent]))
 
 
@@ -401,7 +454,9 @@ def _select_goal_and_views(
     source_episodes: Sequence[dict],
     *,
     config: ViewPointSamplingConfig,
-) -> Tuple[np.ndarray, List[dict]]:
+    episodes_per_scene: int,
+    min_start_distance: float,
+) -> Tuple[np.ndarray, List[dict], List[dict]]:
     candidates = unique_positions(
         episode.get("start_position", ()) for episode in source_episodes
     )
@@ -421,7 +476,15 @@ def _select_goal_and_views(
             coverage = _validate_view_point_coverage(
                 sim, snapped, views, config
             )
-        except ValueError as exc:
+            episodes = _person_episodes(
+                sim,
+                source_episodes,
+                snapped,
+                views,
+                episodes_per_scene=episodes_per_scene,
+                min_start_distance=min_start_distance,
+            )
+        except (ValueError, RuntimeError) as exc:
             last_error = exc
             continue
         print(
@@ -430,11 +493,11 @@ def _select_goal_and_views(
             f"max={coverage['max_geodesic']:.3f}m, "
             f"p95={coverage['p95_geodesic']:.3f}m"
         )
-        return snapped, views
+        return snapped, views, episodes
     detail = f": {last_error}" if last_error is not None else ""
     raise RuntimeError(
-        "could not find a person position with dense close-stop coverage"
-        f"{detail}"
+        "could not find a person position with dense close-stop coverage "
+        f"and reachable episode starts{detail}"
     )
 
 
@@ -503,6 +566,54 @@ def _person_episodes(
     return generated
 
 
+def _validate_episode_reachability(sim, shard: dict) -> int:
+    """Validate every stored start against its category view points.
+
+    Structural validation and close-stop coverage alone cannot detect a start
+    on a disconnected navmesh island.  This is also checked during generation,
+    but repeating it in ``--validate-only`` detects datasets made with stale or
+    differently parameterized navmeshes.
+    """
+
+    validated = 0
+    goals_by_category = shard.get("goals_by_category", {})
+    for episode in shard.get("episodes", []):
+        episode_id = str(episode.get("episode_id", "<missing>"))
+        key = person_goals_key(str(episode.get("scene_id", "")))
+        goals = goals_by_category.get(key, [])
+        view_positions = [
+            view["agent_state"]["position"]
+            for goal in goals
+            for view in goal.get("view_points", [])
+        ]
+        start = episode.get("start_position")
+        distance = (
+            math.inf
+            if not view_positions
+            or not isinstance(start, list)
+            or len(start) != 3
+            else _geodesic(sim, start, view_positions)
+        )
+        if not math.isfinite(distance):
+            raise ValueError(
+                f"episode {episode_id} start cannot reach person view points "
+                f"on the configured runtime navmesh"
+            )
+
+        stored = float(episode.get("info", {}).get(
+            "geodesic_distance", math.nan
+        ))
+        if not math.isfinite(stored) or not math.isclose(
+            stored, distance, rel_tol=1e-5, abs_tol=1e-4
+        ):
+            raise ValueError(
+                f"episode {episode_id} stored geodesic_distance={stored!r} "
+                f"does not match live runtime-navmesh distance={distance:.6f}"
+            )
+        validated += 1
+    return validated
+
+
 def build_scene_shard(
     source: dict,
     *,
@@ -511,46 +622,43 @@ def build_scene_shard(
     episodes_per_scene: int,
     min_start_distance: float,
     view_config: ViewPointSamplingConfig,
+    navmesh_config: AgentNavMeshConfig = AgentNavMeshConfig(),
 ) -> dict:
     source_episodes = source.get("episodes", [])
     if not source_episodes:
         raise ValueError("source shard contains no episodes")
 
-    sim = _make_simulator(scene_path, scene_dataset_config)
+    sim = _make_simulator(
+        scene_path, scene_dataset_config, navmesh_config
+    )
     try:
-        person_position, views = _select_goal_and_views(
+        person_position, views, episodes = _select_goal_and_views(
             sim,
             source_episodes,
             config=view_config,
-        )
-        episodes = _person_episodes(
-            sim,
-            source_episodes,
-            person_position,
-            views,
             episodes_per_scene=episodes_per_scene,
             min_start_distance=min_start_distance,
         )
+        shard = {
+            "goals_by_category": {
+                person_goals_key(episodes[0]["scene_id"]): [
+                    _person_goal(person_position, views)
+                ]
+            },
+            "episodes": episodes,
+            "category_to_task_category_id": dict(
+                source.get("category_to_task_category_id", {})
+            ),
+            "category_to_scene_annotation_category_id": dict(
+                source.get("category_to_scene_annotation_category_id", {})
+            ),
+        }
+        add_person_category_mappings(shard)
+        validate_person_dataset_dict(shard)
+        _validate_episode_reachability(sim, shard)
+        return shard
     finally:
         sim.close()
-
-    shard = {
-        "goals_by_category": {
-            person_goals_key(episodes[0]["scene_id"]): [
-                _person_goal(person_position, views)
-            ]
-        },
-        "episodes": episodes,
-        "category_to_task_category_id": dict(
-            source.get("category_to_task_category_id", {})
-        ),
-        "category_to_scene_annotation_category_id": dict(
-            source.get("category_to_scene_annotation_category_id", {})
-        ),
-    }
-    add_person_category_mappings(shard)
-    validate_person_dataset_dict(shard)
-    return shard
 
 
 def validate_dataset_root(
@@ -560,6 +668,7 @@ def validate_dataset_root(
     scenes_dir: Optional[Path] = None,
     scene_dataset_config: Optional[Path] = None,
     view_config: Optional[ViewPointSamplingConfig] = None,
+    navmesh_config: AgentNavMeshConfig = AgentNavMeshConfig(),
 ) -> int:
     """Validate structure and, when configured, live navmesh coverage."""
     if (scenes_dir is None) != (scene_dataset_config is None):
@@ -578,6 +687,7 @@ def validate_dataset_root(
         raise ValueError("index content_scenes count does not match shard count")
     episode_count = 0
     coverage_goal_count = 0
+    reachable_episode_count = 0
     for path in shard_paths:
         shard = _read_json_gz(path)
         validate_person_dataset_dict(shard)
@@ -586,7 +696,9 @@ def validate_dataset_root(
             continue
         scene_id = shard["episodes"][0]["scene_id"]
         sim = _make_simulator(
-            _scene_path(scene_id, scenes_dir), scene_dataset_config
+            _scene_path(scene_id, scenes_dir),
+            scene_dataset_config,
+            navmesh_config,
         )
         try:
             for goals in shard["goals_by_category"].values():
@@ -603,6 +715,9 @@ def validate_dataset_root(
                         f"{coverage['probe_count']} probes, "
                         f"max={coverage['max_geodesic']:.3f}m"
                     )
+            reachable_episode_count += _validate_episode_reachability(
+                sim, shard
+            )
         finally:
             sim.close()
     if not shard_paths:
@@ -611,7 +726,8 @@ def validate_dataset_root(
         f"[person-dataset] valid: {len(shard_paths)} scenes, "
         f"{episode_count} episodes"
         + (
-            f", {coverage_goal_count} goals with live coverage"
+            f", {coverage_goal_count} goals with live coverage, "
+            f"{reachable_episode_count} reachable starts"
             if view_config is not None else ""
         )
     )
@@ -633,6 +749,16 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--split", default="val_mini")
     parser.add_argument("--episodes-per-scene", type=int, default=20)
     parser.add_argument("--min-start-distance", type=float, default=1.5)
+    parser.add_argument("--agent-radius", type=float, default=0.18)
+    parser.add_argument("--agent-height", type=float, default=0.88)
+    parser.add_argument("--agent-max-climb", type=float, default=0.20)
+    parser.add_argument("--agent-max-slope", type=float, default=45.0)
+    parser.add_argument(
+        "--navmesh-include-static-objects",
+        type=int,
+        choices=(0, 1),
+        default=0,
+    )
     parser.add_argument("--view-min-radius", type=float, default=0.20)
     parser.add_argument("--view-max-radius", type=float, default=1.10)
     parser.add_argument("--view-grid-spacing", type=float, default=0.05)
@@ -686,6 +812,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         ),
         polar_angle_count=args.view_angle_count,
     )
+    navmesh_config = AgentNavMeshConfig(
+        radius=args.agent_radius,
+        height=args.agent_height,
+        max_climb=args.agent_max_climb,
+        max_slope=args.agent_max_slope,
+        include_static_objects=bool(args.navmesh_include_static_objects),
+    )
 
     if args.validate_only:
         validate_dataset_root(
@@ -696,6 +829,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 None if args.structural_only else scene_dataset_config
             ),
             view_config=None if args.structural_only else view_config,
+            navmesh_config=navmesh_config,
         )
         return 0
 
@@ -723,6 +857,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             episodes_per_scene=args.episodes_per_scene,
             min_start_distance=args.min_start_distance,
             view_config=view_config,
+            navmesh_config=navmesh_config,
         )
         canonical_scene_id = _dataset_scene_id(
             _scene_path(scene_id, scenes_dir), scenes_dir

@@ -93,7 +93,7 @@ are tiny (~0.2–1 MB) and review-friendly.
 | `__init__.py`        | Package skeleton + roadmap docstring |
 | `hm3d_semantic.py`   | GLB parser (no trimesh / habitat-sim), HM3D-specific sRGB OETF colour decoder, per-instance triangle aggregation |
 | `scene_scan.py`      | Stage 1: `build_inventory(scene_id) -> dict` + `write_inventory()` CLI. Schema v2: `instances` (every HM3D object), `floors`, `structural.{wall,floor,ceiling}_voxel_path` |
-| `templates.py`       | Stage 2 building blocks: `INTENSITIES`, exact semantic-backed `TEMPLATE_CATEGORY_GROUPS`, four templates (kitchen/bedroom/livingroom/multi_origin), and strict same-floor/category helpers |
+| `templates.py`       | Stage 2 building blocks: `INTENSITIES`, category groups for kitchen/bedroom/living-room, plus area-stratified multi_origin sampling (4–6 regions, 1–2 flammable sources each) |
 | `planner.py`         | Stage 2 driver: `plan_id = sha1(scene\|fire_type\|intensity\|seed\|tplV)[:12]`, `build_plan(inventory, ...) -> plan dict`, CLI |
 | `voxel_world.py`     | `VoxelWorld.from_aabb`, `attach_structural_masks`, `stamp_object_aabbs`, `kindle_ignition` (returns slice + falloff for sustained sources) |
 | `propagation.py`     | Stage 3: 6+1-step integrator (sub-stepped diffusion, buoyancy, ceiling jet, reaction, surface spread, decay, sustained-source pinning). Walls / floors / ceilings act as zero-flux barriers |
@@ -174,7 +174,7 @@ and the dehaze path have been removed.
 |---|---|
 | `build_inventory.py`              | Friendly wrapper to scan one or more scenes (single id, `--scene_dir`, or `--all val`). Stage-1 driver. |
 | `test_scene_scan.py`              | Smoke tests for stage-1 (material table, build_inventory, write_inventory). |
-| `test_fire_planner.py`            | Smoke tests for stage-2 (plan_id determinism, all 4×3 templates×intensities, same-floor invariant). |
+| `test_fire_planner.py`            | Smoke tests for stage-2 (plan_id determinism, all 4×3 templates×intensities, and multi-origin area-count invariants). |
 | `test_fire_propagation.py`        | Smoke tests for stage-3 (end-to-end run, determinism, smoke growth+decay, T@source > 600 °C). |
 | `keyboard_teleop_fire.py`         | WASD/QE/S/R teleop with FireWorld overlay. Walk through the scene and watch the fire evolve as you take steps. |
 | `keyboard_teleop.py`              | Legacy teleop (no fire overlay), kept for reference. |

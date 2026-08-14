@@ -1,0 +1,230 @@
+{
+  "default_initial_ignition_range": {
+    "max": 12,
+    "min": 4
+  },
+  "duration_s": 300.0,
+  "fire_type": "multi_origin",
+  "ignition_selection_mode": "area_stratified_initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "towel",
+      "floor_id": 0,
+      "fuel_kg": 2.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 380,
+      "position": [
+        -4.1499409675598145,
+        0.6297335624694824,
+        1.6679868698120117
+      ],
+      "region_id": 9,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.415,
+      "source_temp_c": 532.8
+    },
+    {
+      "category": "chair",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 133,
+      "position": [
+        5.710247993469238,
+        0.33723515272140503,
+        6.28851318359375
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.481,
+      "source_temp_c": 546.3
+    },
+    {
+      "category": "book",
+      "floor_id": 0,
+      "fuel_kg": 2.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 139,
+      "position": [
+        8.179444313049316,
+        0.7865846157073975,
+        6.101047515869141
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.36,
+      "source_temp_c": 557.4
+    },
+    {
+      "category": "trash can",
+      "floor_id": 0,
+      "fuel_kg": 1.92,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 368,
+      "position": [
+        -2.40387225151062,
+        0.23361854255199432,
+        2.1928608417510986
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.6,
+      "source_radius_m": 0.334,
+      "source_temp_c": 524.3
+    },
+    {
+      "category": "pillow",
+      "floor_id": 0,
+      "fuel_kg": 2.48,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 296,
+      "position": [
+        3.694575071334839,
+        0.7541818022727966,
+        6.974003314971924
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.435,
+      "source_temp_c": 547.1
+    },
+    {
+      "category": "pillow",
+      "floor_id": 0,
+      "fuel_kg": 2.48,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 297,
+      "position": [
+        3.7367584705352783,
+        0.6677542924880981,
+        6.723368167877197
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.38,
+      "source_temp_c": 558.1
+    },
+    {
+      "category": "kitchen cabinet",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 191,
+      "position": [
+        2.7278902530670166,
+        2.0324416160583496,
+        -0.08263585716485977
+      ],
+      "region_id": 3,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.6,
+      "source_temp_c": 534.8
+    },
+    {
+      "category": "pillow",
+      "floor_id": 0,
+      "fuel_kg": 2.48,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 343,
+      "position": [
+        -3.356175184249878,
+        0.9051461219787598,
+        7.330347537994385
+      ],
+      "region_id": 7,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.423,
+      "source_temp_c": 549.0
+    }
+  ],
+  "intensity": "light",
+  "multi_origin_area_policy": {
+    "area_count_max": 6,
+    "area_count_min": 4,
+    "selected_area_ids": [
+      2,
+      3,
+      5,
+      7,
+      8,
+      9
+    ],
+    "sources_per_area": {
+      "2": 2,
+      "3": 1,
+      "5": 2,
+      "7": 1,
+      "8": 1,
+      "9": 1
+    },
+    "sources_per_area_max": 2,
+    "sources_per_area_min": 1
+  },
+  "num_initial_ignitions": 8,
+  "plan_hash": "beabb58df43e",
+  "plan_id": "Dd4bFSTQ8gi_multi_origin_light_beabb58df43e",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.4,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 2,
+    "flame_column_decay": 0.45,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 1.4300000000000002,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0033,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.2,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.006,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.55,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.1880000000000002,
+    "object_spread_speed_m_per_s": 0.0049499999999999995,
+    "radiative_gain_c": 120.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.08399999999999999,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00824-Dd4bFSTQ8gi/Dd4bFSTQ8gi.basis.glb",
+  "scene_id": "Dd4bFSTQ8gi",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -5.785295009613037,
+    -0.8311760127544403,
+    -7.845156192779541,
+    10.822728157043457,
+    3.160191059112549,
+    8.403601169586182
+  ]
+}

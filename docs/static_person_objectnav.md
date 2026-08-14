@@ -21,6 +21,12 @@ view points. Source data is not modified; output is written to:
       <split>.json.gz
       content/<scene>.json.gz
 
+The generator explicitly supplies Habitat-Sim with the same navmesh settings
+used by the active HM3D ObjectNav runtime: agent radius 0.18 m, height 0.88 m,
+maximum climb 0.20 m, maximum slope 45 degrees, and no static objects baked
+into the navmesh. These values can be overridden with the corresponding
+`--agent-*` flags only when the runtime config is changed to match.
+
 Generate the smaller smoke-test split or limit generation to selected scenes
 with:
 
@@ -34,7 +40,11 @@ Validate an existing generated split against its live navmesh:
       --split val_mini --validate-only
 
 Use ``--structural-only`` only for a quick JSON/category check when scene
-assets or Habitat-Sim are unavailable.
+assets or Habitat-Sim are unavailable. Normal live validation recomputes both
+close-stop coverage and every episode start-to-viewpoint geodesic. It rejects
+non-finite paths and a stored geodesic that differs from the current runtime
+navmesh. Therefore an older person dataset generated with Habitat-Sim's bare
+precomputed navmesh must be regenerated, not merely resumed.
 
 The default view-point set is a 5 cm Cartesian lattice from 0.20 m to 1.10 m
 around the person's ground projection. Every retained point must be finite,

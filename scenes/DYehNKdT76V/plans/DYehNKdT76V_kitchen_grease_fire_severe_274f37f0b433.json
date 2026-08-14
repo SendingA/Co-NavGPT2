@@ -1,0 +1,225 @@
+{
+  "default_initial_ignition_range": {
+    "max": 10,
+    "min": 7
+  },
+  "duration_s": 900.0,
+  "fire_type": "kitchen_grease_fire",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 9,
+      "position": [
+        -8.097814559936523,
+        5.929145812988281,
+        -3.4100027084350586
+      ],
+      "region_id": 1,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.348,
+      "source_temp_c": 948.8
+    },
+    {
+      "category": "oven",
+      "floor_id": 0,
+      "fuel_kg": 11.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 237,
+      "position": [
+        4.568317413330078,
+        1.0092107057571411,
+        -2.685701847076416
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.459,
+      "source_temp_c": 953.7
+    },
+    {
+      "category": "stove",
+      "floor_id": 0,
+      "fuel_kg": 12.8,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 239,
+      "position": [
+        2.3817172050476074,
+        0.8897086381912231,
+        -2.7969069480895996
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.7,
+      "source_radius_m": 0.408,
+      "source_temp_c": 942.1
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 243,
+      "position": [
+        1.6036508083343506,
+        1.004280686378479,
+        -2.9949464797973633
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.328,
+      "source_temp_c": 973.3
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 55,
+      "position": [
+        -0.5677188038825989,
+        5.940797805786133,
+        -2.5018246173858643
+      ],
+      "region_id": 3,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.342,
+      "source_temp_c": 977.3
+    },
+    {
+      "category": "microwave",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 238,
+      "position": [
+        4.554398536682129,
+        1.4350522756576538,
+        -2.5190982818603516
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.405,
+      "source_temp_c": 922.6
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 0,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 291,
+      "position": [
+        -9.259428977966309,
+        2.720228672027588,
+        -3.0625810623168945
+      ],
+      "region_id": 10,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.353,
+      "source_temp_c": 928.2
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 0,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 160,
+      "position": [
+        0.41553041338920593,
+        2.617875814437866,
+        -5.642048358917236
+      ],
+      "region_id": 7,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.495,
+      "source_temp_c": 956.0
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 8,
+      "position": [
+        -9.07096004486084,
+        5.876854419708252,
+        -3.4078423976898193
+      ],
+      "region_id": 1,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.359,
+      "source_temp_c": 933.4
+    }
+  ],
+  "intensity": "severe",
+  "num_initial_ignitions": 9,
+  "plan_hash": "274f37f0b433",
+  "plan_id": "DYehNKdT76V_kitchen_grease_fire_severe_274f37f0b433",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.65,
+    "ceiling_jet_speed_m_per_s": 0.42,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.9700000000000006,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0055000000000000005,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.35,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.01,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.9,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.5120000000000002,
+    "object_spread_speed_m_per_s": 0.00825,
+    "radiative_gain_c": 300.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.18,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00843-DYehNKdT76V/DYehNKdT76V.basis.glb",
+  "scene_id": "DYehNKdT76V",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -10.235909461975098,
+    -0.763493001461029,
+    -7.476830959320068,
+    7.93357515335083,
+    6.622796058654785,
+    1.8358889818191528
+  ]
+}

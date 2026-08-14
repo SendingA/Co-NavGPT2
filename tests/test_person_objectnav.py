@@ -11,9 +11,12 @@ import numpy as np
 
 from constants import category_to_id
 from scripts.build_person_objectnav_dataset import (
+    AgentNavMeshConfig,
     ViewPointSamplingConfig,
     _coverage_probe_positions,
     _sample_view_points,
+    _select_goal_and_views,
+    _validate_episode_reachability,
 )
 from utils.fire_sensors.humans_thermal import (
     HumanThermalTarget,
@@ -64,6 +67,103 @@ def _valid_dataset() -> dict:
 
 
 class PersonObjectNavTests(unittest.TestCase):
+    def test_generator_navmesh_defaults_match_hm3d_runtime(self) -> None:
+        config = AgentNavMeshConfig()
+        self.assertEqual(config.radius, 0.18)
+        self.assertEqual(config.height, 0.88)
+        self.assertEqual(config.max_climb, 0.20)
+        self.assertEqual(config.max_slope, 45.0)
+        self.assertFalse(config.include_static_objects)
+
+        with self.assertRaisesRegex(ValueError, "radius and height"):
+            AgentNavMeshConfig(radius=0.0)
+
+    def test_live_validation_rejects_disconnected_episode_start(self) -> None:
+        dataset = _valid_dataset()
+        episode = dataset["episodes"][0]
+        episode.update({
+            "episode_id": "13",
+            "start_position": [0.0, 0.0, 0.0],
+            "info": {"geodesic_distance": 3.9},
+        })
+
+        with mock.patch(
+            "scripts.build_person_objectnav_dataset._geodesic",
+            return_value=math.inf,
+        ):
+            with self.assertRaisesRegex(
+                ValueError, "episode 13 start cannot reach"
+            ):
+                _validate_episode_reachability(object(), dataset)
+
+    def test_live_validation_checks_stored_geodesic(self) -> None:
+        dataset = _valid_dataset()
+        episode = dataset["episodes"][0]
+        episode.update({
+            "episode_id": "7",
+            "start_position": [0.0, 0.0, 0.0],
+            "info": {"geodesic_distance": 2.5},
+        })
+
+        with mock.patch(
+            "scripts.build_person_objectnav_dataset._geodesic",
+            return_value=2.5,
+        ):
+            self.assertEqual(
+                _validate_episode_reachability(object(), dataset), 1
+            )
+
+        with mock.patch(
+            "scripts.build_person_objectnav_dataset._geodesic",
+            return_value=2.75,
+        ):
+            with self.assertRaisesRegex(ValueError, "does not match live"):
+                _validate_episode_reachability(object(), dataset)
+
+    def test_goal_selection_retries_island_without_valid_starts(self) -> None:
+        source_episodes = [
+            {"start_position": [0.0, 0.0, 0.0]},
+            {"start_position": [5.0, 0.0, 0.0]},
+        ]
+        sim = SimpleNamespace(
+            pathfinder=SimpleNamespace(
+                snap_point=lambda value: np.asarray(value, dtype=np.float64)
+            )
+        )
+        views = [{
+            "agent_state": {
+                "position": [0.2, 0.0, 0.0],
+                "rotation": [0.0, 0.0, 0.0, 1.0],
+            }
+        }]
+
+        with mock.patch(
+            "scripts.build_person_objectnav_dataset._sample_view_points",
+            return_value=views,
+        ), mock.patch(
+            "scripts.build_person_objectnav_dataset._validate_view_point_coverage",
+            return_value={"probe_count": 1, "max_geodesic": 0.01,
+                          "p95_geodesic": 0.01},
+        ), mock.patch(
+            "scripts.build_person_objectnav_dataset._person_episodes",
+            side_effect=[
+                RuntimeError("no reachable starts"),
+                [{"episode_id": "0"}],
+            ],
+        ) as episode_builder:
+            goal, selected_views, episodes = _select_goal_and_views(
+                sim,
+                source_episodes,
+                config=ViewPointSamplingConfig(min_view_points=1),
+                episodes_per_scene=20,
+                min_start_distance=1.5,
+            )
+
+        np.testing.assert_allclose(goal, [5.0, 0.0, 0.0])
+        self.assertIs(selected_views, views)
+        self.assertEqual(episodes, [{"episode_id": "0"}])
+        self.assertEqual(episode_builder.call_count, 2)
+
     def test_person_id_is_aligned_with_detector_order(self) -> None:
         detector_classes = [
             "chair", "bed", "potted plant", "toilet",

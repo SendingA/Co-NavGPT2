@@ -1,0 +1,191 @@
+{
+  "default_initial_ignition_range": {
+    "max": 10,
+    "min": 7
+  },
+  "duration_s": 900.0,
+  "fire_type": "kitchen_grease_fire",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "toaster",
+      "floor_id": 0,
+      "fuel_kg": 9.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 203,
+      "position": [
+        4.199450492858887,
+        1.0809179544448853,
+        -1.472200632095337
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.381,
+      "source_temp_c": 959.4
+    },
+    {
+      "category": "kitchen extractor",
+      "floor_id": 0,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 216,
+      "position": [
+        4.202660083770752,
+        1.5437633991241455,
+        -0.9901806712150574
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.482,
+      "source_temp_c": 965.3
+    },
+    {
+      "category": "microwave",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 204,
+      "position": [
+        7.571929931640625,
+        1.1383142471313477,
+        0.09139300137758255
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.398,
+      "source_temp_c": 937.4
+    },
+    {
+      "category": "oven and stove",
+      "floor_id": 0,
+      "fuel_kg": 12.8,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 218,
+      "position": [
+        4.380383491516113,
+        0.6871938705444336,
+        -0.9662076234817505
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.7,
+      "source_radius_m": 0.54,
+      "source_temp_c": 926.9
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 200,
+      "position": [
+        4.798479080200195,
+        1.1502622365951538,
+        0.13821464776992798
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.329,
+      "source_temp_c": 931.1
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 201,
+      "position": [
+        4.11557674407959,
+        1.1013485193252563,
+        -0.43439981341362
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.324,
+      "source_temp_c": 962.1
+    },
+    {
+      "category": "toaster",
+      "floor_id": 0,
+      "fuel_kg": 9.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 202,
+      "position": [
+        4.103311061859131,
+        1.0404187440872192,
+        -0.1328984797000885
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.335,
+      "source_temp_c": 946.5
+    }
+  ],
+  "intensity": "severe",
+  "num_initial_ignitions": 7,
+  "plan_hash": "cc2438b6de9b",
+  "plan_id": "h1zeeAwLh9Z_kitchen_grease_fire_severe_cc2438b6de9b",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.65,
+    "ceiling_jet_speed_m_per_s": 0.42,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.9700000000000006,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0055000000000000005,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.35,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.01,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.9,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.5120000000000002,
+    "object_spread_speed_m_per_s": 0.00825,
+    "radiative_gain_c": 300.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.18,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00815-h1zeeAwLh9Z/h1zeeAwLh9Z.basis.glb",
+  "scene_id": "h1zeeAwLh9Z",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -5.560797214508057,
+    -0.6509760022163391,
+    -10.141913414001465,
+    14.199024200439453,
+    6.332211017608643,
+    1.7599979639053345
+  ]
+}

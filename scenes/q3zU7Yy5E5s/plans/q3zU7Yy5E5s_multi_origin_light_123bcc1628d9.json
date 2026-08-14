@@ -1,0 +1,228 @@
+{
+  "default_initial_ignition_range": {
+    "max": 12,
+    "min": 4
+  },
+  "duration_s": 300.0,
+  "fire_type": "multi_origin",
+  "ignition_selection_mode": "area_stratified_initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "curtain",
+      "floor_id": 0,
+      "fuel_kg": 2.56,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 303,
+      "position": [
+        0.5436794757843018,
+        0.5876800417900085,
+        -2.3452088832855225
+      ],
+      "region_id": 6,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.31,
+      "source_temp_c": 575.3
+    },
+    {
+      "category": "window curtain",
+      "floor_id": 0,
+      "fuel_kg": 2.56,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 292,
+      "position": [
+        1.2794768810272217,
+        1.5493162870407104,
+        -1.6973941326141357
+      ],
+      "region_id": 6,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.435,
+      "source_temp_c": 535.1
+    },
+    {
+      "category": "trash can",
+      "floor_id": 0,
+      "fuel_kg": 1.92,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 65,
+      "position": [
+        -6.254286766052246,
+        0.1269412636756897,
+        -2.8810482025146484
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.6,
+      "source_radius_m": 0.305,
+      "source_temp_c": 564.7
+    },
+    {
+      "category": "toilet paper",
+      "floor_id": 0,
+      "fuel_kg": 2.56,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 71,
+      "position": [
+        -6.300721645355225,
+        0.2572605013847351,
+        -3.526942014694214
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.311,
+      "source_temp_c": 550.0
+    },
+    {
+      "category": "towel",
+      "floor_id": 0,
+      "fuel_kg": 2.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 12,
+      "position": [
+        -7.631843566894531,
+        0.6635447144508362,
+        -2.050987720489502
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.367,
+      "source_temp_c": 525.6
+    },
+    {
+      "category": "table lamp",
+      "floor_id": 0,
+      "fuel_kg": 1.84,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 18,
+      "position": [
+        -9.87373161315918,
+        0.9760018587112427,
+        -0.9972954392433167
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.4,
+      "source_radius_m": 0.353,
+      "source_temp_c": 538.3
+    },
+    {
+      "category": "table lamp",
+      "floor_id": 0,
+      "fuel_kg": 1.84,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 200,
+      "position": [
+        -3.861313819885254,
+        1.1377062797546387,
+        2.836311101913452
+      ],
+      "region_id": 4,
+      "smoke_yield": 0.4,
+      "source_radius_m": 0.311,
+      "source_temp_c": 577.4
+    },
+    {
+      "category": "bed",
+      "floor_id": 0,
+      "fuel_kg": 2.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 320,
+      "position": [
+        -1.8481216430664062,
+        0.2567884027957916,
+        -2.5880980491638184
+      ],
+      "region_id": 7,
+      "smoke_yield": 0.8,
+      "source_radius_m": 0.6,
+      "source_temp_c": 579.5
+    }
+  ],
+  "intensity": "light",
+  "multi_origin_area_policy": {
+    "area_count_max": 6,
+    "area_count_min": 4,
+    "selected_area_ids": [
+      0,
+      2,
+      4,
+      6,
+      7
+    ],
+    "sources_per_area": {
+      "0": 2,
+      "2": 2,
+      "4": 1,
+      "6": 2,
+      "7": 1
+    },
+    "sources_per_area_max": 2,
+    "sources_per_area_min": 1
+  },
+  "num_initial_ignitions": 8,
+  "plan_hash": "123bcc1628d9",
+  "plan_id": "q3zU7Yy5E5s_multi_origin_light_123bcc1628d9",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.4,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 2,
+    "flame_column_decay": 0.45,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 1.4300000000000002,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0033,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.2,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.006,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.55,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.1880000000000002,
+    "object_spread_speed_m_per_s": 0.0049499999999999995,
+    "radiative_gain_c": 120.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.08399999999999999,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00835-q3zU7Yy5E5s/q3zU7Yy5E5s.basis.glb",
+  "scene_id": "q3zU7Yy5E5s",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -10.825876235961914,
+    -0.664780005812645,
+    -7.3213629722595215,
+    1.8518869876861572,
+    5.294936180114746,
+    3.7965409755706787
+  ]
+}

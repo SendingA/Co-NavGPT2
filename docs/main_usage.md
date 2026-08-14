@@ -20,7 +20,7 @@ python scripts/keyboard_teleop.py --task-config configs/multi_objectnav_hm3d.yam
 
 # 单智能体手动遥操作（带 FireWorld 体素火灾叠加）
 python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3d.yaml \
-    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --steps-per-unit 5 --seconds-per-unit 2.0 --depth_use_clean 1
 ```加了内部行为提示（--visualize 起的是 Open3D GUI 子线程、--lidar_360 仅在 --fire_world=1 时生效、
 
@@ -154,7 +154,9 @@ RGB 火焰使用独立的烟雾散射/火焰辐射积分：高温火焰会局部
 plan 的 `ignitions` 数组严格只有 N 个条目。
 
 不传该参数时仍然使用 initial-only 逻辑，只是 initial source 数量由
-intensity preset 决定：light 1 个、medium 1–2 个、severe 2–3 个。
+intensity preset 决定：light 固定 2 个、medium 4–6 个、severe 7–10 个。
+随机流同时绑定 scene、template、intensity 和用户 seed，因此同一个命令可
+完全复现，而批量生成时不会让每个 scene 都机械地取范围下界。
 
 ```bash
 python -m utils.fire_world.planner \
@@ -174,7 +176,8 @@ python -m utils.fire_world.planner \
 后必须使用新 `plan_id` 重新运行 propagation；单独修改或生成 JSON 不会改变
 已有的 `timeline.npz`。
 
-Template v10 默认使用低矮、连续且有硬边界的径向火焰场。可见 flame
+Template v11 使用上述分级点火源数量，并保留 v10 低矮、连续且有硬边界的
+径向火焰场。可见 flame
 column 的米制硬上限在 light/medium/severe 下分别为
 `0.20/0.30/0.35 m`；由于实际高度必须是完整 voxel 层，在默认 `0.15 m`
 网格上对应 `0.15/0.30/0.30 m`。地板火焰分别限制在距所属 source 约
@@ -200,9 +203,11 @@ cabinet 或其他 fuel object，仍由 solver 的温度场决定。
 为避免 curtain/cabinet 等高大 AABB 把可见火焰带到顶部，该可视填充相对
 物体最低 occupied voxel 的垂直范围被限制为 light/medium/severe
 `0.55/0.75/0.90 m`。该限制不裁剪物理温度场或烟雾场。
-`multi_origin` 的 initial 只从低矮落地家具
-（床、沙发/座椅、桌子/书桌、地毯、脚凳）中选择，不再把高柜、灯、
-墙面电视、枕头或 laptop 当成初始火点；这些对象仍可被传播器自然点燃。
+`multi_origin` 不再使用家具类别池。模板 v12 先从 inventory 的
+`region_id` 中随机选择 4–6 个含可燃非结构物体的 area，再在每个 area
+随机选择 1–2 个 `flammability >= 0.4` 的初始火点。plan 中会记录
+`multi_origin_area_policy.selected_area_ids` 和 `sources_per_area`，因此
+cabinet、lamp、TV 或 laptop 等只要满足物理条件，也可以被选为初始火点。
 
 `limit_flame_to_source_envelope = 1` 会把合成地板/空气 flame 限制在上述
 source-centered XZ 包络中，并将没有物体 fuel 支撑的最高可见火焰限制为
@@ -220,17 +225,42 @@ floor_spread_scale_i`，有效速度为
 增大，并保证在 duration 结束前到达硬边界。不存在 planner 构造的定向连接线；
 家具之间是否传播仍由 reaction、conduction 和 local radiation 共同决定。
 
-仓库中已按上述 v10 规则为 `Nfvxx8J5NCo` 生成一个四源 medium
-`multi_origin` 示例 plan：`Nfvxx8J5NCo_multi_origin_medium_0641161af604`。历史 plan 与 timeline 不会被
-覆盖；对应 timeline 已输出到
-`outputs/fire_world/Nfvxx8J5NCo/Nfvxx8J5NCo_multi_origin_medium_0641161af604/timeline.npz`。需要重建时运行：
+当前 `Nfvxx8J5NCo` 的模板 v12、seed-42、medium `multi_origin` plan 是
+`Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa`。plan-only 批量生成不会
+自动生成 timeline；使用前需要运行 propagation：
 
 ```bash
 python -m utils.fire_world.propagation \
     --scene Nfvxx8J5NCo \
-    --plan_id Nfvxx8J5NCo_multi_origin_medium_0641161af604 \
+    --plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --voxel_m 0.15 --dt 0.5 --save_dt 1.0
 ```
+
+批量只重新生成 plan JSON、但不启动耗时的 propagation，可使用：
+
+```bash
+python scripts/regenerate_fire_plans.py \
+    --scenes-root scenes \
+    --fire-types all --intensities all --seeds 42
+```
+
+新 plan 写入 `scenes/<scene>/plans/`；运行清单和 source-count 直方图写入
+`outputs/fire_plan_regeneration/runs/<run_id>/`。缺少足够语义候选对象的
+template/intensity 会记录为 `skipped_infeasible`，不会拿无关对象补足。
+该命令不生成 `timeline.npz`；实际运行某个新 plan 前仍需对该 plan 执行
+propagation。
+
+如需保证每个现有 `(scene, template, intensity)` 组合只有一个活动 plan，
+先 dry-run，再执行可恢复清理：
+
+```bash
+python scripts/prune_fire_plans.py --run-id unique_templates_v12
+python scripts/prune_fire_plans.py --run-id unique_templates_v12 --apply
+```
+
+`route_contrast` 等定制安全绕行 plan 不参与清理。旧 plan、对应 timeline、
+原 asset index 和恢复 manifest 会移入
+`outputs/fire_plan_pruning_backup/<run_id>/`，不会被永久删除。
 
 ### 2.9 一键准备单场景或数据集 FireWorld assets
 
@@ -440,44 +470,44 @@ CLI：
 ```bash
 # 自动评测，GPT-4o 调度，单 agent，FireWorld 体素烟雾+热像
 python main.py --num_agents 1 --nav_mode gpt --gpt_type 2 \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c --smoke_density 0.7 \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa --smoke_density 0.7 \
     --depth_use_clean 1 --use_thermal_perception 1
 
 # 自动评测，FireWorld 体素，2 agent，可视化保存图片
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_steps_per_unit 1 --fire_seconds_per_unit 5.0 \
     --fire_show_window 1
 
 
 python main.py \
     --num_agents 2 \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_speedup 2.0 \
     --print_images 1
 
 # FireWorld GPU ray-march（benchmark 快速视觉）
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_render_backend torch --fire_render_device cuda:0 \
     --fire_render_dtype float16 --fire_fast 1
 
 # 高质量 GPU 火焰；显存紧张时降低 max sample points
 python main.py --num_agents 1 --nav_mode nearest \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_render_backend torch --fire_render_device cuda:0 \
     --fire_fast 0 --fire_render_max_sample_points 1000000
 
 # 固定 NumPy 参考后端，用于 CPU/GPU benchmark 对照
 python main.py --num_agents 1 --nav_mode nearest \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_render_backend numpy
 
 
 
 # # 自动评测，FireWorld 完整火灾感知
 # python main.py --num_agents 1 --nav_mode gpt \
-#     --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+#     --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
 #     --fire_steps_per_unit 1 --fire_seconds_per_unit 5.0 \
 #     --smoke_density 0.6 \
 #     --depth_use_clean 1 --use_thermal_perception 1 \
@@ -486,7 +516,7 @@ python main.py --num_agents 1 --nav_mode nearest \
 # 手动开 FireWorld + 套件，看着自己走、看火长、同时看 dashboard
 python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
-    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --steps-per-unit 1 --seconds-per-unit 5.0 \
     --depth_use_clean 1 --render-scale 0.5 --n-steps 16 \
     --smoke-density 0.6 \
@@ -494,7 +524,7 @@ python scripts/keyboard_teleop_fire.py \
 
 python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
-    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --speedup 2.0 \
     --show-dashboard 1
 
@@ -502,7 +532,7 @@ python scripts/keyboard_teleop_fire.py \
 python scripts/keyboard_teleop_full.py \
     --num-agents 1 --num-humans 2 \
     --robot-models-enabled 1 --robot-profiles spot \
-    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --clock-mode wallclock --speedup 2.0 \
     --lidar-360 1 --lidar-resolution 320 \
     --snapshot-dir outputs/teleop_sensor_snapshots
@@ -530,12 +560,12 @@ python main.py --num_agents 2 --num_humans 2
 python main.py --num_agents 2 --num_humans 2 \
     --robot_models_enabled 1 --robot_profiles spot,fetch \
     --nav_mode nearest \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_show_window 1
 
 
 python main.py --task_config person_objectnav_hm3d.yaml \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --print_images 1
 
 
@@ -567,7 +597,7 @@ python main.py \
 
 ```bash
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_clock_mode step \
     --risk_enabled 1 --risk_source sensed \
     --risk_smoke_source appearance_depth

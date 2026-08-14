@@ -1,0 +1,158 @@
+{
+  "default_initial_ignition_range": {
+    "max": 12,
+    "min": 4
+  },
+  "duration_s": 300.0,
+  "fire_type": "multi_origin",
+  "ignition_selection_mode": "area_stratified_initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "lamp",
+      "floor_id": 1,
+      "fuel_kg": 1.84,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 399,
+      "position": [
+        -1.236849308013916,
+        -2.2845706939697266,
+        -0.23904389142990112
+      ],
+      "region_id": 4,
+      "smoke_yield": 0.4,
+      "source_radius_m": 0.285,
+      "source_temp_c": 563.9
+    },
+    {
+      "category": "chair",
+      "floor_id": 1,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 158,
+      "position": [
+        17.77104377746582,
+        0.406730592250824,
+        4.0638532638549805
+      ],
+      "region_id": 1,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.419,
+      "source_temp_c": 556.0
+    },
+    {
+      "category": "chair",
+      "floor_id": 1,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 267,
+      "position": [
+        4.91770601272583,
+        0.3701685667037964,
+        -1.153848648071289
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.412,
+      "source_temp_c": 557.5
+    },
+    {
+      "category": "chair",
+      "floor_id": 1,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 60,
+      "position": [
+        26.37649917602539,
+        0.32219183444976807,
+        3.9692070484161377
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.418,
+      "source_temp_c": 537.6
+    }
+  ],
+  "intensity": "light",
+  "multi_origin_area_policy": {
+    "area_count_max": 6,
+    "area_count_min": 4,
+    "selected_area_ids": [
+      0,
+      1,
+      2,
+      4
+    ],
+    "sources_per_area": {
+      "0": 1,
+      "1": 1,
+      "2": 1,
+      "4": 1
+    },
+    "sources_per_area_max": 2,
+    "sources_per_area_min": 1
+  },
+  "num_initial_ignitions": 4,
+  "plan_hash": "ad6e52fa358d",
+  "plan_id": "HY1NcmCgn3n_multi_origin_light_ad6e52fa358d",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.4,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 2,
+    "flame_column_decay": 0.45,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 1.4300000000000002,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0033,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.2,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.006,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.55,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.1880000000000002,
+    "object_spread_speed_m_per_s": 0.0049499999999999995,
+    "radiative_gain_c": 120.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.08399999999999999,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00894-HY1NcmCgn3n/HY1NcmCgn3n.basis.glb",
+  "scene_id": "HY1NcmCgn3n",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -5.503974914550781,
+    -5.837820053100586,
+    -9.802477836608887,
+    29.007678985595703,
+    7.673017978668213,
+    5.505443096160889
+  ]
+}

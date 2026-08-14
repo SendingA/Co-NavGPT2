@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Launch reproducible normal-scene planner baselines on two ObjectNav sets.
+"""Launch reproducible normal or FireWorld planner baselines.
 
 The default ``controlled`` matrix follows ``docs/benchmark_experiment_plan``:
 
@@ -42,6 +42,7 @@ GLOBAL_PLANNERS = ("nearest", "co_ut", "fill", "random", "gpt")
 LOCAL_PLANNERS = ("fmm", "astar", "rl", "pointnav")
 DEFAULT_LOCAL_PLANNERS = ("fmm", "astar", "pointnav")
 DATASET_IDS = ("objectnav", "person")
+CONDITIONS = ("normal", "fire-none", "fire-sensed", "fire-oracle")
 
 
 @dataclass(frozen=True)
@@ -88,11 +89,12 @@ class RunSpec:
     local_planner: str
     seed: int
     episodes: int
+    condition: str = "normal"
 
     @property
     def run_id(self) -> str:
         return (
-            f"{self.dataset_id}__normal"
+            f"{self.dataset_id}__{self.condition}"
             f"__G-{self.global_planner}"
             f"__L-{self.local_planner}"
             f"__s-{self.seed}"
@@ -105,7 +107,8 @@ class BenchmarkConfigurationError(ValueError):
 
 
 _RUN_ID_RE = re.compile(
-    r"^(?P<dataset>objectnav|person)__normal"
+    r"^(?P<dataset>objectnav|person)"
+    r"__(?P<condition>normal|fire-none|fire-sensed|fire-oracle)"
     r"__G-(?P<global>nearest|co_ut|fill|random|gpt)"
     r"__L-(?P<local>fmm|astar|rl|pointnav)"
     r"__s-(?P<seed>-?\d+)__n-(?P<episodes>\d+)$"
@@ -125,6 +128,7 @@ def parse_run_id(run_id: str) -> RunSpec:
         local_planner=match.group("local"),
         seed=int(match.group("seed")),
         episodes=int(match.group("episodes")),
+        condition=match.group("condition"),
     )
 
 
@@ -245,6 +249,7 @@ def build_run_specs(
     baselines: Sequence[Baseline],
     seeds: Sequence[int],
     episodes: int,
+    condition: str = "normal",
 ) -> List[RunSpec]:
     if episodes <= 0:
         raise BenchmarkConfigurationError("--episodes must be positive")
@@ -257,6 +262,10 @@ def build_run_specs(
         raise BenchmarkConfigurationError("at least one dataset is required")
     if not seeds:
         raise BenchmarkConfigurationError("at least one seed is required")
+    if condition not in CONDITIONS:
+        raise BenchmarkConfigurationError(
+            f"unknown condition {condition!r}; choose from {CONDITIONS}"
+        )
 
     return [
         RunSpec(
@@ -265,6 +274,7 @@ def build_run_specs(
             local_planner=baseline.local_planner,
             seed=int(seed),
             episodes=int(episodes),
+            condition=condition,
         )
         for dataset_id in datasets
         for seed in seeds
@@ -342,6 +352,10 @@ def preflight(
     pointnav_checkpoint: str,
     rl_checkpoint: Optional[str],
     dry_run: bool,
+    fire_type: str = "multi_origin",
+    fire_intensity: str = "medium",
+    fire_scenes_root: str = "scenes",
+    fire_out_root: str = "outputs/fire_world",
 ) -> Tuple[dict, List[str]]:
     """Validate all shared assets before the first long-running baseline."""
 
@@ -414,11 +428,50 @@ def preflight(
             else:
                 raise BenchmarkConfigurationError(message)
 
+    fire_assets = {}
+    if any(run.condition != "normal" for run in run_specs):
+        from utils.fire_world.plan_selection import (
+            discover_runnable_fire_scenes,
+        )
+
+        requested_scene_ids = set()
+        for dataset_id in requested_datasets:
+            content_dir = DATASETS[dataset_id].resolved_data_path.parent / "content"
+            requested_scene_ids.update(
+                path.name.removesuffix(".json.gz")
+                for path in content_dir.glob("*.json.gz")
+            )
+        selections = discover_runnable_fire_scenes(
+            intensity=fire_intensity,
+            fire_type=fire_type,
+            scenes_root=fire_scenes_root,
+            out_root=fire_out_root,
+            scene_ids=requested_scene_ids,
+        )
+        missing = sorted(requested_scene_ids - set(selections))
+        if missing:
+            raise BenchmarkConfigurationError(
+                "FireWorld timelines are missing for dataset scenes: "
+                + ", ".join(missing)
+            )
+        fire_assets = {
+            "fire_type": fire_type,
+            "intensity": fire_intensity,
+            "scenes_root": str(fire_scenes_root),
+            "out_root": str(fire_out_root),
+            "scene_count": len(selections),
+            "plans": {
+                scene_id: selection.plan_id
+                for scene_id, selection in sorted(selections.items())
+            },
+        }
+
     return {
         "python": resolved_python,
         "main": str(main_path),
         "datasets": dataset_metadata,
         "assets": assets,
+        "fire_assets": fire_assets,
     }, warnings
 
 
@@ -438,6 +491,21 @@ _PROTECTED_MAIN_FLAGS = {
     "-d",
     "--fire_world",
     "--risk_enabled",
+    "--risk_source",
+    "--fire_world_plan_id",
+    "--fire_world_fire_type",
+    "--fire_world_intensity",
+    "--fire_world_scenes_root",
+    "--fire_world_out_root",
+    "--fire_clock_mode",
+    "--fire_render_backend",
+    "--fire_render_device",
+    "--fire_fast",
+    "--fire_world_n_steps",
+    "--fire_world_render_scale",
+    "--fire_dump_dir",
+    "--risk_dump_dir",
+    "--risk_run_id",
     "--pointnav_checkpoint",
     "--rl_local_checkpoint",
 }
@@ -471,6 +539,12 @@ def build_command(
     rl_deterministic: int,
     num_agents: int,
     extra_main_args: Sequence[str],
+    fire_type: str = "multi_origin",
+    fire_intensity: str = "medium",
+    fire_scenes_root: str = "scenes",
+    fire_out_root: str = "outputs/fire_world",
+    fire_render_backend: str = "torch",
+    fire_render_device: str = "cuda:0",
 ) -> List[str]:
     dataset = DATASETS[run.dataset_id]
     command = [
@@ -488,10 +562,6 @@ def build_command(
         run.global_planner,
         "--local_planner",
         run.local_planner,
-        "--fire_world",
-        "0",
-        "--risk_enabled",
-        "0",
         "--visualize",
         "0",
         "--print_images",
@@ -499,6 +569,48 @@ def build_command(
         "--dump_location",
         str(run_dir / "navigation"),
     ]
+    if run.condition == "normal":
+        command.extend(["--fire_world", "0", "--risk_enabled", "0"])
+    else:
+        risk_source = run.condition.removeprefix("fire-")
+        command.extend(
+            [
+                "--fire_world",
+                "1",
+                "--fire_world_plan_id",
+                "auto",
+                "--fire_world_fire_type",
+                fire_type,
+                "--fire_world_intensity",
+                fire_intensity,
+                "--fire_world_scenes_root",
+                fire_scenes_root,
+                "--fire_world_out_root",
+                fire_out_root,
+                "--fire_clock_mode",
+                "step",
+                "--fire_fast",
+                "1",
+                "--fire_world_n_steps",
+                "24",
+                "--fire_world_render_scale",
+                "0.5",
+                "--fire_render_backend",
+                fire_render_backend,
+                "--fire_render_device",
+                fire_render_device,
+                "--risk_enabled",
+                "1",
+                "--risk_source",
+                risk_source,
+                "--fire_dump_dir",
+                str(run_dir / "fire_sensors"),
+                "--risk_dump_dir",
+                str(run_dir / "risk"),
+                "--risk_run_id",
+                run.run_id,
+            ]
+        )
     if run.local_planner == "pointnav":
         command.extend(
             [
@@ -669,7 +781,7 @@ def execute_run(
         "schema_version": 1,
         "run": asdict(run),
         "run_id": run.run_id,
-        "condition": "normal",
+        "condition": run.condition,
         "command": list(command),
         "working_directory": str(PROJECT_ROOT),
     }
@@ -827,9 +939,15 @@ def _environment_payload(python_executable: str) -> dict:
 def create_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Run normal ObjectNav and static-person planner baselines with "
+            "Run normal or FireWorld ObjectNav/person planner baselines with "
             "isolated, resumable outputs."
         )
+    )
+    parser.add_argument(
+        "--condition",
+        choices=CONDITIONS,
+        default="normal",
+        help="normal or registered FireWorld risk condition",
     )
     parser.add_argument(
         "--datasets",
@@ -871,6 +989,16 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument("--episodes", type=int, default=200)
     parser.add_argument("--seeds", nargs="+", type=int, default=[1])
     parser.add_argument("--num-agents", type=int, default=2)
+    parser.add_argument("--fire-type", default="multi_origin")
+    parser.add_argument("--fire-intensity", default="medium")
+    parser.add_argument("--fire-scenes-root", default="scenes")
+    parser.add_argument("--fire-out-root", default="outputs/fire_world")
+    parser.add_argument(
+        "--fire-render-backend",
+        choices=("torch", "numpy", "auto"),
+        default="torch",
+    )
+    parser.add_argument("--fire-render-device", default="cuda:0")
     parser.add_argument(
         "--output-root",
         default="outputs/benchmarks",
@@ -879,7 +1007,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--study-id",
         default=None,
-        help="default: normal_planner_baselines_<episodes>ep",
+        help="default: <condition>_planner_baselines_<episodes>ep",
     )
     parser.add_argument(
         "--only-run-ids",
@@ -953,7 +1081,7 @@ def _study_manifest(
     payload = {
         "schema_version": 1,
         "study_id": args.study_id,
-        "condition": "normal",
+        "condition": args.condition,
         "matrix": args.matrix,
         "episodes_per_run": args.episodes,
         "datasets": list(args.datasets),
@@ -966,6 +1094,15 @@ def _study_manifest(
         "run_ids": [run.run_id for run in run_specs],
         "preflight": preflight_payload,
         "extra_main_args": list(args.main_args),
+        "fire": {
+            "fire_type": args.fire_type,
+            "intensity": args.fire_intensity,
+            "scenes_root": args.fire_scenes_root,
+            "out_root": args.fire_out_root,
+            "render_backend": args.fire_render_backend,
+            "render_device": args.fire_render_device,
+            "clock_mode": "step",
+        },
     }
     payload["fingerprint"] = _stable_hash(payload)
     return payload
@@ -1098,7 +1235,7 @@ def run_launcher(args: argparse.Namespace) -> int:
     args.study_id = (
         args.study_id
         if args.study_id is not None
-        else f"normal_planner_baselines_{args.episodes}ep"
+        else f"{args.condition}_planner_baselines_{args.episodes}ep"
     )
     output_root = Path(args.output_root)
     if not output_root.is_absolute():
@@ -1134,6 +1271,7 @@ def run_launcher(args: argparse.Namespace) -> int:
             baselines,
             args.seeds,
             args.episodes,
+            condition=args.condition,
         )
         master_run_specs = run_specs
 
@@ -1143,6 +1281,10 @@ def run_launcher(args: argparse.Namespace) -> int:
         pointnav_checkpoint=args.pointnav_checkpoint,
         rl_checkpoint=args.rl_checkpoint,
         dry_run=args.dry_run,
+        fire_type=args.fire_type,
+        fire_intensity=args.fire_intensity,
+        fire_scenes_root=args.fire_scenes_root,
+        fire_out_root=args.fire_out_root,
     )
     args.python = preflight_payload["python"]
 
@@ -1192,6 +1334,12 @@ def run_launcher(args: argparse.Namespace) -> int:
             rl_deterministic=args.rl_deterministic,
             num_agents=args.num_agents,
             extra_main_args=args.main_args,
+            fire_type=args.fire_type,
+            fire_intensity=args.fire_intensity,
+            fire_scenes_root=args.fire_scenes_root,
+            fire_out_root=args.fire_out_root,
+            fire_render_backend=args.fire_render_backend,
+            fire_render_device=args.fire_render_device,
         )
 
     if args.dry_run:

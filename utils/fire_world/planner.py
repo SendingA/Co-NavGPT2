@@ -10,7 +10,9 @@ Determinism guarantees:
       stable plan_hash, and ignitions.
     - The planner emits t=0 initial objects only. An explicit count
       participates in the plan hash; otherwise the intensity preset
-      deterministically supplies the count.
+      deterministically supplies the count. Category templates use the
+      intensity tier, while multi-origin samples 4-6 semantic areas and
+      1-2 sources per area in template v12.
     - Objects ignited later are selected by the propagation solver, never by
       a planner-authored secondary list.
 
@@ -42,7 +44,7 @@ from .templates import (
 from .plan_ids import semantic_plan_id
 
 
-PLAN_SCHEMA_VERSION = 4
+PLAN_SCHEMA_VERSION = 5
 
 
 # ---------------------------------------------------------------------------
@@ -104,6 +106,24 @@ def _validate_num_ignitions(num_ignitions: int) -> int:
     return requested
 
 
+def scenario_rng_seed(
+    scene_id: str,
+    fire_type: str,
+    intensity: str,
+    seed: int,
+) -> int:
+    """Derive a stable RNG seed from the complete scenario identity.
+
+    Using the user seed directly made the first random draw (including the
+    source count) identical in every scene. Mixing in the semantic scenario
+    fields preserves repeatability while allowing a batch generated with one
+    seed to exercise the full intensity range.
+    """
+    key = f"{scene_id}|{fire_type}|{intensity}|{int(seed)}|rng-v1"
+    digest = hashlib.sha256(key.encode("utf-8")).digest()
+    return int.from_bytes(digest[:8], byteorder="big", signed=False)
+
+
 # ---------------------------------------------------------------------------
 # Plan builder
 # ---------------------------------------------------------------------------
@@ -129,13 +149,12 @@ def build_plan(
         if num_ignitions is None
         else _validate_num_ignitions(num_ignitions)
     )
-    if fire_type == "multi_origin" and requested_count == 1:
-        raise ValueError(
-            "fire_type='multi_origin' requires num_ignitions >= 2"
-        )
-
     preset = INTENSITIES[intensity]
-    rng = np.random.default_rng(seed)
+    rng = np.random.default_rng(
+        scenario_rng_seed(
+            inventory["scene_id"], fire_type, intensity, seed
+        )
+    )
 
     ignitions: List[Dict] = build_template_ignitions(
         inventory,
@@ -175,6 +194,35 @@ def build_plan(
         num_ignitions=requested_count,
     )
 
+    default_ignition_range = {
+        "min": int(preset.n_ignitions_min),
+        "max": int(preset.n_ignitions_max),
+    }
+    ignition_selection_mode = "initial_only"
+    if fire_type == "multi_origin":
+        from .templates import (
+            MULTI_ORIGIN_AREAS_MAX,
+            MULTI_ORIGIN_AREAS_MIN,
+            MULTI_ORIGIN_SOURCES_PER_AREA_MAX,
+            MULTI_ORIGIN_SOURCES_PER_AREA_MIN,
+        )
+
+        area_counts: Dict[int, int] = {}
+        for ignition in ignitions:
+            area_id = int(ignition["region_id"])
+            area_counts[area_id] = area_counts.get(area_id, 0) + 1
+        default_ignition_range = {
+            "min": (
+                MULTI_ORIGIN_AREAS_MIN
+                * MULTI_ORIGIN_SOURCES_PER_AREA_MIN
+            ),
+            "max": (
+                MULTI_ORIGIN_AREAS_MAX
+                * MULTI_ORIGIN_SOURCES_PER_AREA_MAX
+            ),
+        }
+        ignition_selection_mode = "area_stratified_initial_only"
+
     plan = {
         "schema_version": PLAN_SCHEMA_VERSION,
         "plan_id": semantic_plan_id(
@@ -193,11 +241,24 @@ def build_plan(
         "template_version": int(TEMPLATE_VERSION),
         "duration_s": float(preset.duration_s),
         "num_initial_ignitions": initial_count,
-        "ignition_selection_mode": "initial_only",
+        "default_initial_ignition_range": default_ignition_range,
+        "ignition_selection_mode": ignition_selection_mode,
         "ignition_selection_version": IGNITION_SELECTION_VERSION,
         "ignitions": ignitions,
         "propagation_rules": rules,
     }
+    if fire_type == "multi_origin":
+        plan["multi_origin_area_policy"] = {
+            "area_count_min": MULTI_ORIGIN_AREAS_MIN,
+            "area_count_max": MULTI_ORIGIN_AREAS_MAX,
+            "sources_per_area_min": MULTI_ORIGIN_SOURCES_PER_AREA_MIN,
+            "sources_per_area_max": MULTI_ORIGIN_SOURCES_PER_AREA_MAX,
+            "selected_area_ids": sorted(area_counts),
+            "sources_per_area": {
+                str(area_id): area_counts[area_id]
+                for area_id in sorted(area_counts)
+            },
+        }
     if requested_count is not None:
         plan["num_initial_ignitions_requested"] = requested_count
     return plan

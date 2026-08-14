@@ -601,7 +601,7 @@ class FloorFireSpreadTest(unittest.TestCase):
         self.assertEqual(light["flame_column_cells"], 2)
         self.assertEqual(medium["flame_column_cells"], 3)
         self.assertEqual(severe["flame_column_cells"], 3)
-        self.assertEqual(TEMPLATE_VERSION, 10)
+        self.assertEqual(TEMPLATE_VERSION, 12)
         self.assertAlmostEqual(light["max_flame_column_height_m"], 0.20)
         self.assertAlmostEqual(medium["max_flame_column_height_m"], 0.30)
         self.assertAlmostEqual(severe["max_flame_column_height_m"], 0.35)

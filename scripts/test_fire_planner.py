@@ -4,7 +4,7 @@ Exercises:
   * deterministic plan_id under fixed inputs
   * all four templates produce non-empty plans on the val_mini fixture
   * every plan contains initial t=0 objects only
-  * multi-origin initial objects remain on one floor
+  * multi-origin initial objects span 4-6 semantic areas with 1-2 per area
 
 Run with::
 
@@ -28,7 +28,12 @@ from utils.fire_world.planner import (  # noqa: E402
     plan_id_for,
     write_plan,
 )
-from utils.fire_world.templates import INTENSITIES, TEMPLATES  # noqa: E402
+from utils.fire_world.templates import (  # noqa: E402
+    INTENSITIES,
+    TEMPLATES,
+    _initial_candidate_capacity,
+    _inventory_pool,
+)
 
 
 SCENE = "TEEsavR23oF"
@@ -65,8 +70,22 @@ def test_plan_id_in_payload() -> None:
 
 def test_all_templates() -> None:
     inv = load_inventory(SCENE, SCENES_ROOT)
+    objects = _inventory_pool(inv)
     for name in TEMPLATES:
-        for intensity in INTENSITIES:
+        for intensity, preset in INTENSITIES.items():
+            capacity = _initial_candidate_capacity(objects, name)
+            if capacity < preset.n_ignitions_min:
+                try:
+                    build_plan(inv, name, intensity, seed=11)
+                except RuntimeError:
+                    print(
+                        f"  {name}/{intensity}: infeasible as expected "
+                        f"(capacity={capacity}, need={preset.n_ignitions_min})"
+                    )
+                    continue
+                raise AssertionError(
+                    f"{name}/{intensity} should reject capacity {capacity}"
+                )
             plan = build_plan(inv, name, intensity, seed=11)
             assert plan["ignitions"], f"empty ignitions for {name}/{intensity}"
             assert len(plan["ignitions"]) == plan["num_initial_ignitions"]
@@ -86,7 +105,7 @@ def test_initial_only_constraint() -> None:
     for name, intensity, seed in [
         ("kitchen_grease_fire", "medium", 42),
         ("bedroom_textile", "severe", 7),
-        ("living_room_electric", "severe", 1),
+        ("living_room_electric", "medium", 1),
         ("multi_origin", "severe", 0),
     ]:
         plan = build_plan(inv, name, intensity, seed)
@@ -97,14 +116,11 @@ def test_initial_only_constraint() -> None:
         assert all("parent_object_id" not in ig for ig in initials)
 
         if name == "multi_origin":
-            initial_ys = [
-                ignition["position"][1] for ignition in initials
-            ]
-            spread = max(initial_ys) - min(initial_ys)
-            assert spread <= 1.5 + 1e-3, (
-                f"multi_origin initial sources span {spread:.2f} m "
-                "vertically"
-            )
+            policy = plan["multi_origin_area_policy"]
+            counts = policy["sources_per_area"]
+            assert 4 <= len(counts) <= 6
+            assert all(1 <= count <= 2 for count in counts.values())
+            assert sum(counts.values()) == len(initials)
         print(
             f"  {name}/{intensity} seed={seed} "
             f"initials={len(initials)} initial-only=OK"

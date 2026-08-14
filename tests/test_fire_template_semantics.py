@@ -10,9 +10,12 @@ from utils.fire_world.hm3d_semantic import read_semantic_txt
 from utils.fire_world.planner import build_plan
 from utils.fire_world.scene_scan import MATERIAL_TABLE
 from utils.fire_world.templates import (
-    MULTI_ORIGIN_INITIAL_CATEGORIES,
+    MULTI_ORIGIN_AREAS_MAX,
+    MULTI_ORIGIN_AREAS_MIN,
     TEMPLATE_CATEGORY_GROUPS,
     TEMPLATES,
+    _initial_candidate_capacity,
+    _inventory_pool,
     _pick_explicit_initials,
 )
 
@@ -62,30 +65,17 @@ class FireTemplateSemanticTests(unittest.TestCase):
         self.assertEqual(MATERIAL_TABLE["oven and stove"], (0.85, 0.70))
         self.assertNotIn("tv_monitor", MATERIAL_TABLE)
 
-    def test_multi_origin_initial_categories_are_real_floor_furniture(self):
-        categories = set(MULTI_ORIGIN_INITIAL_CATEGORIES)
-        self.assertTrue(categories <= self.semantic_categories)
-        self.assertTrue(categories <= set(MATERIAL_TABLE))
-        self.assertTrue({"bed", "chair", "table", "desk"} <= categories)
-        self.assertTrue(
-            {
-                "cabinet",
-                "wardrobe",
-                "nightstand",
-                "lamp",
-                "pillow",
-                "laptop",
-                "tv",
-                "curtain",
-            }.isdisjoint(
-                categories
-            )
-        )
+    def test_multi_origin_is_area_based_without_category_groups(self):
+        self.assertNotIn("multi_origin", TEMPLATE_CATEGORY_GROUPS)
 
-    def test_eight_source_multi_origin_contains_only_low_initial_furniture(self):
+    def test_eight_source_multi_origin_is_distributed_across_areas(self):
         inventory = json.loads(
             (SCENES / "Nfvxx8J5NCo" / "inventory.json").read_text()
         )
+        inventory_by_id = {
+            int(item["instance_id"]): item
+            for item in inventory["instances"]
+        }
         plan = build_plan(
             inventory,
             fire_type="multi_origin",
@@ -95,12 +85,23 @@ class FireTemplateSemanticTests(unittest.TestCase):
         )
 
         self.assertEqual(len(plan["ignitions"]), 8)
+        policy = plan["multi_origin_area_policy"]
+        self.assertGreaterEqual(
+            len(policy["selected_area_ids"]), MULTI_ORIGIN_AREAS_MIN
+        )
+        self.assertLessEqual(
+            len(policy["selected_area_ids"]), MULTI_ORIGIN_AREAS_MAX
+        )
+        self.assertEqual(sum(policy["sources_per_area"].values()), 8)
         self.assertTrue(
             all(
-                ignition["category"] in MULTI_ORIGIN_INITIAL_CATEGORIES
-                and ignition["ignition_role"] == "initial"
+                ignition["ignition_role"] == "initial"
                 and ignition["ignite_time_s"] == 0.0
                 and "parent_object_id" not in ignition
+                and ignition["region_id"]
+                == inventory_by_id[ignition["object_id"]]["region_id"]
+                and inventory_by_id[ignition["object_id"]]["flammability"]
+                >= 0.4
                 for ignition in plan["ignitions"]
             )
         )
@@ -134,13 +135,32 @@ class FireTemplateSemanticTests(unittest.TestCase):
                 row.instance_id: row.category.lower().strip()
                 for row in self.rows_by_scene[scene_id]
             }
+            inventory_by_id = {
+                int(item["instance_id"]): item
+                for item in inventory["instances"]
+            }
             for template_name in TEMPLATES:
                 with self.subTest(scene=scene_id, template=template_name):
+                    requested = 4 if template_name == "multi_origin" else 1
+                    capacity = _initial_candidate_capacity(
+                        _inventory_pool(inventory), template_name
+                    )
+                    if capacity < requested:
+                        with self.assertRaises(RuntimeError):
+                            build_plan(
+                                inventory,
+                                fire_type=template_name,
+                                intensity="severe",
+                                seed=7,
+                                num_ignitions=requested,
+                            )
+                        continue
                     plan = build_plan(
                         inventory,
                         fire_type=template_name,
                         intensity="severe",
                         seed=7,
+                        num_ignitions=requested,
                     )
                     allowed_groups = TEMPLATE_CATEGORY_GROUPS.get(template_name)
                     for ignition in plan["ignitions"]:
@@ -156,9 +176,12 @@ class FireTemplateSemanticTests(unittest.TestCase):
                             )
                             self.assertIn(category, allowed)
                         else:
-                            self.assertIn(
-                                category,
-                                MULTI_ORIGIN_INITIAL_CATEGORIES,
+                            item = inventory_by_id[ignition["object_id"]]
+                            self.assertGreaterEqual(
+                                float(item["flammability"]), 0.4
+                            )
+                            self.assertEqual(
+                                ignition["region_id"], item["region_id"]
                             )
                         self.assertEqual(
                             ignition["ignition_role"], "initial"
@@ -166,13 +189,16 @@ class FireTemplateSemanticTests(unittest.TestCase):
                         self.assertEqual(ignition["ignite_time_s"], 0.0)
                         self.assertNotIn("parent_object_id", ignition)
 
-    def test_active_plan_matches_inventory_and_semantic_geometry(self):
+    def test_current_template_plan_matches_inventory_and_semantic_geometry(self):
         scene_id = "Nfvxx8J5NCo"
         inventory = json.loads(
             (SCENES / scene_id / "inventory.json").read_text()
         )
-        plan = json.loads(
-            (SCENES / scene_id / "plans" / "Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632.json").read_text()
+        plan = build_plan(
+            inventory,
+            fire_type="bedroom_textile",
+            intensity="severe",
+            seed=42,
         )
         inventory_by_id = {
             int(item["instance_id"]): item for item in inventory["instances"]
@@ -192,20 +218,6 @@ class FireTemplateSemanticTests(unittest.TestCase):
             aabb_max = np.asarray(item["aabb_max"], dtype=np.float64)
             self.assertTrue(np.all(position >= aabb_min))
             self.assertTrue(np.all(position <= aabb_max))
-
-        corrected = next(
-            ignition
-            for ignition in plan["ignitions"]
-            if ignition["category"] == "oven and stove"
-        )
-        self.assertEqual(corrected["object_id"], 48)
-        self.assertTrue(
-            np.allclose(
-                corrected["position"],
-                inventory_by_id[48]["centroid"],
-                atol=1e-6,
-            )
-        )
 
 
 if __name__ == "__main__":

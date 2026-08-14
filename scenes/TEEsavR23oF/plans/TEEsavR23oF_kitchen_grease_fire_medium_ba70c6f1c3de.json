@@ -1,0 +1,157 @@
+{
+  "default_initial_ignition_range": {
+    "max": 6,
+    "min": 4
+  },
+  "duration_s": 600.0,
+  "fire_type": "kitchen_grease_fire",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "microwave",
+      "floor_id": 0,
+      "fuel_kg": 4.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 345,
+      "position": [
+        -6.149074077606201,
+        1.629623532295227,
+        0.4766309857368469
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.46,
+      "source_temp_c": 753.3
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 4.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 347,
+      "position": [
+        -6.960831642150879,
+        1.1188340187072754,
+        0.54316645860672
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.352,
+      "source_temp_c": 771.9
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 3.8,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 639,
+      "position": [
+        -5.7214837074279785,
+        2.7331812381744385,
+        -6.4162278175354
+      ],
+      "region_id": 12,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.285,
+      "source_temp_c": 727.9
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 4.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 333,
+      "position": [
+        -3.9571845531463623,
+        0.9173954725265503,
+        0.7271884083747864
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.275,
+      "source_temp_c": 733.9
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 4.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 331,
+      "position": [
+        -2.855123519897461,
+        1.0099992752075195,
+        0.2310989946126938
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.318,
+      "source_temp_c": 722.8
+    }
+  ],
+  "intensity": "medium",
+  "num_initial_ignitions": 5,
+  "plan_hash": "ba70c6f1c3de",
+  "plan_id": "TEEsavR23oF_kitchen_grease_fire_medium_ba70c6f1c3de",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.5,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.5,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.2,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0044,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.3,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.008,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.75,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.35,
+    "object_spread_speed_m_per_s": 0.0066,
+    "radiative_gain_c": 200.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.12,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb",
+  "scene_id": "TEEsavR23oF",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -12.947001457214355,
+    -0.7366210073232651,
+    -9.556449890136719,
+    4.6296257972717285,
+    6.369441032409668,
+    1.6548290252685547
+  ]
+}

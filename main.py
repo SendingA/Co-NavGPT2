@@ -327,6 +327,7 @@ def main(args, send_queue, receive_queue):
     fire_scene = None
     fire_suites = None
     fire_viewers = None
+    fire_renderer_reported = False
     risk_runtime = None
     from utils.fire_pipeline import step_fire_observation  # noqa: E402
 
@@ -558,6 +559,13 @@ def main(args, send_queue, receive_queue):
                     )
                     fire_sensor_outputs[i] = sensors
                     if sensors is not None:
+                        if not fire_renderer_reported:
+                            print(
+                                "[fire_render] "
+                                f"backend={sensors.get('fire_render_backend')} "
+                                f"device={sensors.get('fire_render_device')}"
+                            )
+                            fire_renderer_reported = True
                         fire_suites[i].save_step(
                             sensors,
                             episode=count_episodes,

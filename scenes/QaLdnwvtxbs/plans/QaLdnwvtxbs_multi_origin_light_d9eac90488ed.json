@@ -1,0 +1,245 @@
+{
+  "default_initial_ignition_range": {
+    "max": 12,
+    "min": 4
+  },
+  "duration_s": 300.0,
+  "fire_type": "multi_origin",
+  "ignition_selection_mode": "area_stratified_initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "desk",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 36,
+      "position": [
+        2.704864501953125,
+        0.4949660897254944,
+        0.8747314810752869
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.45,
+      "source_radius_m": 0.6,
+      "source_temp_c": 545.8
+    },
+    {
+      "category": "ottoman",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 21,
+      "position": [
+        4.173096179962158,
+        0.2578592598438263,
+        0.25209397077560425
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.598,
+      "source_temp_c": 548.0
+    },
+    {
+      "category": "towel",
+      "floor_id": 0,
+      "fuel_kg": 2.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 118,
+      "position": [
+        -0.7358520030975342,
+        0.3729005753993988,
+        -2.787932872772217
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.354,
+      "source_temp_c": 532.0
+    },
+    {
+      "category": "clothes",
+      "floor_id": 0,
+      "fuel_kg": 2.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 76,
+      "position": [
+        6.09857177734375,
+        0.716092050075531,
+        -4.527455806732178
+      ],
+      "region_id": 1,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.513,
+      "source_temp_c": 540.5
+    },
+    {
+      "category": "shelf",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 75,
+      "position": [
+        6.131950855255127,
+        1.8250641822814941,
+        -4.296201229095459
+      ],
+      "region_id": 1,
+      "smoke_yield": 0.45,
+      "source_radius_m": 0.527,
+      "source_temp_c": 556.5
+    },
+    {
+      "category": "table lamp",
+      "floor_id": 0,
+      "fuel_kg": 1.84,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 227,
+      "position": [
+        -4.6516008377075195,
+        1.283465027809143,
+        -5.035412311553955
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.4,
+      "source_radius_m": 0.361,
+      "source_temp_c": 537.7
+    },
+    {
+      "category": "kitchen cabinet",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 203,
+      "position": [
+        -3.456111431121826,
+        0.4953390955924988,
+        -1.742065668106079
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.6,
+      "source_temp_c": 577.6
+    },
+    {
+      "category": "desk",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 179,
+      "position": [
+        -2.294363498687744,
+        0.49186500906944275,
+        1.6772392988204956
+      ],
+      "region_id": 4,
+      "smoke_yield": 0.45,
+      "source_radius_m": 0.6,
+      "source_temp_c": 534.7
+    },
+    {
+      "category": "chair",
+      "floor_id": 0,
+      "fuel_kg": 2.08,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 171,
+      "position": [
+        0.565264880657196,
+        0.4892632067203522,
+        1.8635393381118774
+      ],
+      "region_id": 4,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.408,
+      "source_temp_c": 568.1
+    }
+  ],
+  "intensity": "light",
+  "multi_origin_area_policy": {
+    "area_count_max": 6,
+    "area_count_min": 4,
+    "selected_area_ids": [
+      0,
+      1,
+      2,
+      4,
+      5
+    ],
+    "sources_per_area": {
+      "0": 2,
+      "1": 2,
+      "2": 1,
+      "4": 2,
+      "5": 2
+    },
+    "sources_per_area_max": 2,
+    "sources_per_area_min": 1
+  },
+  "num_initial_ignitions": 9,
+  "plan_hash": "d9eac90488ed",
+  "plan_id": "QaLdnwvtxbs_multi_origin_light_d9eac90488ed",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.4,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 2,
+    "flame_column_decay": 0.45,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 1.4300000000000002,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0033,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.2,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.006,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.55,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.1880000000000002,
+    "object_spread_speed_m_per_s": 0.0049499999999999995,
+    "radiative_gain_c": 120.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.08399999999999999,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00829-QaLdnwvtxbs/QaLdnwvtxbs.basis.glb",
+  "scene_id": "QaLdnwvtxbs",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -7.088442802429199,
+    -0.5642609968781471,
+    -6.069646835327148,
+    7.2829461097717285,
+    3.0415470600128174,
+    4.488450050354004
+  ]
+}

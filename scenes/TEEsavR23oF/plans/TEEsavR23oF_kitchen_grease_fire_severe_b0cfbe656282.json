@@ -1,0 +1,225 @@
+{
+  "default_initial_ignition_range": {
+    "max": 10,
+    "min": 7
+  },
+  "duration_s": 900.0,
+  "fire_type": "kitchen_grease_fire",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 420,
+      "position": [
+        0.10283439606428146,
+        2.8307132720947266,
+        -0.06714875996112823
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.37,
+      "source_temp_c": 959.6
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 460,
+      "position": [
+        1.940625548362732,
+        2.7365972995758057,
+        -2.504277229309082
+      ],
+      "region_id": 9,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.371,
+      "source_temp_c": 975.7
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 8.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 328,
+      "position": [
+        -2.8720264434814453,
+        0.9861829280853271,
+        -0.6607748866081238
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.345,
+      "source_temp_c": 946.7
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 8.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 347,
+      "position": [
+        -6.960831642150879,
+        1.1188340187072754,
+        0.54316645860672
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.352,
+      "source_temp_c": 924.9
+    },
+    {
+      "category": "ventilation hood",
+      "floor_id": 1,
+      "fuel_kg": 7.6,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 639,
+      "position": [
+        -5.7214837074279785,
+        2.7331812381744385,
+        -6.4162278175354
+      ],
+      "region_id": 12,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.285,
+      "source_temp_c": 932.8
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 8.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 333,
+      "position": [
+        -3.9571845531463623,
+        0.9173954725265503,
+        0.7271884083747864
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.275,
+      "source_temp_c": 947.0
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 8.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 332,
+      "position": [
+        -3.2530055046081543,
+        0.9201274514198303,
+        0.7154183387756348
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.293,
+      "source_temp_c": 962.4
+    },
+    {
+      "category": "microwave",
+      "floor_id": 0,
+      "fuel_kg": 8.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 345,
+      "position": [
+        -6.149074077606201,
+        1.629623532295227,
+        0.4766309857368469
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.46,
+      "source_temp_c": 920.5
+    },
+    {
+      "category": "kitchen appliance",
+      "floor_id": 0,
+      "fuel_kg": 8.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 331,
+      "position": [
+        -2.855123519897461,
+        1.0099992752075195,
+        0.2310989946126938
+      ],
+      "region_id": 5,
+      "smoke_yield": 0.3,
+      "source_radius_m": 0.318,
+      "source_temp_c": 976.5
+    }
+  ],
+  "intensity": "severe",
+  "num_initial_ignitions": 9,
+  "plan_hash": "b0cfbe656282",
+  "plan_id": "TEEsavR23oF_kitchen_grease_fire_severe_b0cfbe656282",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.65,
+    "ceiling_jet_speed_m_per_s": 0.42,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.9700000000000006,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0055000000000000005,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.35,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.01,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.9,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.5120000000000002,
+    "object_spread_speed_m_per_s": 0.00825,
+    "radiative_gain_c": 300.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.18,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00800-TEEsavR23oF/TEEsavR23oF.basis.glb",
+  "scene_id": "TEEsavR23oF",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -12.947001457214355,
+    -0.7366210073232651,
+    -9.556449890136719,
+    4.6296257972717285,
+    6.369441032409668,
+    1.6548290252685547
+  ]
+}

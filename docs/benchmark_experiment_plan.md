@@ -29,7 +29,7 @@ change multiple modules at once.
 | Dataset ID | Task config | Goal categories | Episodes | Scenes |
 | --- | --- | --- | ---: | ---: |
 | `objectnav` | `multi_objectnav_hm3d.yaml` | chair, bed, plant, toilet, tv_monitor, sofa | 1000 | 36 |
-| `person` | `person_objectnav_hm3d.yaml` | person | 662 | 36 |
+| `person` | `person_objectnav_hm3d.yaml` | person | 623 | 36 |
 
 The datasets use the same 36 HM3D validation scenes but contain different
 episodes and task distributions. Results must be reported separately. Do not

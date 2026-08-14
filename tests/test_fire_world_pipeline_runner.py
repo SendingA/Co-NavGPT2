@@ -230,7 +230,10 @@ class FireWorldPipelineRunnerTests(unittest.TestCase):
                 "floor_id": 0,
             }
 
-        objects = [instance(1, "bed", 0.3), instance(2, "bed", 0.8)]
+        objects = [
+            instance(index, "bed", 0.1 * index)
+            for index in range(1, 11)
+        ]
         inventory = {
             "schema_version": 2,
             "scene_id": "SyntheticScene",

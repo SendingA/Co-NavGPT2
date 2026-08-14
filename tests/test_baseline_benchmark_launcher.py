@@ -32,6 +32,13 @@ class BaselineMatrixTests(unittest.TestCase):
         run = RunSpec("objectnav", "random", "pointnav", 7, 200)
         self.assertEqual(parse_run_id(run.run_id), run)
 
+    def test_fire_condition_run_id_round_trip(self) -> None:
+        run = RunSpec(
+            "person", "nearest", "fmm", 1, 200, condition="fire-none"
+        )
+        self.assertEqual(parse_run_id(run.run_id), run)
+        self.assertIn("person__fire-none", run.run_id)
+
     def test_default_global_planners_include_random_without_greedy_alias(self) -> None:
         args = create_parser().parse_args([])
 
@@ -134,6 +141,38 @@ class DatasetAndCommandTests(unittest.TestCase):
         )
         self.assertEqual(command[-2:], ["--sem_threshold", "0.9"])
 
+    def test_fire_none_command_uses_step_clock_and_torch_cuda(self) -> None:
+        run = RunSpec(
+            "person", "nearest", "fmm", 1, 200, condition="fire-none"
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            command = build_command(
+                run,
+                Path(temporary),
+                python_executable=sys.executable,
+                pointnav_checkpoint="pointnav.pth",
+                pointnav_device="cuda:0",
+                pointnav_deterministic=1,
+                rl_checkpoint=None,
+                rl_device="cuda:0",
+                rl_deterministic=1,
+                num_agents=2,
+                extra_main_args=[],
+            )
+
+        def value(flag):
+            return command[command.index(flag) + 1]
+
+        self.assertEqual(value("--fire_world"), "1")
+        self.assertEqual(value("--fire_world_plan_id"), "auto")
+        self.assertEqual(value("--fire_world_fire_type"), "multi_origin")
+        self.assertEqual(value("--fire_world_intensity"), "medium")
+        self.assertEqual(value("--fire_clock_mode"), "step")
+        self.assertEqual(value("--risk_enabled"), "1")
+        self.assertEqual(value("--risk_source"), "none")
+        self.assertEqual(value("--fire_render_backend"), "torch")
+        self.assertEqual(value("--fire_render_device"), "cuda:0")
+
     def test_rl_requires_an_explicit_checkpoint(self) -> None:
         run = RunSpec("objectnav", "co_ut", "rl", 1, 200)
         with self.assertRaisesRegex(
@@ -159,6 +198,11 @@ class DatasetAndCommandTests(unittest.TestCase):
             "--start_episode",
         ):
             validate_extra_main_args(["--start_episode", "118"])
+        with self.assertRaisesRegex(
+            BenchmarkConfigurationError,
+            "--risk_source",
+        ):
+            validate_extra_main_args(["--risk_source", "oracle"])
 
 
 class ExecutionAndResumeTests(unittest.TestCase):

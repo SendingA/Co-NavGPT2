@@ -164,8 +164,10 @@ The same inputs therefore always yield the same readable `plan_id`,
 `plan_hash`, and ignitions (C1).
 
 **Template-based source selection** (`TEMPLATES` in `templates.py`). Each
-template samples one or more initial sources by flammability from its declared
-primary/fallback categories and ignites all of them at `t=0`. Template v8
+template samples multiple initial sources and ignites all of them at `t=0`.
+The kitchen, bedroom and living-room templates use their declared
+primary/fallback categories; `multi_origin` instead samples semantic areas
+first and has no category whitelist. Template v12
 does not choose secondary objects, future ignition times, parent-child links,
 or routes. There is no arbitrary-object fallback: if a scene lacks the
 required initial semantic objects, planning fails explicitly instead of
@@ -178,18 +180,21 @@ HM3D `semantic.txt` files and `MATERIAL_TABLE`.
 | `kitchen_grease_fire` | `stove`, `stovetop`, `oven and stove`, `oven`, `cooker` (→ exact kitchen appliances/hoods) | flammability-weighted exact count |
 | `bedroom_textile` | `bed`, `bed small`, `bedframe`, `pillow`, `blanket`, `bed sheet` (→ exact bedroom textiles/furniture) | flammability-weighted exact count |
 | `living_room_electric` | `tv`, `led tv`, `wall tv`, `monitor`, `computer`, tower/laptop variants (→ exact AV electronics) | flammability-weighted exact count |
-| `multi_origin` | low floor furniture: beds, sofas/seating, tables/desks, rugs/carpets and ottomans | two or more spatially distributed initial nodes on one floor |
+| `multi_origin` | any non-structural inventory object with `flammability >= 0.4`; no category whitelist | randomly select 4–6 distinct `region_id` areas, then randomly select 1–2 distinct sources per area |
 
 **Intensity presets** (`INTENSITIES`, three tiers):
 
 | intensity | initial sources (min–max) | source_temp_c | fuel_kg | duration_s |
 | --- | --- | --- | --- | --- |
-| light | 1–1 | 550 | 2 | 300 |
-| medium | 1–2 | 750 | 5 | 600 |
-| severe | 2–3 | 950 | 10 | 900 |
+| light | 2–2 | 550 | 2 | 300 |
+| medium | 4–6 | 750 | 5 | 600 |
+| severe | 7–10 | 950 | 10 | 900 |
 
-Initial-only generation is the only planner mode. When `--num_ignitions` is
-omitted, the intensity row above supplies the initial-source count. Passing
+Initial-only generation is the only planner mode. For the three
+category-based templates, omitting `--num_ignitions` uses the intensity row
+above. `multi_origin` instead produces 4–12 sources from its 4–6 area × 1–2
+source policy; intensity still controls source temperature, fuel and duration.
+Passing
 `--num_ignitions N` overrides that range with an **exact initial-source
 count**. The plan then contains exactly N distinct entries, all with
 `ignite_time_s = 0` and `ignition_role = "initial"`. Which other furniture
@@ -197,20 +202,25 @@ objects ignite later is decided inside `FirePropagation.step` from fuel,
 temperature, conduction and radiation.
 
 An explicit request fails instead of silently reducing the scenario when
-there are fewer than N initial candidates. `multi_origin` requires `N >= 2`.
+there are fewer than N initial candidates. For `multi_origin`, N must be
+distributable over 4–6 eligible areas with 1–2 sources in each area (therefore
+4–12 in principle).
 All plans store the resolved count as `num_initial_ignitions` plus
-`ignition_selection_mode = "initial_only"` and
+`ignition_selection_mode` (`"initial_only"` or
+`"area_stratified_initial_only"`) and
 `ignition_selection_version`; an explicit override additionally stores
-`num_initial_ignitions_requested` and participates in `plan_id`.
-`TEMPLATE_VERSION = 10` gives vertically bounded plans new IDs, so their
-timelines cannot be confused with template-v9. V10 retains the enlarged
-duration-aware radial floor hazard from v9 and adds metric limits for both
-free flame columns and vertical object-BBox visual fill.
+`num_initial_ignitions_requested` and participates in `plan_id`. Every plan
+also records `default_initial_ignition_range`; multi-origin plans additionally
+store `multi_origin_area_policy`, selected area IDs and per-area source counts.
+`TEMPLATE_VERSION = 12` gives area-based plans new IDs, so their timelines
+cannot be confused with category-pool plans. V12 keeps the bounded propagation
+parameters and changes only initial-source selection and its metadata.
 
-**Plan schema v4 (`plans/<plan_id>.json`).** Top level: semantic `plan_id`,
+**Plan schema v5 (`plans/<plan_id>.json`).** Top level: semantic `plan_id`,
 12-hex `plan_hash`, `scene_id`, `world_aabb`, `fire_type`, `intensity`,
 `seed`, `template_version`,
-`duration_s`, `num_initial_ignitions`, `ignition_selection_mode`, and
+`duration_s`, `num_initial_ignitions`, `default_initial_ignition_range`,
+`ignition_selection_mode`, and
 `ignition_selection_version`, plus
 optional `num_initial_ignitions_requested`. Each `ignitions[i]`:
 `object_id`, `category`, `position`,
@@ -596,8 +606,9 @@ a `(fire_type, intensity, seed)` triple. We expose four template
 generators (kitchen-grease, bedroom-textile, living-room-electric,
 multi-origin) that select only the initial ignition objects at `t=0`.
 Single-type templates use flammability-weighted sampling within their
-declared categories; multi-origin uses spatially distributed low furniture
-on one floor. Three intensity presets (light / medium / severe) set the source
+declared categories; multi-origin randomly selects 4–6 semantic regions and
+then 1–2 flammable non-structural objects in each selected region, without a
+category whitelist. Three intensity presets (light / medium / severe) set the source
 temperature (550 / 750 / 950 °C), the per-ignition fuel mass
 (2 / 5 / 10 kg), and the simulated duration (300 / 600 / 900 s). The
 output `plan.json` records each initial object's world position, source
@@ -731,38 +742,65 @@ python -m utils.fire_world.scene_scan --scene Nfvxx8J5NCo
 # 2) Auto-generate a plan (or hand-write plans/<id>.json)
 python -m utils.fire_world.planner \
     --scene Nfvxx8J5NCo \
-    --fire_type multi_origin --intensity medium --seed 7 \
-    --num_ignitions 4
+    --fire_type multi_origin --intensity medium --seed 42
 
-# N means exactly four initial sources at t=0. The planner does not select
-# any later object; propagation decides that from the voxel heat/fuel fields.
-# The planner prints the new count-specific plan_id. Inspect without writing:
+# This selects 4-6 areas and 1-2 initial sources per area. The planner does
+# not select later objects; propagation decides those from heat/fuel fields.
+# The planner prints the plan_id. Inspect without writing:
 python -m utils.fire_world.planner \
     --scene Nfvxx8J5NCo \
-    --fire_type multi_origin --intensity medium --seed 7 \
-    --num_ignitions 4 --print_only
+    --fire_type multi_origin --intensity medium --seed 42 --print_only
 
 # 3) Run propagation with the plan_id printed by step 2
-# (Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c for the exact template-v8 inputs above)
+# (the current template-v12 seed-42 ID is shown below)
 python -m utils.fire_world.propagation \
-    --scene Nfvxx8J5NCo --plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --scene Nfvxx8J5NCo --plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --voxel_m 0.15
 
 # 4) Automated evaluation (wallclock clock, real-time fire)
 python main.py --num_agents 2 --nav_mode co_ut \
-    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --fire_world 1 --fire_world_plan_id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --fire_clock_mode wallclock --fire_speedup 1.0 \
     --depth_use_clean 1
 
 # 4') Or drive manually to inspect the field (step clock for reproducibility)
 python scripts/keyboard_teleop_fire.py \
     --task-config configs/multi_objectnav_hm3d.yaml \
-    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_6df964ec1f4c \
+    --scene-id Nfvxx8J5NCo --plan-id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
     --clock-mode step --steps-per-unit 1 --seconds-per-unit 5.0 \
     --depth_use_clean 1 --show-dashboard 1
 ```
 
 ## Appendix C — Preparing complete FireWorld asset matrices
+
+To regenerate only the lightweight plan JSON matrix from existing inventories,
+without starting propagation, run:
+
+```bash
+python scripts/regenerate_fire_plans.py \
+    --scenes-root scenes \
+    --fire-types all --intensities all --seeds 42
+```
+
+Plans remain under `scenes/<scene>/plans/`. The reproducibility manifest and
+source-count histogram are written under
+`outputs/fire_plan_regeneration/runs/<run_id>/`. Semantic shortages are
+recorded as `skipped_infeasible`; unrelated objects are never substituted.
+These plans require a separate propagation bake before runtime use.
+
+To reduce historical duplicates to one active plan per existing
+`(scene, template, intensity)` group, first inspect the read-only dry run and
+then apply the recoverable move:
+
+```bash
+python scripts/prune_fire_plans.py --run-id unique_templates_v12
+python scripts/prune_fire_plans.py --run-id unique_templates_v12 --apply
+```
+
+Non-standard plans such as `route_contrast` are protected. Superseded plan
+JSONs, matching timelines, original asset indexes and a restore manifest are
+stored under `outputs/fire_plan_pruning_backup/<run_id>/`; nothing is
+permanently deleted by this command.
 
 `scripts/prepare_fire_world_scene.py` runs scene scan, deterministic planning,
 propagation, timeline validation and checksumming as one resumable command.

@@ -602,6 +602,14 @@ python scripts/build_person_objectnav_dataset.py \
     --split val --validate-only
 ```
 
+Generation and live validation use the same HM3D ObjectNav agent navmesh
+contract as `main.py` (`radius=0.18`, `height=0.88`, `max_climb=0.20`,
+`max_slope=45`). Live validation checks every episode start as well as goal
+coverage, so a dataset made against a stale or differently parameterized
+navmesh is rejected before benchmark execution. Regenerate an older person
+dataset once with the commands above; structural-only validation cannot detect
+disconnected starts.
+
 Run it through the normal ObjectNav pipeline:
 
 ```bash
@@ -705,6 +713,8 @@ Every file directly under `scripts/` is included here.
 | `scripts/build_inventory.py` | Builds FireWorld inventories and structural masks. Run `python scripts/build_inventory.py --scene Nfvxx8J5NCo`. |
 | `scripts/build_person_objectnav_dataset.py` | Generates or validates the static-person ObjectNav dataset. Run `python scripts/build_person_objectnav_dataset.py --split val_mini`. |
 | `scripts/generate_episode_fire_plan.py` | Generates a content-addressed multi-source short-dangerous/long-safe FireWorld plan for one exact native ObjectNav episode; see `docs/episode_fire_plan_generation.md`. |
+| `scripts/regenerate_fire_plans.py` | Regenerates the template/intensity FireWorld plan matrix from existing inventories without baking timelines; run `python scripts/regenerate_fire_plans.py --dry-run` first. |
+| `scripts/prune_fire_plans.py` | Keeps one active standard FireWorld plan per scene/template/intensity and moves superseded plans plus matching timelines into a manifest-backed recovery directory; dry-run is the default. |
 | `scripts/compare_radar_depth_ep0.py` | Reprocesses dumped `ep_0000` sensor arrays and writes radar/depth comparison panels and CSV summaries. Run after a run with `--fire_save_npz 1`: `python scripts/compare_radar_depth_ep0.py`. Paths are currently fixed to `outputs/fire_sensors/agent_0/ep_0000/agent_0`. |
 | `scripts/keyboard_teleop.py` | Clean Habitat 0.3.3 keyboard teleoperation. Use the command in Section 13; `PYTHONPATH` avoids its workstation-specific compatibility path. |
 | `scripts/keyboard_teleop_fire.py` | Keyboard teleoperation with a precomputed FireWorld timeline and optional dashboard. |

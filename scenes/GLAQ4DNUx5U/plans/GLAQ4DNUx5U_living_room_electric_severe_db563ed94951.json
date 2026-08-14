@@ -1,0 +1,191 @@
+{
+  "default_initial_ignition_range": {
+    "max": 10,
+    "min": 7
+  },
+  "duration_s": 900.0,
+  "fire_type": "living_room_electric",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "speaker",
+      "floor_id": 1,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 388,
+      "position": [
+        -5.615378379821777,
+        1.4510385990142822,
+        8.878519058227539
+      ],
+      "region_id": 10,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.291,
+      "source_temp_c": 962.9
+    },
+    {
+      "category": "tv",
+      "floor_id": 1,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 480,
+      "position": [
+        -11.18740177154541,
+        2.193026304244995,
+        7.678614616394043
+      ],
+      "region_id": 12,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.525,
+      "source_temp_c": 956.6
+    },
+    {
+      "category": "tv",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 398,
+      "position": [
+        -8.88886547088623,
+        -0.35498151183128357,
+        9.043042182922363
+      ],
+      "region_id": 10,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.566,
+      "source_temp_c": 973.0
+    },
+    {
+      "category": "speaker",
+      "floor_id": 1,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 392,
+      "position": [
+        -5.623828887939453,
+        0.7377257347106934,
+        3.6151537895202637
+      ],
+      "region_id": 10,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.292,
+      "source_temp_c": 972.3
+    },
+    {
+      "category": "speaker",
+      "floor_id": 0,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 389,
+      "position": [
+        -11.36893367767334,
+        0.48867329955101013,
+        8.314177513122559
+      ],
+      "region_id": 10,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.295,
+      "source_temp_c": 964.3
+    },
+    {
+      "category": "tv",
+      "floor_id": 1,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 603,
+      "position": [
+        -0.11606727540493011,
+        2.440671920776367,
+        5.8866353034973145
+      ],
+      "region_id": 17,
+      "smoke_yield": 0.55,
+      "source_radius_m": 0.448,
+      "source_temp_c": 971.9
+    },
+    {
+      "category": "speaker",
+      "floor_id": 1,
+      "fuel_kg": 9.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 390,
+      "position": [
+        -11.178160667419434,
+        0.7461733222007751,
+        3.593855619430542
+      ],
+      "region_id": 10,
+      "smoke_yield": 0.5,
+      "source_radius_m": 0.292,
+      "source_temp_c": 960.7
+    }
+  ],
+  "intensity": "severe",
+  "num_initial_ignitions": 7,
+  "plan_hash": "db563ed94951",
+  "plan_id": "GLAQ4DNUx5U_living_room_electric_severe_db563ed94951",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.65,
+    "ceiling_jet_speed_m_per_s": 0.42,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.55,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.9700000000000006,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0055000000000000005,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.35,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.01,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.9,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.5120000000000002,
+    "object_spread_speed_m_per_s": 0.00825,
+    "radiative_gain_c": 300.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.18,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00861-GLAQ4DNUx5U/GLAQ4DNUx5U.basis.glb",
+  "scene_id": "GLAQ4DNUx5U",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -12.285898208618164,
+    -2.292886972427368,
+    -1.8000999689102173,
+    2.8622660636901855,
+    5.302412986755371,
+    9.95553970336914
+  ]
+}

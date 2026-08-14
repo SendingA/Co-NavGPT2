@@ -76,6 +76,27 @@ Optional assets remain under the same mounted `data/` root:
 - `data/robots/` for visible robot URDFs;
 - `data/ddppo-models/gibson-2plus-resnet50.pth` for PointNav local planning.
 
+The static-person dataset is generated data and must match the runtime agent
+navmesh. The normal Compose data mount is intentionally read-only, so create
+or refresh this dataset with a temporary write-enabled mount before running a
+person benchmark:
+
+```bash
+CONAV_PERSON_DATA_DIR="${CONAV_DATA_DIR:-$PWD/data}"
+docker compose run --rm \
+  --volume "$CONAV_PERSON_DATA_DIR:/workspace/data:rw" \
+  conav python scripts/build_person_objectnav_dataset.py --split val
+docker compose run --rm \
+  --volume "$CONAV_PERSON_DATA_DIR:/workspace/data:rw" \
+  conav python scripts/build_person_objectnav_dataset.py \
+    --split val --validate-only
+```
+
+After generation, normal navigation commands return to the read-only mount.
+Do not resume a person benchmark checkpoint made with an older generated
+dataset: episode order and the total episode count can change when unreachable
+starts are removed.
+
 ## 3. Configure Compose
 
 Create an untracked root `.env` from the template:

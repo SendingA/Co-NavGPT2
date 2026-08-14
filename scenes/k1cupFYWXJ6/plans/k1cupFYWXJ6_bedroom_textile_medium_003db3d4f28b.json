@@ -1,0 +1,174 @@
+{
+  "default_initial_ignition_range": {
+    "max": 6,
+    "min": 4
+  },
+  "duration_s": 600.0,
+  "fire_type": "bedroom_textile",
+  "ignition_selection_mode": "initial_only",
+  "ignition_selection_version": 2,
+  "ignitions": [
+    {
+      "category": "armchair",
+      "floor_id": 0,
+      "fuel_kg": 6.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 127,
+      "position": [
+        2.269502878189087,
+        -14.429509162902832,
+        2.944100856781006
+      ],
+      "region_id": 2,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.599,
+      "source_temp_c": 754.1
+    },
+    {
+      "category": "curtain",
+      "floor_id": 0,
+      "fuel_kg": 6.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 18,
+      "position": [
+        -0.5278186202049255,
+        -13.091694831848145,
+        -12.693548202514648
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.503,
+      "source_temp_c": 721.5
+    },
+    {
+      "category": "armchair",
+      "floor_id": 0,
+      "fuel_kg": 6.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 43,
+      "position": [
+        -2.0657036304473877,
+        -14.530736923217773,
+        -3.7649147510528564
+      ],
+      "region_id": 1,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.559,
+      "source_temp_c": 748.6
+    },
+    {
+      "category": "armchair",
+      "floor_id": 0,
+      "fuel_kg": 6.0,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 22,
+      "position": [
+        -0.6309389472007751,
+        -14.033583641052246,
+        -12.287100791931152
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.485,
+      "source_temp_c": 744.1
+    },
+    {
+      "category": "sofa",
+      "floor_id": 10,
+      "fuel_kg": 6.2,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 734,
+      "position": [
+        2.5076816082000732,
+        6.623053550720215,
+        -2.170828104019165
+      ],
+      "region_id": 8,
+      "smoke_yield": 0.85,
+      "source_radius_m": 0.6,
+      "source_temp_c": 729.7
+    },
+    {
+      "category": "curtain",
+      "floor_id": 0,
+      "fuel_kg": 6.4,
+      "ignite_time_s": 0.0,
+      "ignition_role": "initial",
+      "object_id": 12,
+      "position": [
+        -3.6964504718780518,
+        -12.91247272491455,
+        -11.506449699401855
+      ],
+      "region_id": 0,
+      "smoke_yield": 0.75,
+      "source_radius_m": 0.6,
+      "source_temp_c": 764.1
+    }
+  ],
+  "intensity": "medium",
+  "num_initial_ignitions": 6,
+  "plan_hash": "003db3d4f28b",
+  "plan_id": "k1cupFYWXJ6_bedroom_textile_medium_003db3d4f28b",
+  "propagation_rules": {
+    "ambient_temp_c": 25.0,
+    "buoyancy_v_m_per_s": 0.5,
+    "ceiling_jet_speed_m_per_s": 0.3,
+    "flame_column_cells": 3,
+    "flame_column_decay": 0.5,
+    "flame_through_floors": 1,
+    "flammable_threshold": 0.4,
+    "floor_flame_contact_thresh": 0.12,
+    "floor_front_softness_m": 0.18,
+    "floor_fuel_value": 0.52,
+    "floor_gaussian_min_influence": 0.08,
+    "floor_gaussian_sigma_fraction": 0.58,
+    "floor_ignite_radius_cells": 2,
+    "floor_ignite_temp_c": 250.0,
+    "floor_max_spread_radius_m": 2.2,
+    "floor_min_visible_flame": 0.06,
+    "floor_seed_flame_max": 0.58,
+    "floor_seed_flame_min": 0.1,
+    "floor_spread_reach_fraction": 0.9,
+    "floor_spread_speed_m_per_s": 0.0044,
+    "floor_thermal_attenuation": 0.2,
+    "fuel_abundance_max": 2.5,
+    "fuel_abundance_min": 0.5,
+    "fuel_neighborhood_cells": 2,
+    "ignition_temp_c": 200.0,
+    "inextinguishable_sources": 1,
+    "limit_flame_to_source_envelope": 1,
+    "max_flame_column_height_m": 0.3,
+    "object_bbox_fill_flame_min": 0.16,
+    "object_bbox_fill_front_width_layers": 1.0,
+    "object_bbox_fill_speed_m_per_s": 0.008,
+    "object_bbox_fill_temp_margin_c": 40.0,
+    "object_bbox_max_vertical_spread_m": 0.75,
+    "object_flame_extra_height_cells": 0,
+    "object_max_spread_radius_m": 1.35,
+    "object_spread_speed_m_per_s": 0.0066,
+    "radiative_gain_c": 200.0,
+    "radiative_radius_cells": 4,
+    "spread_kernel": "laplacian",
+    "spread_speed_m_per_s": 0.12,
+    "thermal_diffusivity": 0.05
+  },
+  "scene_glb": "data/scene_datasets/hm3d_v0.2/val/00803-k1cupFYWXJ6/k1cupFYWXJ6.basis.glb",
+  "scene_id": "k1cupFYWXJ6",
+  "schema_version": 5,
+  "seed": 42,
+  "template_version": 12,
+  "world_aabb": [
+    -8.993423461914062,
+    -15.572549819946289,
+    -13.916098594665527,
+    9.08314037322998,
+    15.606049537658691,
+    6.433138847351074
+  ]
+}
