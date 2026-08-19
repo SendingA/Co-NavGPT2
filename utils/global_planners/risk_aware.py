@@ -151,7 +151,7 @@ class RiskAwareGlobalPlanner(GlobalPlanner):
             local_step=context.local_step,
             navigation_step=context.navigation_step,
             num_agents=1,
-            risk=context.risk,
+            risk=context.risk_for_agent(robot_id),
             episode_index=context.episode_index,
             agent_ids=[actual_agent_id],
         )

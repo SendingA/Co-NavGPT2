@@ -35,6 +35,7 @@ def _context(
     cells=((1, 1), (9, 9)),
     local_step=25,
     risk=None,
+    risk_by_agent=None,
     episode_index=0,
 ):
     shape = (12, 12)
@@ -55,6 +56,7 @@ def _context(
         navigation_step=37,
         num_agents=len(poses),
         risk=risk,
+        risk_by_agent=risk_by_agent,
         episode_index=episode_index,
     )
 
@@ -571,6 +573,37 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
             result.frontier_report_agent_ids,
             [0, 0, 1, 1],
         )
+
+    def test_individual_maps_use_each_agents_matching_risk_floor(self) -> None:
+        first_floor = self._risk(hard_at=(2, 2))
+        second_floor = self._risk(hard_at=(9, 9))
+        agent_maps = [
+            _agent_frontier_map(
+                ((2, 2), (2, 8)),
+                (20.0, 1.0),
+            ),
+            _agent_frontier_map(
+                ((2, 2), (9, 9)),
+                (20.0, 5.0),
+            ),
+        ]
+        context = _context(
+            poses=((1, 1, 0.0), (9, 8, 0.0)),
+            cells=((1, 1), (9, 8)),
+            risk=first_floor,
+            risk_by_agent=[first_floor, second_floor],
+        )
+
+        result = create_global_planner("fill").plan_individual_maps(
+            context,
+            agent_maps,
+        )
+
+        self.assertEqual(result.goal_points, [[2, 8], [2, 2]])
+        self.assertEqual(result.frontier_assignments, {0: 1, 1: 2})
+        self.assertEqual(result.frontier_report_agent_ids, [0, 0, 1, 1])
+        self.assertTrue(result.frontier_reports[0].hard_blocked)
+        self.assertTrue(result.frontier_reports[3].hard_blocked)
 
     def test_zero_risk_preserves_every_classical_normal_policy(self) -> None:
         context_kwargs = {

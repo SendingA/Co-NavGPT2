@@ -195,7 +195,10 @@ class HazardOverlayTests(unittest.TestCase):
             keyword.arg: ast.unparse(keyword.value)
             for keyword in risk_context_calls[0].keywords
         }
-        self.assertEqual(context_keywords["planning_risk"], "planning_risk")
+        self.assertEqual(
+            context_keywords["planning_risk"],
+            "agent_planning_risk",
+        )
         self.assertNotIn("visualization", ast.unparse(risk_context_calls[0]))
 
         local_calls = [
@@ -206,8 +209,12 @@ class HazardOverlayTests(unittest.TestCase):
             and node.func.attr == "set_risk_map"
         ]
         self.assertEqual(len(local_calls), 1)
-        self.assertEqual(ast.unparse(local_calls[0].args[0]), "planning_risk")
+        self.assertEqual(
+            ast.unparse(local_calls[0].args[0]),
+            "planning_risks_by_agent[i]",
+        )
         self.assertNotIn("visualization", ast.unparse(local_calls[0]))
+        self.assertIn("planner_states_for_agents", source)
 
 
 if __name__ == "__main__":

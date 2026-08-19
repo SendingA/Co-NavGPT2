@@ -489,8 +489,8 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
                 SimpleNamespace(position=np.array([0.0, 2.0, 0.0])),
                 states[1],
             ]
-            with self.assertRaisesRegex(RuntimeError, "one floor-aware"):
-                runtime.record_exposure(1.0, off_floor)
+            # Oracle now owns one current-floor projection per agent.
+            runtime.record_exposure(1.0, off_floor)
 
             privileged_args = SimpleNamespace(
                 risk_enabled=1,
@@ -530,6 +530,8 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
                     agent_states=states[:1],
                     camera_k=camera_k,
                 )
+            with self.assertRaisesRegex(RuntimeError, "one floor-aware"):
+                privileged_runtime.record_exposure(1.0, off_floor)
 
     def test_none_mode_evaluates_each_agent_on_its_current_floor(self) -> None:
         class LayeredWorld:
@@ -609,6 +611,90 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
                     np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
                     floor_y_m=[0.0],
                 )
+
+    def test_oracle_plans_and_evaluates_each_agent_on_current_floor(self) -> None:
+        class LayeredWorld:
+            origin = np.array([-2.0, 0.0, -2.0])
+            voxel_m = 1.0
+            shape = (4, 4, 4)
+
+            @staticmethod
+            def frame_index(timestamp_s):
+                return int(timestamp_s)
+
+            def query(self, _timestamp_s):
+                flame = np.zeros(self.shape, dtype=np.float32)
+                smoke = np.zeros(self.shape, dtype=np.float32)
+                temperature = np.full(self.shape, 25.0, dtype=np.float32)
+                flame[:, 0, :] = 1.0
+                smoke[:, 0, :] = 1.0
+                temperature[:, 0, :] = 500.0
+                return flame, smoke, temperature
+
+        class LayeredScene:
+            def __init__(self):
+                self.fw = LayeredWorld()
+
+            @staticmethod
+            def t_sim(robot_step):
+                return float(robot_step)
+
+        reference = SimpleNamespace(
+            init_sim_rotation=np.eye(3),
+            init_sim_position=np.zeros(3),
+            init_agent_position=np.zeros(3),
+            local_w=4,
+            local_h=4,
+            args=SimpleNamespace(map_resolution=100),
+        )
+        initial_states = [
+            SimpleNamespace(position=np.array([0.0, 0.0, 0.0])),
+            SimpleNamespace(position=np.array([1.0, 0.0, 0.0])),
+        ]
+        split_floor_states = [
+            SimpleNamespace(position=np.array([0.0, 2.0, 0.0])),
+            initial_states[1],
+        ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = RiskRuntime(
+                fire_scene=LayeredScene(),
+                reference_agent=reference,
+                args=SimpleNamespace(
+                    risk_enabled=1,
+                    risk_source="oracle",
+                    risk_dump_dir=temporary,
+                    risk_save_every=0,
+                    risk_smoke_source="appearance_depth",
+                ),
+                episode_id=11,
+            )
+            run_config = json.loads(
+                (runtime.run_dir / "risk_config.json").read_text()
+            )
+            self.assertEqual(
+                run_config["planner_floor_mode"], "per_agent_current"
+            )
+            self.assertEqual(
+                run_config["evaluator_floor_mode"], "per_agent_current"
+            )
+
+            layers, planning_risks = runtime.planner_states_for_agents(
+                1.0,
+                split_floor_states,
+            )
+            self.assertEqual(len(layers), 2)
+            self.assertEqual(float(layers[0].physical_risk.max()), 0.0)
+            self.assertGreater(float(layers[1].physical_risk.max()), 0.0)
+            self.assertEqual(float(planning_risks[0].max()), 0.0)
+            self.assertGreater(float(planning_risks[1].max()), 0.0)
+            self.assertFalse(bool(layers[0].hard_unsafe.any()))
+            self.assertTrue(bool(layers[1].hard_unsafe.any()))
+
+            runtime.prime_exposure(0.0, initial_states)
+            report = runtime.record_exposure(1.0, split_floor_states)
+            self.assertEqual(report["0"]["risk"], 0.0)
+            self.assertGreater(report["1"]["risk"], 0.0)
 
 
 class LowRiskFallbackTests(unittest.TestCase):

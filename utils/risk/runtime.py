@@ -191,9 +191,14 @@ class RiskRuntime:
                 "planner_source": self.source,
                 "evaluator_floor_mode": (
                     "episode_reference"
-                    if self.planning_enabled
+                    if self.source == "sensed"
                     else "per_agent_current"
                 ),
+                "planner_floor_mode": {
+                    "oracle": "per_agent_current",
+                    "sensed": "episode_reference",
+                    "none": "disabled",
+                }[self.source],
                 "local_planner": str(getattr(
                     args, "local_planner", "fmm"
                 )),
@@ -229,7 +234,12 @@ class RiskRuntime:
         """Sample FireClock exactly once for all agents in one outer step."""
         return float(self.fire_scene.t_sim(int(robot_step)))
 
-    def evaluator_visualization_state(self, timestamp_s: float) -> RiskLayers:
+    def evaluator_visualization_state(
+        self,
+        timestamp_s: float,
+        *,
+        floor_y_m: Optional[float] = None,
+    ) -> RiskLayers:
         """Return GT hazard layers for an explicitly display-only overlay.
 
         Evaluator-only ``source=none`` intentionally supplies a neutral map to
@@ -238,7 +248,12 @@ class RiskRuntime:
         through :meth:`planner_state` or either planner context.
         """
 
-        return self.gt_provider.snapshot(float(timestamp_s))
+        if floor_y_m is None:
+            return self.gt_provider.snapshot(float(timestamp_s))
+        return self.gt_provider.snapshot(
+            float(timestamp_s),
+            floor_y_m=float(floor_y_m),
+        )
 
     def _validate_current_floor(self, agent_states: Sequence[object]) -> None:
         positions = _agent_positions(agent_states)
@@ -258,14 +273,14 @@ class RiskRuntime:
     ):
         """Resolve GT exposure floors without weakening planner contracts.
 
-        Oracle and sensed navigation still consume one shared 2-D risk map, so
-        they must remain on the episode floor.  Evaluator-only ``none`` mode
-        exposes no GT map to navigation and can therefore project each agent
-        independently at its current Habitat floor height.
+        Oracle and evaluator-only ``none`` mode can project each agent
+        independently at its current Habitat floor height.  Sensed navigation
+        still owns one fused 2-D belief map and therefore remains constrained
+        to the episode reference floor.
         """
 
         positions = _agent_positions(agent_states)
-        if self.planning_enabled:
+        if self.source == "sensed":
             self._validate_current_floor(agent_states)
             return self.floor_y_m
         return positions[:, 1].copy()
@@ -399,16 +414,24 @@ class RiskRuntime:
             return self.belief.update_many(evidence_items)
         return self.belief.snapshot(float(timestamp_s))
 
+    def _planning_risk_from_oracle_layers(
+        self,
+        layers: RiskLayers,
+    ) -> np.ndarray:
+        unknown_penalty = float(self.config.unknown_risk_prior) * (
+            1.0 - layers.confidence
+        )
+        return np.clip(
+            np.maximum(layers.physical_risk, unknown_penalty),
+            0.0,
+            1.0,
+        ).astype(np.float32)
+
     def planner_state(self, timestamp_s: float) -> Tuple[RiskLayers, np.ndarray]:
         """Return the selected planner layers without changing evaluator data."""
         if self.source == "oracle":
             layers = self.gt_provider.snapshot(float(timestamp_s))
-            unknown_penalty = float(self.config.unknown_risk_prior) * (
-                1.0 - layers.confidence
-            )
-            planning_risk = np.clip(
-                np.maximum(layers.physical_risk, unknown_penalty), 0.0, 1.0
-            ).astype(np.float32)
+            planning_risk = self._planning_risk_from_oracle_layers(layers)
         elif self.source == "sensed":
             layers = self.belief.snapshot(float(timestamp_s))
             planning_risk = self.belief.planning_risk_from_layers(layers)
@@ -419,6 +442,45 @@ class RiskRuntime:
         self._last_layers = layers
         self._last_planning_risk = planning_risk
         return layers, planning_risk
+
+    def planner_states_for_agents(
+        self,
+        timestamp_s: float,
+        agent_states: Sequence[object],
+    ) -> Tuple[Sequence[RiskLayers], Sequence[np.ndarray]]:
+        """Return one map-aligned planner state per agent.
+
+        Oracle layers are independently projected through the vertical band
+        rooted at each agent's current Habitat y coordinate.  This prevents a
+        lower-storey flame from appearing on an upper-storey route that shares
+        the same x-z cells.  Sensed mode intentionally retains its single
+        shared belief map and the associated floor guard.
+        """
+
+        if not agent_states:
+            raise ValueError("agent_states must not be empty")
+        if self.source != "oracle":
+            if self.source == "sensed":
+                self._validate_current_floor(agent_states)
+            layers, planning_risk = self.planner_state(float(timestamp_s))
+            return (
+                [layers for _ in agent_states],
+                [planning_risk for _ in agent_states],
+            )
+
+        positions = _agent_positions(agent_states)
+        layer_items = []
+        risk_items = []
+        for floor_y_m in positions[:, 1]:
+            layers = self.gt_provider.snapshot(
+                float(timestamp_s),
+                floor_y_m=float(floor_y_m),
+            )
+            layer_items.append(layers)
+            risk_items.append(self._planning_risk_from_oracle_layers(layers))
+        self._last_layers = layer_items[0]
+        self._last_planning_risk = risk_items[0]
+        return layer_items, risk_items
 
     def record_exposure(
         self,

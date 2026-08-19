@@ -121,6 +121,49 @@ class RiskPlanningContext:
             raise ValueError("route_risk_alpha must be non-negative")
 
 
+def conservative_team_risk_context(
+    risks: Sequence[RiskPlanningContext],
+) -> RiskPlanningContext:
+    """Collapse per-agent floors only for a shared-frontier team planner.
+
+    Classical planners retain the matching per-agent context.  GPT consumes
+    one shared candidate-map namespace, so its single hazard report uses the
+    union of hard masks and the maximum risk across agent floors.  This is an
+    explicit conservative fallback, not the map used by local execution.
+    """
+
+    if not risks:
+        raise ValueError("risks must not be empty")
+    first = risks[0]
+    shape = np.asarray(first.planning_risk).shape
+    resolutions = [float(item.map_resolution_cm) for item in risks]
+    if any(np.asarray(item.planning_risk).shape != shape for item in risks):
+        raise ValueError("all agent risk maps must share one shape")
+    if any(abs(value - resolutions[0]) > 1e-9 for value in resolutions[1:]):
+        raise ValueError("all agent risk maps must share one resolution")
+    return RiskPlanningContext(
+        planning_risk=np.maximum.reduce([
+            np.asarray(item.planning_risk, dtype=np.float32)
+            for item in risks
+        ]),
+        confidence=np.minimum.reduce([
+            np.asarray(item.confidence, dtype=np.float32)
+            for item in risks
+        ]),
+        hard_unsafe=np.logical_or.reduce([
+            np.asarray(item.hard_unsafe, dtype=bool)
+            for item in risks
+        ]),
+        danger_threshold=min(float(item.danger_threshold) for item in risks),
+        hard_frontier_threshold=min(
+            float(item.hard_frontier_threshold) for item in risks
+        ),
+        frontier_weight=max(float(item.frontier_weight) for item in risks),
+        map_resolution_cm=resolutions[0],
+        route_risk_alpha=max(float(item.route_risk_alpha) for item in risks),
+    )
+
+
 @dataclass(frozen=True)
 class GlobalPlannerContext:
     """All state needed to turn detected frontiers into robot goals.
@@ -143,6 +186,7 @@ class GlobalPlannerContext:
     navigation_step: int
     num_agents: int
     risk: Optional[RiskPlanningContext] = None
+    risk_by_agent: Optional[Sequence[RiskPlanningContext]] = None
     episode_index: int = 0
     agent_ids: Optional[Sequence[int]] = None
 
@@ -179,6 +223,32 @@ class GlobalPlannerContext:
                 raise ValueError(
                     "risk-map shape must match obstacle_map shape"
                 )
+        if self.risk_by_agent is not None:
+            if len(self.risk_by_agent) < self.num_agents:
+                raise ValueError(
+                    "risk_by_agent must contain one entry per robot"
+                )
+            for robot_id, agent_risk in enumerate(
+                self.risk_by_agent[: self.num_agents]
+            ):
+                if np.asarray(agent_risk.planning_risk).shape != map_shape:
+                    raise ValueError(
+                        "risk-map shape for robot {} must match "
+                        "obstacle_map shape".format(robot_id)
+                    )
+
+    def risk_for_agent(
+        self,
+        robot_id: int,
+    ) -> Optional[RiskPlanningContext]:
+        """Return the risk projection matching one robot's current floor."""
+
+        index = int(robot_id)
+        if not 0 <= index < self.num_agents:
+            raise IndexError("robot_id is outside this planner context")
+        if self.risk_by_agent is not None:
+            return self.risk_by_agent[index]
+        return self.risk
 
 
 @dataclass

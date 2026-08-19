@@ -6,6 +6,7 @@ from .base import (
     GlobalPlannerContext,
     GlobalPlannerResult,
     RiskPlanningContext,
+    conservative_team_risk_context,
     merge_agent_frontier_maps,
 )
 from .factory import GLOBAL_PLANNERS, create_global_planner
@@ -26,6 +27,7 @@ __all__ = [
     "GlobalPlannerContext",
     "GlobalPlannerResult",
     "RiskPlanningContext",
+    "conservative_team_risk_context",
     "RiskAwareAssignment",
     "RandomGlobalPlanner",
     "SharedRiskAwareness",

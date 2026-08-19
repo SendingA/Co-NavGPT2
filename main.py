@@ -20,6 +20,7 @@ from utils.global_planners import (
     AgentFrontierMap,
     GlobalPlannerContext,
     RiskPlanningContext,
+    conservative_team_risk_context,
     create_global_planner,
     merge_agent_frontier_maps,
 )
@@ -536,6 +537,8 @@ def main(args, send_queue, receive_queue):
             navigation_step = int(agent[0].l_step)
             risk_layers = None
             planning_risk = None
+            risk_layers_by_agent = []
+            planning_risks_by_agent = []
             visualization_risk = None
             visualization_hard_unsafe = None
             hazard_display_label = None
@@ -611,14 +614,24 @@ def main(args, send_queue, receive_queue):
                         agent_states=agent_states,
                         camera_k=agent[0].camera_K,
                     )
-                risk_layers, planning_risk = risk_runtime.planner_state(
-                    shared_risk_t
+                (
+                    risk_layers_by_agent,
+                    planning_risks_by_agent,
+                ) = risk_runtime.planner_states_for_agents(
+                    shared_risk_t,
+                    agent_states,
                 )
+                # Snapshot/dashboard artifacts remain one 2-D panel.  Use
+                # Agent 0's current-floor oracle view as the labelled
+                # representative; every planner below receives its own view.
+                risk_layers = risk_layers_by_agent[0]
+                planning_risk = planning_risks_by_agent[0]
                 if args.visualize or args.print_images:
                     if risk_runtime.source == "none":
                         display_layers = (
                             risk_runtime.evaluator_visualization_state(
-                                shared_risk_t
+                                shared_risk_t,
+                                floor_y_m=float(agent_states[0].position[1]),
                             )
                         )
                         visualization_risk = display_layers.physical_risk
@@ -629,10 +642,12 @@ def main(args, send_queue, receive_queue):
                     else:
                         visualization_risk = planning_risk
                         visualization_hard_unsafe = risk_layers.hard_unsafe
+                        if risk_runtime.source == "oracle":
+                            hazard_display_label = "Oracle Agent 0 floor"
                 for i in range(num_agents):
                     agent[i].set_risk_map(
-                        planning_risk,
-                        risk_layers.hard_unsafe,
+                        planning_risks_by_agent[i],
+                        risk_layers_by_agent[i].hard_unsafe,
                         risk_alpha=float(args.risk_alpha),
                         enabled=local_risk_awareness,
                     )
@@ -684,23 +699,41 @@ def main(args, send_queue, receive_queue):
                     ) = merge_agent_frontier_maps(agent_frontier_maps)
 
                 planner_risk = None
+                planner_risk_by_agent = None
                 if (
                     risk_runtime is not None
                     and risk_runtime.planning_enabled
-                    and risk_layers is not None
-                    and planning_risk is not None
+                    and risk_layers_by_agent
+                    and planning_risks_by_agent
                 ):
-                    planner_risk = RiskPlanningContext(
-                        planning_risk=planning_risk,
-                        confidence=risk_layers.confidence,
-                        hard_unsafe=risk_layers.hard_unsafe,
-                        danger_threshold=float(risk_config.danger_threshold),
-                        hard_frontier_threshold=float(
-                            args.risk_hard_frontier_threshold
-                        ),
-                        frontier_weight=float(args.risk_frontier_weight),
-                        map_resolution_cm=float(args.map_resolution),
-                        route_risk_alpha=float(args.risk_alpha),
+                    planner_risk_by_agent = [
+                        RiskPlanningContext(
+                            planning_risk=agent_planning_risk,
+                            confidence=agent_layers.confidence,
+                            hard_unsafe=agent_layers.hard_unsafe,
+                            danger_threshold=float(
+                                risk_config.danger_threshold
+                            ),
+                            hard_frontier_threshold=float(
+                                args.risk_hard_frontier_threshold
+                            ),
+                            frontier_weight=float(
+                                args.risk_frontier_weight
+                            ),
+                            map_resolution_cm=float(args.map_resolution),
+                            route_risk_alpha=float(args.risk_alpha),
+                        )
+                        for agent_layers, agent_planning_risk in zip(
+                            risk_layers_by_agent,
+                            planning_risks_by_agent,
+                        )
+                    ]
+                    planner_risk = (
+                        conservative_team_risk_context(
+                            planner_risk_by_agent
+                        )
+                        if global_planner.uses_shared_frontier_map
+                        else planner_risk_by_agent[0]
                     )
 
                 planner_context = GlobalPlannerContext(
@@ -723,6 +756,7 @@ def main(args, send_queue, receive_queue):
                     navigation_step=navigation_step,
                     num_agents=num_agents,
                     risk=planner_risk,
+                    risk_by_agent=planner_risk_by_agent,
                     episode_index=count_episodes,
                 )
                 planner_result = (

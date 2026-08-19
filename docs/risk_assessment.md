@@ -300,7 +300,7 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 | `--risk_dump_dir` | `./outputs/risk_assessment` | 风险 artefact 根目录 |
 | `--risk_save_every` | `10` | 每 N 个导航 step 保存 PNG；`0` 只关闭 PNG，不关闭 JSON trace/summary |
 | `--risk_save_traces` | `1` | `1` 保存逐步 risk/action JSONL 和 `action_list.json`；`0` 只保留最终 `risk_summary.json` |
-| `--risk_max_floor_deviation_m` | `0.75` | `oracle/sensed` 规划时，agent 离开共享 2D floor 超过该距离会 fail-fast；`none` 仅评估模式按各 agent 当前高度独立采样，不使用此规划约束 |
+| `--risk_max_floor_deviation_m` | `0.75` | `sensed` 的共享 2D belief 约束：agent 离开 episode floor 超过该距离会 fail-fast；`oracle/none` 均按各 agent 当前高度独立投影，不使用此共享平面约束 |
 | `--risk_run_id` | `default` | 输出 run 子目录；仅允许字母、数字、点、短横线、下划线 |
 | `--risk_rank` | `0` | 并行运行的输出 rank 子目录 |
 
@@ -450,14 +450,16 @@ metrics；因此名字和聚合方式稳定，但它们还不是 Habitat registr
 4. **Privileged transmittance 必须单列。** Renderer transmittance 来自完整
    模拟器光线积分，不能作为普通机器人可观测量；使用它的结果必须标为
    privileged ablation。
-5. **规划仍是单楼层 2D 近似。** `oracle/sensed` 以 episode 初始 agent y 固定
-   一个共享导航平面；GT/oracle 只在配置的 body-height band 做垂直 max
-   projection，sensed evidence 也先按同一高度带过滤再写 x-z 栅格。它们尚无
-   多楼层 RiskLayers 或楼梯切换模型，因此任一 robot 偏离初始 floor 超过
-   `--risk_max_floor_deviation_m` 会 fail-fast，而不是静默合并楼上/楼下 hazard。
-   `risk_source=none` 不把 GT 风险图交给 planner，仅计算暴露指标，所以允许
-   agent 上下楼；evaluator 会为每个 agent 以其当前 y 独立做垂直投影，避免
-   相同 x-z 位置的跨层 hazard 泄漏。该能力不等同于多楼层风险规划。
+5. **风险层仍是按楼层投影的 2D 近似。** `oracle` 在每一步为每个 agent 以其
+   当前 Habitat y 单独执行 body-height vertical max projection；非 GPT global
+   planner 的 robot-local frontier score、各自 local planner 和 GT evaluator 都
+   使用与该 agent 匹配的 RiskLayers，避免相同 x-z 位置的跨层 hazard 泄漏。
+   GPT 仍有一个 shared frontier namespace，因此其 global hazard report 使用各
+   agent floor 的保守并集，但 local execution 继续使用各自楼层。`none` 不把 GT
+   图交给 planner，只按各 agent 当前 y 评估暴露。只有 `sensed` 仍是 episode
+   初始 floor 上的一张共享融合 belief；agent 偏离该平面超过
+   `--risk_max_floor_deviation_m` 会 fail-fast。这些都是多张 2D 投影，并非连续
+   3D 风险规划或显式楼梯拓扑模型。
 6. **Hazard depth 仍是近似。** Thermal product 以可见表面温度为主，但 sensed
    管线仍把温度/火焰证据投到观测 depth surface；尚未恢复完整的三维热源深度。
 7. **Global 直线路径只是一阶提示。** Frontier `route_risk` 是最近机器人到
