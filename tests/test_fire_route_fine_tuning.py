@@ -22,7 +22,7 @@ from utils.fire_world.fine_tuning import (
     write_curated_plan,
 )
 from scripts.tune_fire_route_scenarios import _write_episode_dataset
-from scripts.build_fork_detour_scenario import select_secondary_route
+from scripts.build_fork_detour_scenario import _yaw_offset, select_secondary_route
 
 
 def _two_route_grid():
@@ -70,6 +70,15 @@ def _additional_instances():
 
 
 class GridRouteTests(unittest.TestCase):
+    def test_secondary_yaw_offset_can_preserve_primary_heading(self) -> None:
+        primary = [0.0, 0.0, 0.0, 1.0]
+        self.assertTrue(np.allclose(_yaw_offset(primary, 0.0), primary))
+        self.assertTrue(np.allclose(
+            _yaw_offset(primary, np.pi),
+            [0.0, 1.0, 0.0, 0.0],
+            atol=1e-7,
+        ))
+
     def test_blind_shortest_path_uses_direct_gap(self) -> None:
         traversible, start, goal, ignition = _two_route_grid()
         result = shortest_grid_path(traversible, start, [goal])
@@ -200,6 +209,58 @@ class GridRouteTests(unittest.TestCase):
             candidate_validator=lambda cell: cell != tuple(result["cell"]),
         )
         self.assertNotEqual(hidden["cell"], result["cell"])
+
+    def test_secondary_start_can_require_open_navmesh_clearance(self) -> None:
+        traversible = np.zeros((31, 51), dtype=np.uint8)
+        traversible[3:28, 2:22] = 1
+        traversible[14:17, 22:48] = 1
+        primary = (15, 46)
+        goal = (15, 3)
+        aware = tuple((15, col) for col in range(3, 47))
+
+        result = select_secondary_route(
+            traversible,
+            primary_start=primary,
+            primary_aware_cells=aware,
+            goals=[goal],
+            ignition_cells=[],
+            resolution_m=0.25,
+            min_start_separation_m=2.0,
+            min_secondary_length_ratio=0.20,
+            max_route_overlap=1.0,
+            min_ignition_clearance_m=0.0,
+            min_secondary_clearance_m=1.0,
+            secondary_clearance_weight=2.0,
+            min_secondary_primary_route_clearance_m=1.0,
+        )
+
+        self.assertGreaterEqual(result["navmesh_clearance_m"], 1.0)
+        self.assertGreaterEqual(result["primary_route_clearance_m"], 1.0)
+        self.assertLess(result["cell"][1], 22)
+
+    def test_secondary_start_can_prefer_a_safe_region(self) -> None:
+        traversible = np.ones((21, 31), dtype=np.uint8)
+        traversible[[0, -1], :] = 0
+        traversible[:, [0, -1]] = 0
+        preferred = (5, 6)
+
+        result = select_secondary_route(
+            traversible,
+            primary_start=(15, 27),
+            primary_aware_cells=[(15, col) for col in range(3, 28)],
+            goals=[(15, 3)],
+            ignition_cells=[],
+            resolution_m=0.25,
+            min_start_separation_m=1.0,
+            min_secondary_length_ratio=0.0,
+            max_route_overlap=1.0,
+            min_ignition_clearance_m=0.0,
+            preferred_secondary_cell=preferred,
+            preferred_distance_weight=100.0,
+        )
+
+        self.assertEqual(result["cell"], list(preferred))
+        self.assertAlmostEqual(result["preferred_position_distance_m"], 0.0)
 
 
 class CuratedPlanTests(unittest.TestCase):

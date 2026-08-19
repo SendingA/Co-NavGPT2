@@ -6,7 +6,7 @@ belief maps cannot acquire a FireWorld reference through their constructor.
 from __future__ import annotations
 
 from collections import OrderedDict
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple, Union
 
 import numpy as np
 
@@ -99,13 +99,67 @@ class GroundTruthRiskProvider:
         timestamp_s: float,
         positions_world: np.ndarray,
         *,
-        floor_y_m: Optional[float] = None,
+        floor_y_m: Optional[
+            Union[float, Sequence[float], np.ndarray]
+        ] = None,
     ) -> RiskPointSamples:
         positions = np.asarray(positions_world, dtype=np.float64)
         if positions.ndim == 1:
             positions = positions.reshape(1, 3)
         if positions.ndim != 2 or positions.shape[1] != 3:
             raise ValueError("positions_world must have shape (N, 3)")
+
+        floors = np.asarray(floor_y_m) if floor_y_m is not None else None
+        if floors is None or floors.ndim == 0:
+            scalar_floor = None if floors is None else float(floors)
+            return self._sample_positions_on_floor(
+                float(timestamp_s), positions, floor_y_m=scalar_floor
+            )
+
+        floors = np.asarray(floors, dtype=np.float64).reshape(-1)
+        if floors.size != positions.shape[0]:
+            raise ValueError(
+                "floor_y_m must be a scalar or contain one value per position"
+            )
+        if not np.all(np.isfinite(floors)):
+            raise ValueError("floor_y_m values must be finite")
+
+        count = positions.shape[0]
+        combined = {
+            "flame": np.zeros(count, dtype=np.float32),
+            "temperature_c": np.full(
+                count,
+                float(self.config.temperature_ambient_c),
+                dtype=np.float32,
+            ),
+            "temperature": np.zeros(count, dtype=np.float32),
+            "smoke": np.zeros(count, dtype=np.float32),
+            "physical_risk": np.zeros(count, dtype=np.float32),
+            "hard_unsafe": np.zeros(count, dtype=bool),
+            "confidence": np.zeros(count, dtype=np.float32),
+        }
+        # A separate vertical projection prevents hazards on one storey from
+        # leaking into an agent that shares its x-z coordinates on another.
+        for floor in np.unique(floors):
+            selection = np.flatnonzero(floors == floor)
+            samples = self._sample_positions_on_floor(
+                float(timestamp_s),
+                positions[selection],
+                floor_y_m=float(floor),
+            )
+            for name in combined:
+                combined[name][selection] = getattr(samples, name)
+        return RiskPointSamples(**combined)
+
+    def _sample_positions_on_floor(
+        self,
+        timestamp_s: float,
+        positions: np.ndarray,
+        *,
+        floor_y_m: Optional[float],
+    ) -> RiskPointSamples:
+        """Sample one batch whose agents share a vertical projection band."""
+
         layers = self.snapshot(timestamp_s, floor_y_m=floor_y_m)
         indices = self.frame.world_to_grid(positions)
         valid = self.frame.in_bounds(indices)

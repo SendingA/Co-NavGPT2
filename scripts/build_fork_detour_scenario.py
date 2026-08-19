@@ -79,6 +79,30 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-route-overlap", type=float, default=0.20)
     parser.add_argument("--min-ignition-clearance-m", type=float, default=2.0)
     parser.add_argument(
+        "--min-secondary-clearance-m",
+        type=float,
+        default=0.0,
+        help=(
+            "minimum same-floor navmesh radius around the secondary start; "
+            "larger values select a more open initial area"
+        ),
+    )
+    parser.add_argument(
+        "--secondary-clearance-weight",
+        type=float,
+        default=0.0,
+        help="weight applied to navmesh clearance when ranking valid starts",
+    )
+    parser.add_argument(
+        "--min-secondary-primary-route-clearance-m",
+        type=float,
+        default=0.0,
+        help=(
+            "minimum straight-line separation between the secondary start "
+            "and every cell of the primary risk-aware route"
+        ),
+    )
+    parser.add_argument(
         "--secondary-avoid-target-visibility",
         action="store_true",
         help="require the secondary start to be occluded from the target center",
@@ -87,6 +111,32 @@ def _parser() -> argparse.ArgumentParser:
         "--primary-target-agent-only",
         action="store_true",
         help="only agent 0 may accept target detections in this controlled run",
+    )
+    parser.add_argument(
+        "--secondary-yaw-offset-deg",
+        type=float,
+        default=180.0,
+        help=(
+            "Agent 1 initial yaw relative to Agent 0; the default preserves "
+            "the historical opposite-facing start"
+        ),
+    )
+    parser.add_argument(
+        "--secondary-preferred-world-xz",
+        type=float,
+        nargs=2,
+        default=None,
+        metavar=("X", "Z"),
+        help=(
+            "optional preferred Agent 1 world x/z; all safety filters still "
+            "apply before proximity affects candidate ranking"
+        ),
+    )
+    parser.add_argument(
+        "--secondary-preferred-distance-weight",
+        type=float,
+        default=0.0,
+        help="ranking penalty per metre from --secondary-preferred-world-xz",
     )
     parser.add_argument(
         "--secondary-min-occlusion-margin-m",
@@ -176,6 +226,11 @@ def select_secondary_route(
     min_secondary_length_ratio: float,
     max_route_overlap: float,
     min_ignition_clearance_m: float,
+    min_secondary_clearance_m: float = 0.0,
+    secondary_clearance_weight: float = 0.0,
+    min_secondary_primary_route_clearance_m: float = 0.0,
+    preferred_secondary_cell: Optional[Sequence[int]] = None,
+    preferred_distance_weight: float = 0.0,
     candidate_validator: Optional[Callable[[GridCell], bool]] = None,
 ) -> Dict[str, object]:
     """Pick a distant, low-overlap second start on the same navmesh island."""
@@ -185,6 +240,11 @@ def select_secondary_route(
     aware = tuple((int(cell[0]), int(cell[1])) for cell in primary_aware_cells)
     goal_cells = tuple((int(cell[0]), int(cell[1])) for cell in goals)
     ignitions = tuple((int(cell[0]), int(cell[1])) for cell in ignition_cells)
+    preferred = (
+        None
+        if preferred_secondary_cell is None
+        else np.asarray(preferred_secondary_cell[:2], dtype=np.float64)
+    )
     if not aware or not goal_cells:
         raise ValueError("primary aware path and goals must be non-empty")
     distance, parent = _distance_tree(traversible, goal_cells)
@@ -193,10 +253,32 @@ def select_secondary_route(
         for current, nxt in zip(aware, aware[1:])
     )
     aware_set = set(aware)
+    padded_domain = np.pad(
+        np.asarray(traversible, dtype=np.uint8),
+        1,
+        mode="constant",
+        constant_values=0,
+    )
+    clearance_m = cv2.distanceTransform(
+        padded_domain,
+        cv2.DIST_L2,
+        cv2.DIST_MASK_PRECISE,
+    )[1:-1, 1:-1] * resolution
 
     accepted = []
     for raw in np.argwhere(np.isfinite(distance)):
         cell = (int(raw[0]), int(raw[1]))
+        local_clearance_m = float(clearance_m[cell])
+        if local_clearance_m < float(min_secondary_clearance_m):
+            continue
+        primary_route_clearance_m = min(
+            float(np.linalg.norm(np.subtract(cell, point)) * resolution)
+            for point in aware
+        )
+        if primary_route_clearance_m < float(
+            min_secondary_primary_route_clearance_m
+        ):
+            continue
         start_separation_m = float(
             np.linalg.norm(np.subtract(cell, primary)) * resolution
         )
@@ -227,14 +309,25 @@ def select_secondary_route(
             + min(length_ratio, 2.0)
             + 0.05 * start_separation_m
             + 0.02 * min(ignition_clearance_m, 10.0)
+            + float(secondary_clearance_weight) * local_clearance_m
         )
+        preferred_distance_m = (
+            None
+            if preferred is None
+            else float(np.linalg.norm(np.subtract(cell, preferred)) * resolution)
+        )
+        if preferred_distance_m is not None:
+            score -= float(preferred_distance_weight) * preferred_distance_m
         accepted.append((score, cell, path, {
             "start_separation_m": start_separation_m,
             "ignition_clearance_m": ignition_clearance_m,
+            "navmesh_clearance_m": local_clearance_m,
+            "primary_route_clearance_m": primary_route_clearance_m,
             "length_m": secondary_length_cells * resolution,
             "length_ratio_to_primary_safe": length_ratio,
             "overlap_cells_with_primary_safe": overlap_cells,
             "route_overlap_fraction": overlap_fraction,
+            "preferred_position_distance_m": preferred_distance_m,
         }))
     if not accepted:
         raise RuntimeError(
@@ -312,6 +405,7 @@ def _write_dataset(
     secondary_position: Sequence[float],
     primary_goal_position: Sequence[float],
     primary_target_agent_only: bool = False,
+    secondary_yaw_offset_deg: float = 180.0,
 ) -> Path:
     selected = dict(episode)
     info = dict(selected.get("info") or {})
@@ -323,7 +417,10 @@ def _write_dataset(
         },
         {
             "position": [float(value) for value in secondary_position],
-            "rotation": _yaw_offset(primary_rotation, math.pi),
+            "rotation": _yaw_offset(
+                primary_rotation,
+                math.radians(float(secondary_yaw_offset_deg)),
+            ),
         },
     ]
     info[GOAL_POSITIONS_KEY] = [
@@ -484,6 +581,17 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     grid.simulator, world, target_position
                 ) >= float(args.secondary_min_occlusion_margin_m)
 
+        preferred_secondary_cell = None
+        if args.secondary_preferred_world_xz is not None:
+            preferred_world = np.asarray([
+                float(args.secondary_preferred_world_xz[0]),
+                float(episode["start_position"][1]),
+                float(args.secondary_preferred_world_xz[1]),
+            ], dtype=np.float64)
+            preferred_secondary_cell = grid.frame.world_to_grid(
+                preferred_world
+            )
+
         secondary = select_secondary_route(
             grid.traversible,
             primary_start=candidate["start_cell"],
@@ -499,6 +607,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             min_secondary_length_ratio=float(args.min_secondary_length_ratio),
             max_route_overlap=float(args.max_route_overlap),
             min_ignition_clearance_m=float(args.min_ignition_clearance_m),
+            min_secondary_clearance_m=float(
+                args.min_secondary_clearance_m
+            ),
+            secondary_clearance_weight=float(
+                args.secondary_clearance_weight
+            ),
+            min_secondary_primary_route_clearance_m=float(
+                args.min_secondary_primary_route_clearance_m
+            ),
+            preferred_secondary_cell=preferred_secondary_cell,
+            preferred_distance_weight=float(
+                args.secondary_preferred_distance_weight
+            ),
             candidate_validator=secondary_validator,
         )
         world = grid.frame.grid_to_world(
@@ -535,6 +656,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             secondary_position=snapped,
             primary_goal_position=primary_goal_snapped,
             primary_target_agent_only=bool(args.primary_target_agent_only),
+            secondary_yaw_offset_deg=float(args.secondary_yaw_offset_deg),
         )
         report = {
             "schema_version": 1,
@@ -571,11 +693,34 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 "min_secondary_length_ratio": float(args.min_secondary_length_ratio),
                 "max_route_overlap": float(args.max_route_overlap),
                 "min_ignition_clearance_m": float(args.min_ignition_clearance_m),
+                "min_secondary_clearance_m": float(
+                    args.min_secondary_clearance_m
+                ),
+                "secondary_clearance_weight": float(
+                    args.secondary_clearance_weight
+                ),
+                "min_secondary_primary_route_clearance_m": float(
+                    args.min_secondary_primary_route_clearance_m
+                ),
                 "secondary_avoid_target_visibility": bool(
                     args.secondary_avoid_target_visibility
                 ),
                 "secondary_min_occlusion_margin_m": float(
                     args.secondary_min_occlusion_margin_m
+                ),
+                "secondary_yaw_offset_deg": float(
+                    args.secondary_yaw_offset_deg
+                ),
+                "secondary_preferred_world_xz": (
+                    None
+                    if args.secondary_preferred_world_xz is None
+                    else [
+                        float(args.secondary_preferred_world_xz[0]),
+                        float(args.secondary_preferred_world_xz[1]),
+                    ]
+                ),
+                "secondary_preferred_distance_weight": float(
+                    args.secondary_preferred_distance_weight
                 ),
             },
             "secondary_target_visible_from_start": (

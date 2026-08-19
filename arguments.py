@@ -292,7 +292,12 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--smoke_density", type=float, default=0.6)
     parser.add_argument("--fire_dump_dir", type=str,
                         default="./outputs/fire_sensors")
-    parser.add_argument("--fire_save_every", type=int, default=1)
+    parser.add_argument(
+        "--fire_save_every",
+        type=int,
+        default=1,
+        help="save fire-sensor frames every N steps; 0 disables all frame writes",
+    )
     parser.add_argument("--fire_save_npz", type=int, default=0)
     parser.add_argument("--fire_show_window", type=int, default=0)
     parser.add_argument("--lidar_360", type=int, default=0)
@@ -487,6 +492,15 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--risk_save_every", type=int, default=10,
                         help="save one risk-map snapshot every N navigation "
                              "steps; 0 disables step images")
+    parser.add_argument(
+        "--risk_save_traces",
+        type=int,
+        default=1,
+        help=(
+            "1 persists per-step risk/action JSONL and action_list.json; "
+            "0 keeps only final risk summaries"
+        ),
+    )
     parser.add_argument("--risk_max_floor_deviation_m", type=float,
                         default=0.75,
                         help="fail fast if any robot leaves the current-floor "

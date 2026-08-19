@@ -84,7 +84,7 @@ class MultiAgentRiskEvaluator:
             Mapping[object, Sequence[float]], Sequence[Sequence[float]]
         ],
         *,
-        floor_y_m: Optional[float] = None,
+        floor_y_m: Optional[Union[float, Sequence[float], np.ndarray]] = None,
     ) -> Dict[str, Dict[str, float]]:
         """Initialise timestamps without adding a CHE action sample."""
 
@@ -113,7 +113,7 @@ class MultiAgentRiskEvaluator:
             Mapping[object, Sequence[float]], Sequence[Sequence[float]]
         ],
         *,
-        floor_y_m: Optional[float] = None,
+        floor_y_m: Optional[Union[float, Sequence[float], np.ndarray]] = None,
     ) -> Dict[str, Dict[str, float]]:
         """Add exactly one CHE sample for every agent after one action."""
 

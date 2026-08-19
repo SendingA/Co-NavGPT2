@@ -172,6 +172,30 @@ class DatasetAndCommandTests(unittest.TestCase):
         self.assertEqual(value("--risk_source"), "none")
         self.assertEqual(value("--fire_render_backend"), "torch")
         self.assertEqual(value("--fire_render_device"), "cuda:0")
+        self.assertEqual(value("--visualize"), "0")
+        self.assertEqual(value("--print_images"), "0")
+        self.assertEqual(value("--fire_save_every"), "0")
+        self.assertEqual(value("--fire_save_npz"), "0")
+        self.assertEqual(value("--fire_show_window"), "0")
+        self.assertEqual(value("--risk_save_every"), "0")
+        self.assertEqual(value("--risk_save_traces"), "0")
+
+    def test_main_args_cannot_reenable_benchmark_artifacts(self) -> None:
+        for flag in (
+            "--visualize",
+            "--print_images",
+            "--fire_save_every",
+            "--fire_save_npz",
+            "--fire_show_window",
+            "--risk_save_every",
+            "--risk_save_traces",
+        ):
+            with self.subTest(flag=flag):
+                with self.assertRaisesRegex(
+                    BenchmarkConfigurationError,
+                    "launcher-owned flags",
+                ):
+                    validate_extra_main_args([flag, "1"])
 
     def test_rl_requires_an_explicit_checkpoint(self) -> None:
         run = RunSpec("objectnav", "co_ut", "rl", 1, 200)
@@ -290,6 +314,39 @@ class ExecutionAndResumeTests(unittest.TestCase):
             self.assertEqual(second["launcher_result"], "resumed")
             self.assertEqual(aggregate["metrics"]["success"], 0.5)
             self.assertTrue((run_dir / "metrics" / "aggregate.json").is_file())
+
+    def test_incomplete_run_can_adopt_log_only_artifact_flags(self) -> None:
+        run = RunSpec("objectnav", "nearest", "fmm", 1, 2)
+        code = (
+            "import sys; "
+            "done = 2 if '--risk_save_traces' in sys.argv else 1; "
+            "print(f'success: 0.500 ---({done}/2)')"
+        )
+        old_command = [sys.executable, "-c", code]
+        log_only_command = [
+            *old_command,
+            "--fire_save_every",
+            "0",
+            "--risk_save_every",
+            "0",
+            "--risk_save_traces",
+            "0",
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            run_dir = Path(temporary) / run.run_id
+            first = execute_run(run, run_dir, old_command, force=False)
+            resumed = execute_run(
+                run,
+                run_dir,
+                log_only_command,
+                force=False,
+            )
+            manifest = json.loads((run_dir / "manifest.json").read_text())
+
+            self.assertEqual(first["status"], "failed")
+            self.assertEqual(resumed["status"], "completed")
+            self.assertEqual(resumed["resume"]["start_episode"], 2)
+            self.assertEqual(manifest["command"], log_only_command)
 
     def test_zero_exit_with_wrong_episode_count_is_failed(self) -> None:
         run = RunSpec("objectnav", "nearest", "fmm", 1, 2)

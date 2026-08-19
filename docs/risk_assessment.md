@@ -299,7 +299,8 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 | `--risk_hard_frontier_threshold` | `0.80` | frontier/approach 最大规划风险硬过滤阈值；运行时至少不低于 danger threshold |
 | `--risk_dump_dir` | `./outputs/risk_assessment` | 风险 artefact 根目录 |
 | `--risk_save_every` | `10` | 每 N 个导航 step 保存 PNG；`0` 只关闭 PNG，不关闭 JSON trace/summary |
-| `--risk_max_floor_deviation_m` | `0.75` | agent 离开当前 2D floor 超过该距离时 fail-fast |
+| `--risk_save_traces` | `1` | `1` 保存逐步 risk/action JSONL 和 `action_list.json`；`0` 只保留最终 `risk_summary.json` |
+| `--risk_max_floor_deviation_m` | `0.75` | `oracle/sensed` 规划时，agent 离开共享 2D floor 超过该距离会 fail-fast；`none` 仅评估模式按各 agent 当前高度独立采样，不使用此规划约束 |
 | `--risk_run_id` | `default` | 输出 run 子目录；仅允许字母、数字、点、短横线、下划线 |
 | `--risk_rank` | `0` | 并行运行的输出 rank 子目录 |
 
@@ -351,10 +352,16 @@ python main.py --num_agents 2 --nav_mode co_ut \
 ├── risk_config.json
 └── ep_0000/
     ├── risk_steps.jsonl
+    ├── actions.jsonl
+    ├── action_list.json           # 三者由 --risk_save_traces 控制
     ├── risk_step_00000.png        # 由 --risk_save_every 控制
     ├── risk_step_00010.png
     └── risk_summary.json
 ```
+
+设置 `--risk_save_traces 0 --risk_save_every 0` 时，每个 episode 目录只写
+`risk_summary.json`；风险指标仍会进入主程序 stdout 和累计 metrics，规划与
+评估语义不变。
 
 ### 6.1 Step trace 与可视化
 
@@ -443,11 +450,14 @@ metrics；因此名字和聚合方式稳定，但它们还不是 Habitat registr
 4. **Privileged transmittance 必须单列。** Renderer transmittance 来自完整
    模拟器光线积分，不能作为普通机器人可观测量；使用它的结果必须标为
    privileged ablation。
-5. **单楼层 2D 近似。** Runtime 以 episode 初始 agent y 固定一个导航平面；
-   GT/oracle 只在配置的 body-height band 做垂直 max projection，sensed evidence
-   也先按同一高度带过滤再写 x-z 栅格。当前没有多楼层状态或楼梯切换模型；任一
-   robot 偏离初始 floor 超过 `--risk_max_floor_deviation_m` 会 fail-fast，而不是
-   静默把楼上/楼下 hazard 合并。
+5. **规划仍是单楼层 2D 近似。** `oracle/sensed` 以 episode 初始 agent y 固定
+   一个共享导航平面；GT/oracle 只在配置的 body-height band 做垂直 max
+   projection，sensed evidence 也先按同一高度带过滤再写 x-z 栅格。它们尚无
+   多楼层 RiskLayers 或楼梯切换模型，因此任一 robot 偏离初始 floor 超过
+   `--risk_max_floor_deviation_m` 会 fail-fast，而不是静默合并楼上/楼下 hazard。
+   `risk_source=none` 不把 GT 风险图交给 planner，仅计算暴露指标，所以允许
+   agent 上下楼；evaluator 会为每个 agent 以其当前 y 独立做垂直投影，避免
+   相同 x-z 位置的跨层 hazard 泄漏。该能力不等同于多楼层风险规划。
 6. **Hazard depth 仍是近似。** Thermal product 以可见表面温度为主，但 sensed
    管线仍把温度/火焰证据投到观测 depth surface；尚未恢复完整的三维热源深度。
 7. **Global 直线路径只是一阶提示。** Frontier `route_risk` 是最近机器人到

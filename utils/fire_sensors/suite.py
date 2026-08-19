@@ -63,9 +63,12 @@ class FireSensorSuite:
     ) -> None:
         self.cfg = cfg or FireSensorConfig()
         self.dump_dir = dump_dir
-        self.save_every = max(1, int(save_every))
+        self.save_every = int(save_every)
+        if self.save_every < 0:
+            raise ValueError("save_every must be non-negative")
         self._rng = np.random.default_rng(seed)
-        os.makedirs(self.dump_dir, exist_ok=True)
+        if self.save_every > 0:
+            os.makedirs(self.dump_dir, exist_ok=True)
 
         # Depth / radar / lidar share a single RNG.
         self.depth_sensor = SmokeDepthSensor(self.cfg, self._rng)
@@ -258,6 +261,8 @@ class FireSensorSuite:
         step: int,
         agent_id: int = 0,
     ) -> None:
+        if self.save_every <= 0:
+            return
         if step % self.save_every != 0:
             return
         sub = os.path.join(

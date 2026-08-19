@@ -441,6 +441,50 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
             )
             self.assertEqual(action_list["steps"], action_records)
 
+            quiet_runtime = RiskRuntime(
+                fire_scene=FakeScene(),
+                reference_agent=reference,
+                args=SimpleNamespace(
+                    risk_enabled=1,
+                    risk_source="oracle",
+                    risk_dump_dir=temporary,
+                    risk_save_every=0,
+                    risk_save_traces=0,
+                    risk_smoke_source="appearance_depth",
+                ),
+                episode_id=10,
+            )
+            quiet_runtime.evaluator.prime(
+                0.0,
+                [state.position for state in states],
+                floor_y_m=quiet_runtime.floor_y_m,
+            )
+            quiet_runtime.record_exposure(
+                1.0,
+                states,
+                step=1,
+                actions=[1, 3],
+                wall_time_s=0.125,
+            )
+            quiet_layers, quiet_planning_risk = quiet_runtime.planner_state(1.0)
+            quiet_runtime.save_step(
+                step=1,
+                timestamp_s=1.0,
+                layers=quiet_layers,
+                planning_risk=quiet_planning_risk,
+            )
+            quiet_summary = quiet_runtime.summary(habitat_success=1.0)
+            quiet_summary_path = quiet_runtime.save_summary(quiet_summary)
+            self.assertTrue(quiet_summary_path.is_file())
+            self.assertIsNone(quiet_summary["action_trace_file"])
+            self.assertFalse(quiet_runtime.step_log_path.exists())
+            self.assertFalse(quiet_runtime.action_log_path.exists())
+            self.assertFalse(quiet_runtime.action_list_path.exists())
+            self.assertEqual(
+                list(quiet_runtime.episode_dir.glob("risk_step_*.png")),
+                [],
+            )
+
             off_floor = [
                 SimpleNamespace(position=np.array([0.0, 2.0, 0.0])),
                 states[1],
@@ -485,6 +529,85 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
                     sensor_outputs=[sensor],
                     agent_states=states[:1],
                     camera_k=camera_k,
+                )
+
+    def test_none_mode_evaluates_each_agent_on_its_current_floor(self) -> None:
+        class LayeredWorld:
+            origin = np.array([-2.0, 0.0, -2.0])
+            voxel_m = 1.0
+            shape = (4, 4, 4)
+
+            @staticmethod
+            def frame_index(timestamp_s):
+                return int(timestamp_s)
+
+            def query(self, _timestamp_s):
+                flame = np.zeros(self.shape, dtype=np.float32)
+                smoke = np.zeros(self.shape, dtype=np.float32)
+                temperature = np.full(self.shape, 25.0, dtype=np.float32)
+                # Fire occupies only the lower storey's body-height band.
+                flame[:, 0, :] = 1.0
+                smoke[:, 0, :] = 1.0
+                temperature[:, 0, :] = 500.0
+                return flame, smoke, temperature
+
+        class LayeredScene:
+            def __init__(self):
+                self.fw = LayeredWorld()
+
+            @staticmethod
+            def t_sim(robot_step):
+                return float(robot_step)
+
+        reference = SimpleNamespace(
+            init_sim_rotation=np.eye(3),
+            init_sim_position=np.zeros(3),
+            init_agent_position=np.zeros(3),
+            local_w=4,
+            local_h=4,
+            args=SimpleNamespace(map_resolution=100),
+        )
+        initial_states = [
+            SimpleNamespace(position=np.array([0.0, 0.0, 0.0])),
+            SimpleNamespace(position=np.array([1.0, 0.0, 0.0])),
+        ]
+        split_floor_states = [
+            SimpleNamespace(position=np.array([0.0, 2.0, 0.0])),
+            initial_states[1],
+        ]
+
+        with tempfile.TemporaryDirectory() as temporary:
+            runtime = RiskRuntime(
+                fire_scene=LayeredScene(),
+                reference_agent=reference,
+                args=SimpleNamespace(
+                    risk_enabled=1,
+                    risk_source="none",
+                    risk_dump_dir=temporary,
+                    risk_save_every=0,
+                    risk_smoke_source="appearance_depth",
+                ),
+                episode_id=9,
+            )
+            run_config = json.loads(
+                (runtime.run_dir / "risk_config.json").read_text()
+            )
+            self.assertEqual(
+                run_config["evaluator_floor_mode"], "per_agent_current"
+            )
+            runtime.prime_exposure(0.0, initial_states)
+            report = runtime.record_exposure(1.0, split_floor_states)
+
+            self.assertEqual(report["0"]["risk"], 0.0)
+            self.assertGreater(report["1"]["risk"], 0.0)
+            self.assertFalse(bool(report["0"]["hard_unsafe"]))
+            self.assertTrue(bool(report["1"]["hard_unsafe"]))
+
+            with self.assertRaisesRegex(ValueError, "one value per position"):
+                runtime.gt_provider.sample_positions(
+                    1.0,
+                    np.array([[0.0, 0.0, 0.0], [1.0, 0.0, 0.0]]),
+                    floor_y_m=[0.0],
                 )
 
 

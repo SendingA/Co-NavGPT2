@@ -93,7 +93,7 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 | `--fire_apply_to_obs` | int, `1` | `1` 把退化后的 RGB+Depth 写回 obs 供建图；`0` 仅保存退化数据但 nav 用干净 obs |
 | `--smoke_density` | float, `0.6` | `[0,1]`，烟雾光学厚度。`0` 完全清晰，`1` 能见度 ≈1m |
 | `--fire_dump_dir` | str, `./outputs/fire_sensors` | 每步传感器图像输出目录 |
-| `--fire_save_every` | int, `1` | 每 N 步保存一次（`1` 每步都存） |
+| `--fire_save_every` | int, `1` | 每 N 步保存一次（`1` 每步都存，`0` 完全关闭传感器帧落盘） |
 | `--fire_save_npz` | int, `0` | `1` 同时 dump 原始 numpy `.npz` |
 | `--fire_show_window` | int, `0` | `1` 打开 OpenCV 2x4 实时仪表盘 |
 | `--lidar_360` | int, `0` | `1` 给每个 agent 安装 4 个偏航深度相机（前/左/后/右），由 LIDAR 模块拼接 360° 点云（仅在 `--fire_world=1` 时生效） |
@@ -748,6 +748,14 @@ outputs/benchmarks/<study_id>/
 │       └── navigation/
 └── reports/completeness.json
 ```
+
+Baseline launcher 是纯日志/指标模式：它固定传入
+`--visualize 0 --print_images 0 --fire_save_every 0 --fire_save_npz 0`
+以及 `--risk_save_every 0 --risk_save_traces 0`。因此不会保存 navigation
+合成图、FireSensor 图片/NPZ、risk PNG、逐步 risk/action trace 或
+`action_list.json`；仍保留 `stdout.log`、status、断点、aggregate metrics、
+completeness report，以及每个 episode 的轻量最终 `risk_summary.json`。
+这些输出控制参数属于 launcher 管理项，不能通过 `--main-args` 重新打开。
 
 重复执行同一个命令会跳过 fingerprint 一致且已经完成的 run；失败的 run
 会增加 attempt 并自动从最近的有效 episode checkpoint 继续。`main.py`

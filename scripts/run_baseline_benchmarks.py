@@ -489,6 +489,8 @@ _PROTECTED_MAIN_FLAGS = {
     "--local_planner",
     "--dump_location",
     "-d",
+    "--visualize",
+    "--print_images",
     "--fire_world",
     "--risk_enabled",
     "--risk_source",
@@ -504,11 +506,61 @@ _PROTECTED_MAIN_FLAGS = {
     "--fire_world_n_steps",
     "--fire_world_render_scale",
     "--fire_dump_dir",
+    "--fire_save_every",
+    "--fire_save_npz",
+    "--fire_show_window",
     "--risk_dump_dir",
     "--risk_run_id",
+    "--risk_save_every",
+    "--risk_save_traces",
     "--pointnav_checkpoint",
     "--rl_local_checkpoint",
 }
+
+_NON_SEMANTIC_ARTIFACT_FLAGS = {
+    "--visualize",
+    "--print_images",
+    "--fire_save_every",
+    "--fire_save_npz",
+    "--fire_show_window",
+    "--risk_save_every",
+    "--risk_save_traces",
+}
+
+
+def _without_artifact_flags(command: Sequence[str]) -> List[str]:
+    """Remove output-only switches when comparing resumable run commands."""
+
+    normalized = []
+    index = 0
+    while index < len(command):
+        token = command[index]
+        flag = token.split("=", 1)[0]
+        if flag in _NON_SEMANTIC_ARTIFACT_FLAGS:
+            index += 1 if "=" in token else 2
+            continue
+        normalized.append(token)
+        index += 1
+    return normalized
+
+
+def _artifact_only_manifest_change(existing: dict, requested: dict) -> bool:
+    """Allow an interrupted run to adopt stricter artifact suppression."""
+
+    existing_payload = dict(existing)
+    requested_payload = dict(requested)
+    existing_payload.pop("fingerprint", None)
+    requested_payload.pop("fingerprint", None)
+    try:
+        existing_payload["command"] = _without_artifact_flags(
+            existing_payload["command"]
+        )
+        requested_payload["command"] = _without_artifact_flags(
+            requested_payload["command"]
+        )
+    except (KeyError, TypeError):
+        return False
+    return existing_payload == requested_payload
 
 
 def validate_extra_main_args(extra_args: Sequence[str]) -> None:
@@ -599,6 +651,12 @@ def build_command(
                 fire_render_backend,
                 "--fire_render_device",
                 fire_render_device,
+                "--fire_save_every",
+                "0",
+                "--fire_save_npz",
+                "0",
+                "--fire_show_window",
+                "0",
                 "--risk_enabled",
                 "1",
                 "--risk_source",
@@ -609,6 +667,10 @@ def build_command(
                 str(run_dir / "risk"),
                 "--risk_run_id",
                 run.run_id,
+                "--risk_save_every",
+                "0",
+                "--risk_save_traces",
+                "0",
             ]
         )
     if run.local_planner == "pointnav":
@@ -795,6 +857,9 @@ def execute_run(
         if (
             existing_manifest.get("fingerprint")
             != manifest_payload["fingerprint"]
+            and not _artifact_only_manifest_change(
+                existing_manifest, manifest_payload
+            )
             and not force
         ):
             raise BenchmarkConfigurationError(

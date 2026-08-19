@@ -207,6 +207,40 @@ python -m utils.fire_world.propagation \
     --voxel_m 0.15 --dt 0.5 --save_dt 2.0
 ```
 
+对已经烘焙的 timeline 生成完整场景最终状态俯视图，可使用正交纹理底图
+渲染器。它取 timeline 最后一帧，将垂直最大 flame、地面至 1.5 m 的平均
+smoke 和所有 ignition source 按真实世界坐标叠加：
+
+```bash
+python scripts/render_fire_final_topdown.py \
+    --scene 00880-Nfvxx8J5NCo \
+    --plan-id Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa \
+    --width 1600 --gpu-device-id 0
+```
+
+默认输出为
+`outputs/fire_world/<scene>/<plan_id>/final_topdown.png`，并在同目录写入
+包含最终时刻、画面范围、火焰/烟雾覆盖率和火源像素坐标的 JSON 元数据。
+俯视叠加使用带多尺度纹理的灰黑烟雾、低透明度热晕和半透明火焰核心；即使
+两种 hazard 都达到最高显示强度，也会保留底图家具纹理，不把火焰画成不透明
+的 segmentation/heatmap 色块。
+
+如果要在 person ObjectNav 场景中显示数据集原生静态目标，可同时提供 person
+scene shard 和 episode id。渲染器会从 `goals_by_category` 读取固定 person 世界
+坐标，并把它写入 PNG 与同名 JSON，而不是人工猜测人物位置：
+
+```bash
+python scripts/render_fire_final_topdown.py \
+    --scene 00880-Nfvxx8J5NCo \
+    --plan-id Nfvxx8J5NCo_route_contrast_stable_6898210fe2ab \
+    --person-dataset-path \
+      data/processed/fire_route_scenarios/\
+Nfvxx8J5NCo_person_ep10_fork_detour_three_source/content/Nfvxx8J5NCo.json.gz \
+    --person-episode-id 10 \
+    --output outputs/fire_world/Nfvxx8J5NCo/\
+Nfvxx8J5NCo_route_contrast_stable_6898210fe2ab/final_topdown_person.png
+```
+
 Available `--fire_type` values: `kitchen_grease_fire`, `bedroom_textile`,
 `living_room_electric`, `multi_origin`. `--intensity`: `light`, `medium`,
 `severe`.
