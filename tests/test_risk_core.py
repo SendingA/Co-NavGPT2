@@ -39,6 +39,23 @@ class RiskCoreTests(unittest.TestCase):
         ))
         self.assertTrue(temperature_veto.temperature_hard_enabled)
 
+        inherited_stop = RiskConfig.from_namespace(SimpleNamespace(
+            risk_critical_threshold=0.73,
+            risk_early_stop_threshold=None,
+        ))
+        self.assertTrue(inherited_stop.early_stop_enabled)
+        self.assertEqual(inherited_stop.early_stop_threshold, 0.73)
+
+        explicit_stop = RiskConfig.from_namespace(SimpleNamespace(
+            risk_early_stop_enabled=0,
+            risk_early_stop_threshold=0.91,
+        ))
+        self.assertFalse(explicit_stop.early_stop_enabled)
+        self.assertEqual(explicit_stop.early_stop_threshold, 0.91)
+
+        with self.assertRaisesRegex(ValueError, "early_stop_threshold"):
+            RiskConfig(early_stop_threshold=1.01)
+
     def test_weights_and_temperature_have_explicit_units(self) -> None:
         with self.assertRaises(ValueError):
             RiskWeights(temperature=1.0, smoke=1.0)

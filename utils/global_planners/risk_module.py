@@ -262,9 +262,7 @@ class RiskAwareAssignment:
 
 
 class SharedRiskAwareness:
-    """Add one common risk policy on top of normal planner preferences."""
-
-    uncertainty_weight = 0.5
+    """Use continuous route risk only to break comparable task choices."""
 
     def __init__(self, context: GlobalPlannerContext) -> None:
         if context.risk is None:
@@ -309,7 +307,7 @@ class SharedRiskAwareness:
                 self.context.obstacle_map,
                 self.context.explored_map,
                 self.risk.planning_risk,
-                self.risk.hard_unsafe,
+                np.zeros_like(self.risk.hard_unsafe, dtype=bool),
                 risk_alpha=self.risk.route_risk_alpha,
             )
             is_proxy = route is None
@@ -358,7 +356,13 @@ class SharedRiskAwareness:
         base_preferences: Mapping[int, Sequence[float]],
         reports: Optional[Sequence[FrontierRiskReport]] = None,
     ) -> RiskAwareAssignment:
-        """Apply identical safety costs to every classical base policy."""
+        """Preserve task utility, using route risk only within a value tie.
+
+        No frontier is rejected because of a hard mask, a continuous-risk
+        threshold or epistemic uncertainty.  A lower-value frontier may replace
+        the normal winner only when its base utility is within the configured
+        relative regret tolerance.
+        """
 
         ordered_reports = sorted(
             self.build_reports() if reports is None else reports,
@@ -367,8 +371,8 @@ class SharedRiskAwareness:
         assignments: Dict[int, Optional[int]] = {}
         expected = len(ordered_reports)
         for robot_id in range(self.context.num_agents):
-            preferences = self._normalise_preferences(
-                base_preferences.get(robot_id, ())
+            preferences = np.asarray(
+                base_preferences.get(robot_id, ()), dtype=np.float64
             )
             if len(preferences) != expected:
                 raise ValueError(
@@ -378,39 +382,34 @@ class SharedRiskAwareness:
                         expected,
                     )
                 )
-            best_frontier = None
-            best_utility = float("-inf")
-            for ordinal, report in enumerate(ordered_reports):
-                threshold_blocked = bool(
-                    report.max_risk >= self.hard_threshold
-                    or (
-                        not report.route_is_proxy
-                        and report.route_max_risk is not None
-                        and report.route_max_risk >= self.hard_threshold
-                    )
-                )
-                if (
-                    report.hard_blocked
-                    or threshold_blocked
-                    or not np.isfinite(preferences[ordinal])
-                ):
-                    continue
-                utility = (
-                    float(preferences[ordinal])
-                    - float(self.risk.frontier_weight)
-                    * report.planning_risk
-                    - self.uncertainty_weight * report.uncertainty
-                )
-                if utility > best_utility + 1e-12 or (
-                    abs(utility - best_utility) <= 1e-12
-                    and (
-                        best_frontier is None
-                        or report.frontier_id < best_frontier
-                    )
-                ):
-                    best_frontier = int(report.frontier_id)
-                    best_utility = utility
-            assignments[robot_id] = best_frontier
+            finite_ids = np.flatnonzero(np.isfinite(preferences))
+            if finite_ids.size == 0:
+                assignments[robot_id] = None
+                continue
+
+            best_value = float(np.max(preferences[finite_ids]))
+            typical_magnitude = float(np.median(np.abs(preferences[finite_ids])))
+            value_scale = max(abs(best_value), typical_magnitude, 1.0)
+            max_regret = (
+                float(self.risk.frontier_value_tolerance) * value_scale
+            )
+            comparable = [
+                int(ordinal)
+                for ordinal in finite_ids
+                if best_value - float(preferences[ordinal])
+                <= max_regret + 1e-12
+            ]
+            winner = min(
+                comparable,
+                key=lambda ordinal: (
+                    float(ordered_reports[ordinal].planning_risk),
+                    -float(preferences[ordinal]),
+                    int(ordered_reports[ordinal].frontier_id),
+                ),
+            )
+            assignments[robot_id] = int(
+                ordered_reports[winner].frontier_id
+            )
 
         return RiskAwareAssignment(
             assignments=assignments,
@@ -419,16 +418,11 @@ class SharedRiskAwareness:
         )
 
     def safe_traversable_map(self) -> np.ndarray:
-        """Return the common safe domain used by map-goal samplers."""
+        """Return the normal explored domain without risk rejection."""
 
         traversable = (
             (np.asarray(self.context.explored_map) > 0.0)
             & (np.asarray(self.context.obstacle_map) <= 0.5)
-        )
-        traversable &= ~np.asarray(self.risk.hard_unsafe, dtype=bool)
-        traversable &= (
-            np.asarray(self.risk.planning_risk, dtype=np.float32)
-            <= float(self.risk.danger_threshold)
         )
         return traversable
 

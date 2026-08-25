@@ -6,11 +6,14 @@ The formal local-planner selector is:
 --local_planner fmm | astar | rl | pointnav
 ```
 
-`fmm` is the default and deliberately preserves the repository's existing
-implementation. In risk-blind mode that implementation first asks Habitat's
-navmesh for a shortest path and falls back to grid FMM when the navmesh path is
-unavailable. In risk-aware mode it goes directly to risk-aware grid FMM. This
-historical hybrid remains labelled `fmm` for continuity with existing runs.
+`fmm` is the default. Normal no-fire `auto` mode preserves the historical
+navmesh-first/grid-FMM fallback. Fire evaluations deliberately resolve to grid
+FMM for `risk_source=none`, `oracle`, and `sensed`, so none/oracle comparisons
+use the same exploration and detected-target-completion backend. The resolved
+backend is printed at startup and can be fixed with `--fmm_backend`.
+Backend parity also covers padded-grid geometry: both sources use the same
+blocked one-cell outer boundary and `+1` coordinate offset. Normal no-fire
+`auto` keeps its historical navmesh-first fallback behavior.
 
 `astar` and `rl` are explicit grid backends. They never invoke Habitat's
 navmesh. Both consume the same inflated occupancy grid, visited/collision
@@ -66,9 +69,10 @@ edge_cost = geometric_length
 ```
 
 This matches the cost semantics of FMM's
-`speed = 1 / (1 + risk_alpha * risk)`. `hard_unsafe` cells are excluded and
-an agent already inside a newly unsafe region receives the same
-obstacle-respecting emergency escape behavior as the risk-aware FMM path.
+`speed = 1 / (1 + risk_alpha * risk)`. In the FMM/A* agent execution path,
+`hard_unsafe` is diagnostic only: cells are not excluded, the real goal is not
+replaced by a temporary safety waypoint, and emergency escape is disabled.
+The latest continuous-risk grid is reconsidered on every action cycle.
 
 ## RL definition and training
 

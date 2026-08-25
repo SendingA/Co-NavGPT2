@@ -206,7 +206,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             for i in range(num_agents):
                 agent_state = env.sim.get_agent_state(i)
                 agent[i].mapping(observations[i], agent_state)
-                point_sum += agent[i].point_sum
+                point_sum += agent[i].latest_point_sum
                 visited_vis.append(agent[i].visited_vis)
                 pose_pred.append([
                     agent[i].current_grid_pose[1],
@@ -227,7 +227,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
             ):
                 individual_map_views.append(
                     individual_map_process.Map_Extraction(
-                        agent[robot_id].point_sum,
+                        agent[robot_id].latest_point_sum,
                         agent[robot_id].camera_position[1],
                         not bool(agent[robot_id].clean_diff),
                     )

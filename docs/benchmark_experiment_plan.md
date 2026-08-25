@@ -71,10 +71,10 @@ allowing one robot's planner to see another robot's map.
 
 When `risk_source=sensed` or `oracle`, every classical planner first retains
 its normal preference (`nearest`, raw `co_ut`, `fill`, or seeded `random`). A
-shared `SharedRiskAwareness` layer then adds identical hard filtering and soft
-risk/uncertainty costs; for `random` it filters the sampling domain. A zero-risk
-map therefore reproduces the normal planner assignment. Report rows as, for
-example, `nearest+sensed-risk`, not simply `nearest`.
+shared `SharedRiskAwareness` layer never hard-filters and does not subtract an
+uncertainty term. Only frontiers inside the configured normal-value tolerance
+may be reordered by continuous route risk. Seeded `random` keeps its normal
+sampling domain. A zero-risk map therefore reproduces the normal assignment.
 
 ### 2.3 Local planner selectors
 
@@ -82,7 +82,7 @@ The active selector is `--local_planner`:
 
 | Value | Current status | Benchmark interpretation |
 | --- | --- | --- |
-| `fmm` | Implemented | Historical navmesh-first/FMM fallback when blind; risk-aware FMM when risk is available |
+| `fmm` | Implemented | Fire none/oracle/sensed use the same grid backend; normal no-fire auto mode remains navmesh-first |
 | `astar` | Implemented | Grid A* with blind and risk-aware forms |
 | `rl` | Implemented but not benchmark-ready | Map-based PPO waypoint policy trained on randomized grids |
 | `pointnav` | Implemented | Official pretrained PointNav DD-PPO frontier-local control; blind policy or policy plus external hard-hazard shield |
@@ -388,15 +388,20 @@ rejections, API retries, model identifier, token usage, and latency.
 | Final distance to goal | `distance_to_goal` | lower | All runs |
 | Success rate | mean of `success` | higher | All runs |
 | SPL | `spl` | higher | All runs |
-| Cumulative hazard exposure | `risk/che` | lower | Fire only |
+| Mean hazard exposure per joint step | `risk/che_per_step` | lower | Fire only |
+| Severe-risk joint steps | `risk/critical_steps` | lower | Fire only |
 | Safe success | `risk/safe_success` | higher | Fire only |
 
 `num_steps` is the number of joint Habitat action cycles, including terminal
 STOP. It is an action-budget/navigation-time proxy, not wall-clock runtime.
 
-CHE must be shown as `N/A` for normal runs, not zero. CHE alone can reward a
-method that fails early and stops accumulating exposure, so every fire table
-must retain SR and SafeSuccess beside CHE.
+CHE must be shown as `N/A` for normal runs, not zero. Starting with
+`fireworld-risk-v4`, `CHE_per_step` is the mean of the per-joint-step team
+average. SafeSuccess is `Success * (1 - CHE_per_step)`. Every fire table must
+retain SR, SPL, SafeSuccess, CHE per step and critical-step count. Early stop is
+still recorded internally and changes the sampled trajectory prefix, but it is
+not displayed as a redundant aggregate column because it already forces SR and
+SPL to zero for that episode.
 
 ### 8.2 Frozen SPL semantics
 
@@ -415,8 +420,9 @@ and ablation row.
   confidence intervals.
 - For a two-scene fire pilot, report every scene/plan explicitly; do not make a
   strong cross-scene confidence claim from only two clusters.
-- Keep raw CHE cumulative. Do not replace it with correlated peak/mean/time
-  variants in the primary table.
+- Keep the v4 `risk/che_per_step` definition fixed and report `joint_steps` and
+  `exposure_samples` in episode artifacts. Do not resume v2/v3 metric sums into
+  v4 or add correlated peak/time/path variants to the primary table.
 
 ## 9. Unified output layout
 

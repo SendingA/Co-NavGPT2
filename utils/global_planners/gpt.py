@@ -7,7 +7,6 @@ from typing import Dict, Optional, Sequence
 
 from utils.risk.frontier import (
     FrontierRiskReport,
-    guard_frontier_assignments,
     risk_context_payload,
 )
 
@@ -108,6 +107,7 @@ class GPTGlobalPlanner(GlobalPlanner):
         fallback_assignments: Dict[int, Optional[int]],
         hard_risk_threshold: float,
     ) -> Dict[int, Optional[int]]:
+        del hard_risk_threshold
         if len(context.target_points) == 0 or context.local_step <= 0:
             return fallback_assignments
 
@@ -132,16 +132,24 @@ class GPTGlobalPlanner(GlobalPlanner):
         except GPTResponseError as error:
             self._emit_fallback("risk", error)
             return fallback_assignments
-        guarded = guard_frontier_assignments(
-            raw_assignments,
-            reports,
-            fallback_assignments=fallback_assignments,
-            expected_robot_ids=range(context.num_agents),
-            hard_risk_threshold=hard_risk_threshold,
-        )
-        if guarded.rejected:
-            logging.warning(
-                "risk guard replaced VLM frontier choices: %s",
-                guarded.rejected,
-            )
-        return guarded.assignments
+
+        # The chat backend already validates the JSON schema and frontier id
+        # range. Keep only a defensive per-robot parser here: hazard labels are
+        # diagnostic/tie-break information, never a hard rejection gate.
+        assignments: Dict[int, Optional[int]] = {}
+        for robot_id in range(context.num_agents):
+            raw_value = raw_assignments.get(f"robot_{robot_id}")
+            try:
+                frontier_id = int(str(raw_value).split("_")[-1])
+            except (TypeError, ValueError):
+                frontier_id = -1
+            if 0 <= frontier_id < len(context.target_points):
+                assignments[robot_id] = frontier_id
+            else:
+                logging.warning(
+                    "risk GPT returned an invalid frontier for robot %d; "
+                    "using the task-value fallback",
+                    robot_id,
+                )
+                assignments[robot_id] = fallback_assignments.get(robot_id)
+        return assignments

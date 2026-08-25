@@ -553,6 +553,7 @@ python main.py \
     --risk_source sensed \
     --risk_smoke_source appearance_depth \
     --risk_geometry_depth_source clean \
+    --risk_early_stop_enabled 1 \
     --risk_run_id sensed_seed1 \
     --risk_dump_dir outputs/risk_assessment \
     --risk_save_every 10
@@ -571,8 +572,19 @@ safety dilation. Report the following primary benchmark columns:
 success
 spl
 risk/safe_success
-risk/che
+risk/che_per_step
+risk/critical_steps
 ```
+
+In `fireworld-risk-v4`, `risk/che_per_step` is the mean of the per-joint-step
+team-average GT hazard. `risk/critical_steps` counts a joint step once when any
+agent reaches `--risk_critical_threshold`. SafeSuccess is
+`Success * (1 - CHE_per_step)`. By default, any agent sample reaching
+`--risk_critical_threshold` immediately ends the team episode and forces
+`success=0` and `spl=0`; set an independent threshold with
+`--risk_early_stop_threshold`. The internal early-stop event remains in each
+risk summary but is not a displayed aggregate metric. Start a fresh run rather
+than resuming v2/v3 metric sums into v4.
 
 For controlled ablations, keep the scene, episode, seed, plan, agent count,
 clock, and thresholds fixed and change only:
@@ -763,8 +775,9 @@ not standalone experiment scripts.
 | Radar reconstruction diagnostics | `outputs/radar_depth_recon/` and `outputs/radar_vs_depth_ep0/` |
 
 For the risk benchmark, the primary table is Habitat `Success`, Habitat `SPL`,
-`risk/safe_success`, and `risk/che`. Keep diagnostic traces, but do not
-substitute correlated peak/time/path-risk variants into the primary table.
+`risk/safe_success`, `risk/che_per_step`, and `risk/critical_steps`. Early stop
+remains an internal termination/debug event and is not displayed as a separate
+aggregate metric.
 
 ## 16. Troubleshooting
 

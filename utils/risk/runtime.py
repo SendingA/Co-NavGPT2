@@ -215,6 +215,7 @@ class RiskRuntime:
         self._last_step_report: Dict[str, Dict[str, float]] = {}
         self._planner_event_counts: Dict[str, Dict[str, int]] = {}
         self._action_steps = []
+        self._early_stop_event: Optional[Dict[str, object]] = None
 
     def _append_record(self, record: Dict[str, object]) -> None:
         if not self.save_traces:
@@ -508,6 +509,34 @@ class RiskRuntime:
             positions,
             floor_y_m=evaluation_floors,
         )
+        if (
+            self.config.early_stop_enabled
+            and self._early_stop_event is None
+        ):
+            threshold = float(self.config.early_stop_threshold)
+            triggering_agents = [
+                str(agent_id)
+                for agent_id, exposure in self._last_step_report.items()
+                if float(exposure["risk"]) >= threshold
+            ]
+            if triggering_agents:
+                self._early_stop_event = {
+                    "triggered": True,
+                    "threshold": threshold,
+                    "step": None if step is None else int(step),
+                    "t_sim_s": float(timestamp_s),
+                    "agent_ids": triggering_agents,
+                    "agent_risks": {
+                        agent_id: float(
+                            self._last_step_report[agent_id]["risk"]
+                        )
+                        for agent_id in triggering_agents
+                    },
+                    "max_risk": float(max(
+                        self._last_step_report[agent_id]["risk"]
+                        for agent_id in triggering_agents
+                    )),
+                }
         statuses = (
             list(planner_statuses)
             if planner_statuses is not None
@@ -574,8 +603,41 @@ class RiskRuntime:
                     None if status is None else str(status)
                     for status in statuses
                 ],
+                "early_stop_triggered": self.early_stop_triggered,
             })
         return self._last_step_report
+
+    @property
+    def early_stop_triggered(self) -> bool:
+        """Whether the evaluator has terminated this team episode for risk."""
+
+        return self._early_stop_event is not None
+
+    @property
+    def early_stop_event(self) -> Optional[Dict[str, object]]:
+        """Return a copy of the first threshold-crossing event, if any."""
+
+        if self._early_stop_event is None:
+            return None
+        return dict(self._early_stop_event)
+
+    def apply_early_stop_metric_overrides(
+        self,
+        metrics: Dict[str, object],
+    ) -> Dict[str, object]:
+        """Make a threshold-terminated episode an ObjectNav team failure.
+
+        ``SoftSPL`` is deliberately retained as terminal progress diagnostic.
+        Standard SPL is success-gated and must be zero whenever Success is
+        forced to zero.
+        """
+
+        result = dict(metrics)
+        if not self.early_stop_triggered:
+            return result
+        result["success"] = 0.0
+        result["spl"] = 0.0
+        return result
 
     def save_step(
         self,
@@ -636,10 +698,18 @@ class RiskRuntime:
         result = self.evaluator.summary()
         team = result["team"]
         if habitat_success is not None:
-            result["safe_success"] = float(
-                float(habitat_success) > 0.0
-                and int(team["critical_violations"]) == 0
-            )
+            result["safe_success"] = float(np.clip(
+                float(habitat_success)
+                * (1.0 - float(team["CHE_per_step"])),
+                0.0,
+                1.0,
+            ))
+        result["early_stop"] = {
+            "enabled": bool(self.config.early_stop_enabled),
+            "triggered": self.early_stop_triggered,
+            "threshold": float(self.config.early_stop_threshold),
+            "event": self.early_stop_event,
+        }
         result["planner_source"] = self.source
         result["smoke_source"] = self.smoke_source
         result["geometry_depth_source"] = self.geometry_depth_source
@@ -676,6 +746,7 @@ class RiskRuntime:
         team["executed_actions"] = int(sum(
             len(record["actions"]) for record in self._action_steps
         ))
+        team["early_stop"] = int(self.early_stop_triggered)
         team["decision_wall_time_s"] = float(sum(
             float(record["wall_time_s"])
             for record in self._action_steps

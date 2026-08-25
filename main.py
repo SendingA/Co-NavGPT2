@@ -1,4 +1,5 @@
 from collections import defaultdict
+from pathlib import Path
 from typing import Dict, List, Optional
 import os
 import logging
@@ -46,6 +47,7 @@ from utils.multi_agent_start import (
     episode_target_agent_ids,
 )
 from utils.local_planners import world_to_frontier_grid
+from utils.risk.metrics import flatten_benchmark_metrics
 
 import open3d as o3d
 import open3d.visualization.gui as gui
@@ -60,14 +62,24 @@ def transform_rgb_bgr(image):
     return image[:, :, [2, 1, 0]]
 
 
-def _flatten_risk_metrics(summary: Dict) -> Dict[str, float]:
-    """Expose only the two primary risk benchmark metrics."""
-    flat: Dict[str, float] = {
-        "risk/che": float(summary.get("team", {}).get("CHE", 0.0)),
+def _dataset_content_scene_ids(config) -> Optional[set]:
+    """Return explicit shard ids when the active dataset is sharded."""
+
+    dataset = config.habitat.dataset
+    split = str(getattr(dataset, "split", "val"))
+    data_path = Path(str(dataset.data_path).format(split=split))
+    content_dir = data_path.parent / "content"
+    if not content_dir.is_dir():
+        return None
+    return {
+        path.name.removesuffix(".json.gz")
+        for path in content_dir.glob("*.json.gz")
     }
-    if "safe_success" in summary:
-        flat["risk/safe_success"] = float(summary["safe_success"])
-    return flat
+
+
+def _flatten_risk_metrics(summary: Dict) -> Dict[str, float]:
+    """Expose the v4 risk metrics intended for benchmark aggregation."""
+    return flatten_benchmark_metrics(summary)
 
 
 def _find_scene_for_fire_plan(args):
@@ -111,7 +123,10 @@ def main(args, send_queue, receive_queue):
     torch.manual_seed(args.seed)
 
     from utils.risk.config import RiskConfig
-    from utils.local_planners import validate_local_planner_config
+    from utils.local_planners import (
+        resolve_fmm_backend,
+        validate_local_planner_config,
+    )
 
     risk_config = RiskConfig.from_namespace(args)
     local_risk_awareness = validate_local_planner_config(args)
@@ -133,10 +148,15 @@ def main(args, send_queue, receive_queue):
                 "[risk] wallclock mode is a latency stress test; use "
                 "--fire_clock_mode step for reproducible benchmark tables"
             )
-    print(
+    local_planner_message = (
         "[local_planner] "
         f"name={args.local_planner} risk_aware={local_risk_awareness}"
     )
+    if str(args.local_planner).lower() == "fmm":
+        local_planner_message += (
+            f" fmm_backend={resolve_fmm_backend(args)}"
+        )
+    print(local_planner_message)
 
     # Optional 360° LIDAR — installs 4 yaw-rotated depth sensors on every
     # navigation agent so utils.fire_sensors can stitch a 360° cloud.
@@ -180,6 +200,16 @@ def main(args, send_queue, receive_queue):
                     "matching timeline.npz assets before navigation."
                 )
             _fire_scene_ids = sorted(_fire_selections)
+            _dataset_scene_ids = _dataset_content_scene_ids(config)
+            if _dataset_scene_ids is not None:
+                _fire_scene_ids = sorted(
+                    set(_fire_scene_ids) & _dataset_scene_ids
+                )
+                if not _fire_scene_ids:
+                    raise FileNotFoundError(
+                        "No runnable FireWorld scene is present in the "
+                        "active dataset content directory"
+                    )
             with habitat.config.read_write(config):
                 config.habitat.dataset.content_scenes = _fire_scene_ids
             print(
@@ -240,6 +270,9 @@ def main(args, send_queue, receive_queue):
         )
     completed_before = start_episode - 1
     metric_precision = "exact"
+    metric_contract = (
+        "fireworld-risk-v4" if risk_config.enabled else "habitat-native"
+    )
     resume_state = None
     if completed_before:
         resume_path = getattr(args, "resume_metrics_path", None)
@@ -257,6 +290,16 @@ def main(args, send_queue, receive_queue):
             raise ValueError(
                 "resume metrics planned count does not match "
                 "--max_episodes"
+            )
+        if (
+            risk_config.enabled
+            and resume_state.metric_contract != metric_contract
+        ):
+            raise ValueError(
+                "risk metric contract mismatch: this run uses "
+                f"{metric_contract}, but the resume state reports "
+                f"{resume_state.metric_contract!r}. Start a new study/run "
+                "instead of mixing the v4 metrics with a v2/v3 resume."
             )
         agg_metrics.update(resume_state.metric_sums)
         metric_precision = resume_state.precision
@@ -518,7 +561,6 @@ def main(args, send_queue, receive_queue):
 
         count_step = 0
         point_sum = o3d.geometry.PointCloud()
-
         while not env.episode_over:
             start = time.time()
             visited_vis = []
@@ -581,7 +623,7 @@ def main(args, send_queue, receive_queue):
             # ---------- Per-agent mapping ----------
             for i in range(num_agents):
                 agent[i].mapping(observations[i], agent_states[i])
-                point_sum += agent[i].point_sum
+                point_sum += agent[i].latest_point_sum
                 visited_vis.append(agent[i].visited_vis)
                 pose_pred.append([
                     agent[i].current_grid_pose[1],
@@ -600,7 +642,7 @@ def main(args, send_queue, receive_queue):
             ):
                 individual_map_views.append(
                     individual_map_process.Map_Extraction(
-                        agent[robot_id].point_sum,
+                        agent[robot_id].latest_point_sum,
                         agent[robot_id].camera_position[1],
                     )
                 )
@@ -719,6 +761,9 @@ def main(args, send_queue, receive_queue):
                             ),
                             frontier_weight=float(
                                 args.risk_frontier_weight
+                            ),
+                            frontier_value_tolerance=float(
+                                args.risk_frontier_value_tolerance
                             ),
                             map_resolution_cm=float(args.map_resolution),
                             route_risk_alpha=float(args.risk_alpha),
@@ -887,6 +932,16 @@ def main(args, send_queue, receive_queue):
                     actions=actions,
                     wall_time_s=decision_wall_time_s,
                 )
+                if risk_runtime.early_stop_triggered:
+                    event = risk_runtime.early_stop_event or {}
+                    print(
+                        "[risk] early stop: "
+                        f"step={event.get('step')} "
+                        f"agents={event.get('agent_ids')} "
+                        f"max_risk={float(event.get('max_risk', 0.0)):.3f} "
+                        f"threshold={float(event.get('threshold', 0.0)):.3f}"
+                    )
+                    break
 
             step_end = time.time()
 
@@ -905,6 +960,7 @@ def main(args, send_queue, receive_queue):
 
         metrics = dict(env.get_metrics())
         if risk_runtime is not None:
+            metrics = risk_runtime.apply_early_stop_metric_overrides(metrics)
             risk_summary = risk_runtime.summary(
                 habitat_success=float(metrics.get("success", 0.0))
             )
@@ -914,11 +970,12 @@ def main(args, send_queue, receive_queue):
             log += (
                 "[risk] "
                 f"source={risk_summary['planner_source']}  "
-                f"CHE={risk_team['CHE']:.3f}  "
-                f"critical={risk_team['critical_violations']}  "
+                f"CHE/step={risk_team['CHE_per_step']:.3f}  "
+                f"samples={risk_team['exposure_samples']}  "
+                f"critical_steps={risk_team['critical_steps']}  "
                 f"safe_refusal={risk_team['safe_refusal_steps']}  "
                 f"escape={risk_team['emergency_escape_steps']}  "
-                f"safe_success={risk_summary['safe_success']:.0f}\n"
+                f"safe_success={risk_summary['safe_success']:.3f}\n"
             )
 
         # --- Debug: show why an episode was marked failed.
@@ -975,6 +1032,7 @@ def main(args, send_queue, receive_queue):
             episodes_planned=num_episodes,
             metric_sums=agg_metrics,
             precision=metric_precision,
+            metric_contract=metric_contract,
             last_episode_id=getattr(current_episode, "episode_id", None),
             last_scene_id=getattr(current_episode, "scene_id", None),
         )

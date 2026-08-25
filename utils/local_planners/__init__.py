@@ -3,6 +3,7 @@
 from .astar import AStarPathCache, AStarPlanResult, AStarPlanner
 from .factory import (
     create_local_planner,
+    resolve_fmm_backend,
     validate_local_planner_config,
 )
 from .pointnav import (
@@ -35,6 +36,7 @@ __all__ = [
     "RLGridPlanner",
     "RLGridPolicy",
     "create_local_planner",
+    "resolve_fmm_backend",
     "apply_pointnav_simulator_schema",
     "compute_compass",
     "compute_episode_gps",

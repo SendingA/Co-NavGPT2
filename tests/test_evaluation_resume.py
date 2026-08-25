@@ -60,6 +60,7 @@ class EvaluationResumeTests(unittest.TestCase):
                 episodes_planned=5,
                 metric_sums={"success": 1.0, "spl": 0.625},
                 precision="exact",
+                metric_contract="fireworld-risk-v4",
                 last_episode_id="ep-2",
                 last_scene_id="scene-a",
             )
@@ -69,6 +70,7 @@ class EvaluationResumeTests(unittest.TestCase):
         self.assertEqual(state.last_episode_id, "ep-2")
         self.assertEqual(state.last_scene_id, "scene-a")
         self.assertEqual(state.precision, "exact")
+        self.assertEqual(state.metric_contract, "fireworld-risk-v4")
 
     def test_iterator_advances_to_first_unfinished_episode(self) -> None:
         env = _FakeEnv()

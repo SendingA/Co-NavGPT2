@@ -254,14 +254,16 @@ def summarize_run(
     safe_success = float(risk.get(
         "safe_success", metrics.get("risk/safe_success", 0.0)
     ))
-    critical = int(team_risk.get("critical_violations", 0))
+    critical_steps = int(team_risk.get(
+        "critical_steps", team_risk.get("critical_violations", 0)
+    ))
     success = float(metrics.get("success", 0.0))
     steps = int(round(float(metrics.get("num_steps", actions["num_steps"]))))
     divergence = route_divergence(paths[0], baseline)
     detour_evidence = bool(
         success >= 1.0
-        and safe_success >= 1.0
-        and critical == 0
+        and safe_success > 0.0
+        and critical_steps == 0
         and divergence >= 0.50
         and primary_length_ratio >= 1.05
     )
@@ -280,10 +282,18 @@ def summarize_run(
         "task": {
             "success": success,
             "safe_success": safe_success,
-            "critical_violations": critical,
+            "critical_steps": critical_steps,
             "num_steps": steps,
             "spl": float(metrics.get("spl", 0.0)),
-            "CHE": float(team_risk.get("CHE", metrics.get("risk/che", 0.0))),
+            "CHE_per_step": float(team_risk.get(
+                "CHE_per_step",
+                team_risk.get(
+                    "CHE",
+                    metrics.get(
+                        "risk/che_per_step", metrics.get("risk/che", 0.0)
+                    ),
+                ),
+            )),
         },
         "primary_detour": {
             "route_divergence_from_risk_none": divergence,

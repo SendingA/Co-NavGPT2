@@ -15,6 +15,27 @@ from .rl import RLGridPlanner, load_rl_policy
 LOCAL_PLANNERS = ("fmm", "astar", "rl", "pointnav")
 
 
+def resolve_fmm_backend(args) -> str:
+    """Resolve one auditable FMM backend for the active experiment.
+
+    Historical normal runs remain navmesh-shortest-path-first. Fire-risk
+    ablations deliberately use grid FMM for both evaluator-only ``none`` and
+    planner-aware ``oracle``/``sensed`` conditions, so risk information cannot
+    silently change the geometric execution backend.
+    """
+
+    requested = str(getattr(args, "fmm_backend", "auto")).strip().lower()
+    if requested not in {"auto", "navmesh", "grid"}:
+        raise ValueError("fmm_backend must be one of auto, navmesh or grid")
+    if requested != "auto":
+        return requested
+    fire_risk_ablation = bool(
+        int(getattr(args, "fire_world", 0))
+        and int(getattr(args, "risk_enabled", 0))
+    )
+    return "grid" if fire_risk_ablation else "navmesh"
+
+
 def validate_local_planner_config(args):
     """Validate planner settings and return automatic risk awareness.
 
@@ -31,6 +52,7 @@ def validate_local_planner_config(args):
         )
     risk_config = RiskConfig.from_namespace(args)
     aware = risk_config.effective_source in {"oracle", "sensed"}
+    resolve_fmm_backend(args)
     crop_size = int(getattr(args, "rl_local_crop_size", 31))
     if crop_size < 5 or crop_size % 2 == 0:
         raise ValueError("--rl_local_crop_size must be an odd integer >= 5")

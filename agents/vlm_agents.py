@@ -44,6 +44,7 @@ from utils.local_planners import (
     AStarPathCache,
     create_local_planner,
     frontier_grid_to_world,
+    resolve_fmm_backend,
     shield_pointnav_action,
 )
 
@@ -212,6 +213,7 @@ class VLM_Agent():
         
         # 3D mapping
         self.point_sum = o3d.geometry.PointCloud()
+        self.latest_point_sum = o3d.geometry.PointCloud()
         self.object_pcd = o3d.geometry.PointCloud()
     
         self.init_sim_position = None
@@ -452,7 +454,16 @@ class VLM_Agent():
         # build 3D pc map
         full_scene_pcd.transform(camera_matrix_T)
         full_scene_pcd.voxel_down_sample(0.05)
-        self.point_sum += self.remove_full_points_cell(full_scene_pcd, self.camera_position)
+        self.latest_point_sum = self.remove_full_points_cell(
+            full_scene_pcd, self.camera_position
+        )
+        if self.args.visualize or self.args.print_images:
+            self.point_sum += self.latest_point_sum
+        else:
+            # Occupancy/exploration maps persist independently. Log-only
+            # evaluation needs only this frame's evidence and must not rescan
+            # an episode-long duplicate point cloud on every action.
+            self.point_sum = self.latest_point_sum
         
         # self.update_map(full_scene_pcd, self.camera_position[1], self.args.map_height_cm / 100.0 /2.0)
         if np.abs(self.eve_angle) > 10 or self.last_action == 4 or self.last_action == 5:
@@ -544,10 +555,14 @@ class VLM_Agent():
             use_existing_object_path = (
                 planner_name == 'pointnav' and has_navigation_goal
             )
-            if planner_name == 'fmm' or use_existing_object_path:
+            if planner_name == 'fmm':
+                if resolve_fmm_backend(self.args) == 'navmesh':
+                    plan_path = self.search_navigable_path(
+                        habitat_final_pose
+                    )
+            elif use_existing_object_path:
+                # PointNav target completion is outside the FMM parity change.
                 if not getattr(self, 'risk_navigation_enabled', False):
-                    # Preserve the historical Habitat shortest-path-first
-                    # behavior for FMM and detected-object completion.
                     plan_path = self.search_navigable_path(
                         habitat_final_pose
                     )
@@ -886,13 +901,36 @@ class VLM_Agent():
         """Get short-term goal"""
 
         agent_args = getattr(self, 'args', None)
-        planner_name = (
+        planner_name = str(
             planner_name_override
             if planner_name_override is not None
             else getattr(agent_args, 'local_planner', 'fmm')
-        )
+        ).lower()
+        requested_planner_name = str(
+            getattr(agent_args, 'local_planner', 'fmm')
+        ).lower()
         risk_navigation_enabled = bool(
             getattr(self, 'risk_navigation_enabled', False)
+        )
+        continuous_risk_only = bool(
+            risk_navigation_enabled
+            and requested_planner_name in {'fmm', 'astar'}
+        )
+        # A fire ablation that resolves to grid FMM must use one identical
+        # padded-grid geometry in both evaluator-only ``none`` and planning
+        # ``oracle`` modes.  Previously the oracle branch used a blocked
+        # one-cell boundary and +1 coordinates while none retained the legacy
+        # open boundary and unshifted coordinates, so the compared planners
+        # were geometrically different even when the risk map was zero.
+        grid_fmm_contract = bool(
+            planner_name == 'fmm'
+            and requested_planner_name == 'fmm'
+            and resolve_fmm_backend(agent_args) == 'grid'
+        )
+        padded_grid_contract = bool(
+            grid_fmm_contract
+            or risk_navigation_enabled
+            or planner_name != 'fmm'
         )
 
         [gx1, gx2, gy1, gy2] = [0, self.local_w, 0, self.local_h] 
@@ -923,7 +961,7 @@ class VLM_Agent():
         traversible = add_boundary(traversible)
         goal = add_boundary(goal, value=0)
         traversible[goal==1] = 1
-        if risk_navigation_enabled or planner_name != 'fmm':
+        if padded_grid_contract:
             # The padding exists for local-window arithmetic only; it is not
             # a navigable corridor around the outside of the scene map.
             traversible[[0, -1], :] = 0
@@ -936,7 +974,10 @@ class VLM_Agent():
                 risk_map = add_boundary(
                     self.risk_map[x1:x2, y1:y2], value=0
                 )
-            if getattr(self, 'hard_unsafe_mask', None) is not None:
+            if (
+                not continuous_risk_only
+                and getattr(self, 'hard_unsafe_mask', None) is not None
+            ):
                 hard_unsafe_mask = add_boundary(
                     self.hard_unsafe_mask[x1:x2, y1:y2], value=0
                 ).astype(bool)
@@ -991,7 +1032,7 @@ class VLM_Agent():
         self._risk_escape_reason = None
         self._local_goal_recovery_active = False
         coordinate_offset = (
-            1 if risk_navigation_enabled or planner_name != 'fmm' else 0
+            1 if padded_grid_contract else 0
         )
         if not np.any(goal == 1):
             # Keep the lower-level planner mathematically well-defined while
@@ -1022,12 +1063,16 @@ class VLM_Agent():
             self.found_goal = False
             self.object_pcd.clear()
 
-        if risk_navigation_enabled or planner_name != 'fmm':
-            # Risk arrays follow the padded map exactly. The legacy branch
-            # historically omitted this +1 offset, so correct it only for the
-            # new planner to avoid changing risk-disabled trajectories.
+        if padded_grid_contract:
+            # Risk arrays and grid-FMM coordinates follow the padded map
+            # exactly. Normal no-fire auto/navmesh runs retain their legacy
+            # fallback behavior; explicit grid runs use the corrected frame.
             coordinate_offset = 1
 
+        hard_safety_enabled = bool(
+            risk_navigation_enabled and not continuous_risk_only
+        )
+        if hard_safety_enabled:
             safe_goal = (
                 (goal == 1)
                 & (planner.traversible > 0)

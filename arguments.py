@@ -195,6 +195,17 @@ def get_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--fmm_backend",
+        type=str,
+        default="auto",
+        choices=["auto", "navmesh", "grid"],
+        help=(
+            "FMM execution backend. auto keeps navmesh-first execution for "
+            "normal navigation but uses grid FMM for every fire-risk ablation, "
+            "including risk_source=none, so none/oracle stay paired"
+        ),
+    )
+    parser.add_argument(
         "--rl_local_checkpoint",
         type=str,
         default=None,
@@ -453,6 +464,26 @@ def get_args() -> argparse.Namespace:
                              "(m); 0 keeps only the flame core hard")
     parser.add_argument("--risk_danger_threshold", type=float, default=0.55)
     parser.add_argument("--risk_critical_threshold", type=float, default=0.80)
+    parser.add_argument(
+        "--risk_early_stop_enabled",
+        type=int,
+        default=1,
+        choices=[0, 1],
+        help=(
+            "1 ends a fire-risk episode as a team failure immediately after "
+            "any agent's GT post-action composite risk reaches the early-stop "
+            "threshold"
+        ),
+    )
+    parser.add_argument(
+        "--risk_early_stop_threshold",
+        type=float,
+        default=None,
+        help=(
+            "normalized GT risk threshold in [0,1] for safety early-stop; "
+            "the default inherits --risk_critical_threshold"
+        ),
+    )
     parser.add_argument("--risk_decay_tau_s", type=float, default=20.0,
                         help="time constant for stale sensed hazard evidence")
     parser.add_argument("--risk_confidence_decay_tau_s", type=float,
@@ -482,8 +513,21 @@ def get_args() -> argparse.Namespace:
         "--risk_frontier_weight",
         type=float,
         default=0.5,
-        help="soft global frontier-risk bias; local --risk_alpha remains "
-             "the primary route/action avoidance strength",
+        help=(
+            "legacy compatibility parameter retained in risk metadata; "
+            "value-first global assignment now uses "
+            "--risk_frontier_value_tolerance instead"
+        ),
+    )
+    parser.add_argument(
+        "--risk_frontier_value_tolerance",
+        type=float,
+        default=0.10,
+        help=(
+            "relative base-utility regret allowed before classical global "
+            "planners prefer the lower-risk frontier; 0 uses risk only for "
+            "exact base-utility ties"
+        ),
     )
     parser.add_argument("--risk_hard_frontier_threshold", type=float,
                         default=0.80)

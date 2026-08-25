@@ -13,39 +13,58 @@ PRIMARY_BENCHMARK_METRICS = (
     "success",
     "spl",
     "risk/safe_success",
-    "risk/che",
+    "risk/che_per_step",
+    "risk/critical_steps",
 )
 """Stable episode metric names for the recommended benchmark table."""
+
+
+def flatten_benchmark_metrics(summary: Mapping[str, object]) -> Dict[str, float]:
+    """Return only the v4 risk values intended for episode aggregation."""
+
+    team = summary.get("team", {})
+    if not isinstance(team, Mapping):
+        team = {}
+    flat = {
+        "risk/che_per_step": float(team.get("CHE_per_step", 0.0)),
+        "risk/critical_steps": float(team.get("critical_steps", 0)),
+    }
+    if "safe_success" in summary:
+        flat["risk/safe_success"] = float(summary["safe_success"])
+    return flat
 
 
 @dataclass
 class _AgentExposure:
     """Only state required by the public benchmark contract."""
 
-    che: float = 0.0
-    critical_violations: int = 0
+    exposure_sum: float = 0.0
+    exposure_samples: int = 0
+    critical_steps: int = 0
     previous_time_s: Optional[float] = None
 
 
 class MultiAgentRiskEvaluator:
-    """Accumulate VULCAN-style CHE from an independent GT provider.
+    """Measure mean post-action hazard exposure from an independent GT provider.
 
-    The public risk benchmark intentionally exposes only:
+    The independent exposure evaluator intentionally exposes only:
 
-    ``CHE``
-        Discrete cumulative hazard exposure from VULCAN Eq. (14), summed once
-        per executed action and agent.
-    ``critical_violations``
-        Diagnostic count used to derive ``SafeSuccess``. It is retained in
-        ``risk_summary.json`` but is not promoted as a primary benchmark
-        column.
+    ``CHE_per_step``
+        Arithmetic mean of the per-joint-step team risk. Each team risk is the
+        mean normalized physical risk over the agents after that action. It
+        remains in ``[0, 1]`` and is explicit about its unit-step denominator.
+    ``critical_steps``
+        Number of joint navigation steps where at least one agent's continuous
+        GT physical risk reaches ``critical_threshold``. A step is counted once
+        regardless of how many agents trigger it; ``hard_unsafe`` is not mixed
+        into this continuous-risk statistic.
 
     Habitat ``Success`` and ``SPL`` remain authoritative task metrics.
     Redundant time/path/peak/ratio variants were removed so one experiment
     cannot cherry-pick among several correlated exposure summaries.
     """
 
-    metric_version = "fireworld-risk-v2"
+    metric_version = "fireworld-risk-v4"
 
     def __init__(self, ground_truth_provider, config: Optional[RiskConfig] = None):
         if not bool(getattr(ground_truth_provider, "is_privileged", False)):
@@ -55,9 +74,15 @@ class MultiAgentRiskEvaluator:
         self.provider = ground_truth_provider
         self.config = config or ground_truth_provider.config
         self._agents: Dict[str, _AgentExposure] = {}
+        self._joint_steps = 0
+        self._team_step_exposure_sum = 0.0
+        self._critical_steps = 0
 
     def reset(self) -> None:
         self._agents.clear()
+        self._joint_steps = 0
+        self._team_step_exposure_sum = 0.0
+        self._critical_steps = 0
 
     @staticmethod
     def _normalise_positions(
@@ -131,17 +156,24 @@ class MultiAgentRiskEvaluator:
             float(timestamp_s), positions, floor_y_m=floor_y_m
         )
         report: Dict[str, Dict[str, float]] = {}
+        step_risks = []
         for index, agent_id in enumerate(ids):
             state = self._agents.setdefault(agent_id, _AgentExposure())
             risk = float(np.clip(samples.physical_risk[index], 0.0, 1.0))
-            hard_unsafe = bool(samples.hard_unsafe[index])
-            critical = (
-                risk >= float(self.config.critical_threshold) or hard_unsafe
-            )
-            state.che += risk
-            state.critical_violations += int(critical)
+            critical = risk >= float(self.config.critical_threshold)
+            state.exposure_sum += risk
+            state.exposure_samples += 1
+            state.critical_steps += int(critical)
             state.previous_time_s = float(timestamp_s)
             report[agent_id] = self._step_report(samples, index, risk)
+            step_risks.append(risk)
+        if step_risks:
+            self._joint_steps += 1
+            self._team_step_exposure_sum += float(np.mean(step_risks))
+            self._critical_steps += int(any(
+                risk >= float(self.config.critical_threshold)
+                for risk in step_risks
+            ))
         return report
 
     @staticmethod
@@ -159,22 +191,40 @@ class MultiAgentRiskEvaluator:
     def summary(self) -> Dict[str, object]:
         """Return the deliberately small episode-level metric surface."""
 
+        def mean_exposure(state: _AgentExposure) -> float:
+            if state.exposure_samples <= 0:
+                return 0.0
+            return float(state.exposure_sum / state.exposure_samples)
+
         per_agent = {
             agent_id: {
-                "CHE": float(state.che),
-                "critical_violations": int(state.critical_violations),
+                "CHE_per_step": mean_exposure(state),
+                "exposure_samples": int(state.exposure_samples),
+                "critical_steps": int(state.critical_steps),
             }
             for agent_id, state in sorted(self._agents.items())
         }
         states = list(self._agents.values())
+        exposure_samples = int(sum(
+            state.exposure_samples for state in states
+        ))
+        che_per_step = (
+            float(self._team_step_exposure_sum / self._joint_steps)
+            if self._joint_steps > 0
+            else 0.0
+        )
+        critical_agent_steps = int(sum(
+            state.critical_steps for state in states
+        ))
         return {
             "metric_version": self.metric_version,
             "num_agents": len(per_agent),
             "per_agent": per_agent,
             "team": {
-                "CHE": float(sum(state.che for state in states)),
-                "critical_violations": int(sum(
-                    state.critical_violations for state in states
-                )),
+                "CHE_per_step": che_per_step,
+                "joint_steps": int(self._joint_steps),
+                "exposure_samples": exposure_samples,
+                "critical_steps": int(self._critical_steps),
+                "critical_agent_steps": critical_agent_steps,
             },
         }

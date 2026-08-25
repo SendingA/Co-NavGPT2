@@ -462,13 +462,13 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
             map_resolution_cm=5.0,
         )
 
-    def test_risk_decorator_hard_filters_frontier_and_returns_reports(self) -> None:
+    def test_hard_frontier_is_reported_but_not_rejected(self) -> None:
         result = create_global_planner("nearest").plan(
             _context(risk=self._risk(hard_at=(2, 2)))
         )
 
-        self.assertEqual(result.frontier_assignments, {0: 1, 1: 1})
-        self.assertEqual(result.goal_points, [[8, 8], [8, 8]])
+        self.assertEqual(result.frontier_assignments, {0: 0, 1: 1})
+        self.assertEqual(result.goal_points, [[2, 2], [8, 8]])
         self.assertTrue(result.frontier_reports[0].hard_blocked)
         self.assertEqual(result.frontier_computed_step, 37)
 
@@ -563,15 +563,15 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
             agent_maps,
         )
 
-        self.assertEqual(result.goal_points, [[2, 8], [9, 9]])
-        self.assertEqual(result.frontier_assignments, {0: 1, 1: 3})
+        self.assertEqual(result.goal_points, [[2, 2], [9, 9]])
+        self.assertEqual(result.frontier_assignments, {0: 0, 1: 3})
         self.assertEqual(
             [report.frontier_id for report in result.frontier_reports],
-            [0, 1, 2, 3],
+            [0, 1, 3],
         )
         self.assertEqual(
             result.frontier_report_agent_ids,
-            [0, 0, 1, 1],
+            [0, 0, 1],
         )
 
     def test_individual_maps_use_each_agents_matching_risk_floor(self) -> None:
@@ -599,11 +599,11 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
             agent_maps,
         )
 
-        self.assertEqual(result.goal_points, [[2, 8], [2, 2]])
-        self.assertEqual(result.frontier_assignments, {0: 1, 1: 2})
-        self.assertEqual(result.frontier_report_agent_ids, [0, 0, 1, 1])
+        self.assertEqual(result.goal_points, [[2, 2], [9, 9]])
+        self.assertEqual(result.frontier_assignments, {0: 0, 1: 3})
+        self.assertEqual(result.frontier_report_agent_ids, [0, 0, 1])
         self.assertTrue(result.frontier_reports[0].hard_blocked)
-        self.assertTrue(result.frontier_reports[3].hard_blocked)
+        self.assertTrue(result.frontier_reports[2].hard_blocked)
 
     def test_zero_risk_preserves_every_classical_normal_policy(self) -> None:
         context_kwargs = {
@@ -630,7 +630,7 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
                 )
                 self.assertEqual(aware.goal_points, normal.goal_points)
 
-    def test_same_soft_risk_layer_overrides_all_classical_preferences(
+    def test_risk_does_not_replace_a_clearly_more_valuable_frontier(
         self,
     ) -> None:
         risk = self._risk()
@@ -649,7 +649,40 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
                     _context(risk=risk, **context_kwargs)
                 )
                 self.assertEqual(normal.frontier_assignments, {0: 0, 1: 0})
-                self.assertEqual(aware.frontier_assignments, {0: 1, 1: 1})
+                self.assertEqual(
+                    aware.frontier_assignments,
+                    normal.frontier_assignments,
+                )
+
+    def test_comparable_fill_frontiers_use_lower_risk_as_tie_break(self) -> None:
+        risk = self._risk()
+        risk.planning_risk[2, 2] = 0.8
+        result = create_global_planner("fill").plan(
+            _context(
+                points=((2, 2), (2, 3)),
+                scores=(10.0, 9.5),
+                poses=((1, 2, 0.0),),
+                cells=((1, 2),),
+                risk=risk,
+            )
+        )
+
+        self.assertEqual(result.frontier_assignments, {0: 1})
+
+    def test_uncertainty_does_not_change_frontier_choice(self) -> None:
+        risk = self._risk()
+        risk.confidence[2, 2] = 0.0
+        result = create_global_planner("fill").plan(
+            _context(
+                points=((2, 2), (2, 3)),
+                scores=(10.0, 9.5),
+                poses=((1, 2, 0.0),),
+                cells=((1, 2),),
+                risk=risk,
+            )
+        )
+
+        self.assertEqual(result.frontier_assignments, {0: 0})
 
     def test_risk_co_ut_weights_preserve_size_distance_tradeoff(self) -> None:
         weights = risk_utility_weights(
@@ -666,29 +699,27 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
             0.5,
         )
 
-    def test_random_risk_mode_samples_only_safe_reachable_cells(self) -> None:
+    def test_random_risk_mode_keeps_the_normal_sampling_domain(self) -> None:
         risk = self._risk()
         risk.planning_risk[:] = 1.0
         risk.planning_risk[1:5, 1:5] = 0.1
         risk.planning_risk[8:11, 8:11] = 0.1
-        context = _context(risk=risk, episode_index=4)
-
-        result = create_global_planner(
+        aware_context = _context(risk=risk, episode_index=4)
+        normal_context = _context(episode_index=4)
+        planner = create_global_planner(
             "random",
             random_seed=23,
             random_goal_min_distance_m=0.0,
-        ).plan(context)
+        )
+        result = planner.plan(aware_context)
+        normal = planner.plan(normal_context)
 
         self.assertEqual(result.frontier_assignments, {0: None, 1: None})
         self.assertEqual(len(result.frontier_reports), 2)
         self.assertEqual(result.frontier_computed_step, 37)
-        for row, col in result.goal_points:
-            self.assertLessEqual(
-                risk.planning_risk[row, col],
-                risk.danger_threshold,
-            )
+        self.assertEqual(result.goal_points, normal.goal_points)
 
-    def test_gpt_risk_choice_is_guarded_by_deterministic_fallback(self) -> None:
+    def test_gpt_risk_choice_is_not_hard_rejected(self) -> None:
         backend = _FakeChatBackend(
             {"robot_0": "frontier_0", "robot_1": "frontier_0"}
         )
@@ -705,14 +736,8 @@ class RiskAwareGlobalPlannerTests(unittest.TestCase):
             _context(risk=self._risk(hard_at=(2, 2)))
         )
 
-        co_ut_result = create_global_planner("co_ut").plan(
-            _context(risk=self._risk(hard_at=(2, 2)))
-        )
-        self.assertEqual(
-            result.frontier_assignments,
-            co_ut_result.frontier_assignments,
-        )
-        self.assertEqual(result.goal_points, co_ut_result.goal_points)
+        self.assertEqual(result.frontier_assignments, {0: 0, 1: 0})
+        self.assertEqual(result.goal_points, [[2, 2], [2, 2]])
         risk_call = next(call for call in backend.calls if call[0] == "risk_message")
         self.assertEqual(risk_call[-1], 2)
         self.assertEqual(

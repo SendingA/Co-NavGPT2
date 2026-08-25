@@ -155,8 +155,10 @@ def _run_metrics(
         "planner_source": actions["planner_source"],
         "task": _log_metrics(log_path),
         "safe_success": float(risk_summary.get("safe_success", 0.0)),
-        "CHE": float(team.get("CHE", 0.0)),
-        "critical_violations": int(team.get("critical_violations", 0)),
+        "CHE_per_step": float(team.get("CHE_per_step", team.get("CHE", 0.0))),
+        "critical_steps": int(team.get(
+            "critical_steps", team.get("critical_violations", 0)
+        )),
         "total_wall_time_s": float(actions["total_wall_time_s"]),
         "agents": agents,
         "trajectory_overlap": _team_overlap(paths),
@@ -214,9 +216,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "primary_max_risk_reduction": (
             baseline_primary["max_risk"] - oracle_primary["max_risk"]
         ),
-        "CHE_reduction": baseline["CHE"] - oracle["CHE"],
-        "critical_violations_avoided": (
-            baseline["critical_violations"] - oracle["critical_violations"]
+        "CHE_per_step_reduction": (
+            baseline["CHE_per_step"] - oracle["CHE_per_step"]
+        ),
+        "critical_steps_avoided": (
+            baseline["critical_steps"] - oracle["critical_steps"]
         ),
         "actual_primary_route_divergence": (
             1.0 - len(oracle_cells & baseline_cells) / max(1, len(actual_union))
@@ -324,8 +328,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     print(
         "[fork-analysis] "
         f"extra_steps={comparison['extra_steps_for_oracle']} "
-        f"critical_avoided={comparison['critical_violations_avoided']} "
-        f"CHE_reduction={comparison['CHE_reduction']:.3f}"
+        f"critical_steps_avoided={comparison['critical_steps_avoided']} "
+        f"CHE_per_step_reduction="
+        f"{comparison['CHE_per_step_reduction']:.3f}"
     )
     return 0
 

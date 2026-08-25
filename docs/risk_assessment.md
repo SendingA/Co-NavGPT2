@@ -40,7 +40,7 @@ clock`；`oracle` 和 privileged transmittance 应明确标作消融或上界。
 ```text
 FireWorld flame/smoke/temp(t)
         ├── privileged GT provider ───────────────► exposure evaluator
-        │                                          CHE / critical violations
+        │                                          CHE/step / critical steps
         │
         ├── source=oracle ─► floor projection ───► planner risk map
         │
@@ -85,9 +85,9 @@ CLI 默认值为 `T_ref=35°C`、`T_hazard=150°C`，以及
 感知不确定性也只进入规划代价，不混入 GT 暴露指标，从而把危险本身和机器人
 对危险的未知程度分开。
 
-### 2.2 硬不可通行区域
+### 2.2 Hard 标签（当前仅用于诊断与评估）
 
-连续风险以外，代码还构造硬约束：
+连续风险以外，代码还构造 hard 标签：
 
 ```text
 M_hard = dilate(F >= F_hard, ceil(d_core / map_resolution))
@@ -99,8 +99,9 @@ CLI 默认 `F_hard=0.80`、`d_core=0m` 且
 温度/烟雾全部保留为连续风险。需要复现旧式保守安全环时，可以显式设置
 `--risk_flame_safety_distance_m`，需要温度二值 veto 时再启用
 `--risk_temperature_hard_enabled 1 --risk_temperature_hard_c 250`。
-`M_hard` 不会被低风险样本平均掉：它会过滤 frontier、从 FMM 可通行域中移除
-对应栅格，并用于 critical violation 计数。
+`M_hard` 不会被低风险样本平均掉，并继续用于 hazard report、可视化与 critical
+violation 计数；当前 FMM/A* 以及 value-first global assignment 不再用它过滤
+frontier、栅格或 task goal。PointNav/RL 未纳入本次行为修改。
 
 ## 3. Oracle 与 sensed 风险图
 
@@ -206,65 +207,64 @@ S_hat = clip(-ln(transmittance) / (k d), 0, 1)
 R_k = max(p95(frontier k), mean(approach route k))
 ```
 
-若 **frontier 区域本身**接触 `M_hard`，或其最大规划风险达到
-`--risk_hard_frontier_threshold`，则先将它硬过滤。approach route 现在通过该
-agent 自己的已探索自由空间执行八邻域风险加权搜索（代价与 local A* 一致），
+`M_hard` 和 `--risk_hard_frontier_threshold` 只生成诊断标签，不再过滤
+frontier。approach route 通过该 agent 自己的已探索自由空间执行八邻域风险加权搜索
+（代价与 local A* 一致），
 所以“目标方向的直线穿火，但实际可以绕火到达”不会被误判为必须穿火。仅在当前
 地图中找不到可通行 approach route 时才退回直线诊断，并明确设置
-`route_is_proxy=true`；proxy 进入连续代价但不作为 hard veto。风险模块不再重写
-`nearest/co_ut/fill` 的策略公式。每个 normal planner
-先提供自己的原始 preference `B_a,k`，再由共享 `SharedRiskAwareness` 在每个
-机器人内部将它单调归一化为 `B_bar_a,k`，并统一叠加安全代价：
+`route_is_proxy=true`。风险模块不再重写 `nearest/co_ut/fill` 的策略公式。
+每个 normal planner 先提供自己的原始 preference `B_a,k`，共享层先找出最佳值
+`B*_a`，只把相对 regret 不超过 `epsilon` 的 frontier 视为“价值相当”：
 
 ```text
-u_a,k = B_bar_a,k - w_R R_k - 0.5 (1-C_bar_k)
+K_a = { k | B*_a - B_a,k <= epsilon * max(|B*_a|, median(|B_a|), 1) }
+choice_a = argmin_(k in K_a) (R_k, -B_a,k, frontier_id)
 ```
 
-`w_R` 由 `--risk_frontier_weight` 控制，默认 `0.5`，只给 global exploration
-direction 一个软安全偏置；实际逐 action 绕火仍由 local FMM 的
-`--risk_alpha`（默认 `1.0`）和 hard flame core 负责。四个 classical planner
+`epsilon=--risk_frontier_value_tolerance`，默认 `0.10`。不包含独立 uncertainty
+代价，也不因 hard label 拒绝候选。实际逐 action 绕火由 local FMM/A* 的
+`--risk_alpha`（默认 `1.0`）负责。四个 classical planner
 的 normal preference 与安全层关系如下：
 
 | `nav_mode` | normal preference `B_a,k` | 共享 risk-awareness |
 | --- | --- | --- |
-| `nearest` | `-robot_frontier_distance` | hard filter、`-w_R R_k`、`-0.5 uncertainty` |
+| `nearest` | `-robot_frontier_distance` | 价值容差内以 `R_k` 打破近似平局 |
 | `co_ut` | `frontier_size - lambda * distance` | 同上 |
 | `fill` | `target_score`（缺失时使用 inverse distance） | 同上 |
-| `random` | 可复现的 reachable map-goal sampling | 同一模块先生成 safe sampling domain |
+| `random` | 可复现的 reachable map-goal sampling | 保持 normal sampling domain，不按风险拒绝 |
 
 因此零风险、完整 confidence 且没有 hard cell 时，四种模式与各自 normal
-planner 的目标完全一致；risk 只作为横切安全模块加入，不再把 `fill` 改写成
-另一套 size/distance/redundancy 策略。`random` 不使用 frontier utility：它仍在
-每个机器人的已探索可达自由空间内按原 seed 采样，只由共享模块提前剔除
-hard-unsafe 和超过 danger threshold 的 cell。
+planner 的目标完全一致；risk 只在近似平局中加入，不再把 `fill` 改写成另一套
+size/distance/redundancy 策略。`random` 不使用 frontier utility，因此在每个
+机器人的已探索可达自由空间内按原 seed 与 normal 模式完全相同地采样。
 
-`gpt` 模式还会把同一 hazard report 作为 JSON 交给 VLM，但安全性不依赖 VLM
-服从提示：确定性 guard 会拒绝不存在、格式错误或 `hard_blocked` 的选择，并只
-允许安全的 deterministic assignment 作为 fallback。若没有安全 frontier，系统
-在已探索可导航区域内选择低风险 safety waypoint。
+`gpt` 模式还会把同一 hazard report 作为 JSON 交给 VLM；提示明确要求首先考虑
+语义、距离、探索价值和团队覆盖，只有价值相近才用连续风险打破平局。
+`hard_blocked` 也是诊断信息，不再触发 deterministic hard veto；格式或 ID 无效
+时仍回退到 value-first `co_ut` assignment。
 
-当前 global `route_risk` 有意只作为 **approach proxy**：`main.py` 从离该
-frontier 最近的机器人到 frontier 画一条单栅格宽直线。这条线不是障碍约束路径、
-不是 navmesh shortest path，也不是之后 FMM 实际执行的轨迹，而且 report 不是
-逐 robot 路线。因此论文不能把它称为真实路径累计暴露；真实执行暴露应使用
-第 6 节的 GT `CHE` 与逐步 exposure trace。
+当前 global `route_risk` 是已探索自由空间内的风险加权 approach proxy；找不到
+该路线时才回退到单栅格宽直线并标记 `route_is_proxy=true`。它仍不是之后 FMM
+实际执行的完整轨迹，而且共享 frontier 模式下不是逐 robot 路线。因此论文不能
+把它称为真实路径累计暴露；真实执行暴露应使用第 6 节的 GT `CHE` 与逐步 trace。
 
 ### 4.2 Local hazard-aware FMM
 
-启用 oracle/sensed 风险规划后，agent 不再优先走 Habitat navmesh shortest
-path，而是始终进入共享栅格上的 risk-aware FMM。连续风险通过速度场调制：
+火灾 none/oracle/sensed 的 FMM 对照统一使用共享栅格后端；none 使用普通 FMM，
+oracle/sensed 使用 risk-aware FMM。普通无火实验的 `auto` 仍保留历史
+navmesh-first。none/oracle 的 padded-grid 几何也保持一致：外层一格不可通行，
+起点、目标和 STG 统一使用 `+1` 坐标偏移。连续风险通过速度场调制：
 
 ```text
 v(x) = 1 / (1 + alpha · P(x))
 ```
 
 其中 `alpha=--risk_alpha`，默认 `1.0`；风险越高，travel time 越大。
-该形式对应 VULCAN Eq. (11)，但这里的 `P(x)` 明确包含本实现的温度/烟雾风险与
-unknown/uncertainty planner penalty；火焰只通过 `M_hard` 进入。
-`M_hard` cell 则直接从 traversible domain 中移除。如果 agent 已被动态更新的
-hard region 包围，planner 会先建立一条局部 emergency escape corridor；如果
-目标周围全部不安全，则转向最近安全 waypoint，且到达该 safety waypoint 不会
-被当成 ObjectNav STOP。
+该形式对应 VULCAN Eq. (11)。FMM/A* 的主运行路径不再接收 `M_hard`，也不会生成
+emergency escape、trapped holding point 或目标附近的 safe waypoint；真实任务
+goal 始终保留。每个 action cycle 都用最新连续风险重算 travel time/path，因此
+危险只会让局部单元更昂贵，不会使目标或通道不可达。PointNav 和 RL 的行为不在
+本次修改范围内。
 
 ## 5. CLI 参考
 
@@ -284,7 +284,9 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 | `--risk_flame_hard_threshold` | `0.80` | 高强度火焰核心硬阈值 |
 | `--risk_flame_safety_distance_m` | `0.0` | 可选火焰核心膨胀距离（m）；默认不扩张 |
 | `--risk_danger_threshold` | `0.55` | danger 暴露与 frontier severity 阈值 |
-| `--risk_critical_threshold` | `0.80` | critical violation 的连续风险阈值 |
+| `--risk_critical_threshold` | `0.80` | critical step 的连续风险阈值 |
+| `--risk_early_stop_enabled` | `1` | 任一 agent 的 action 后 GT risk 达阈值时立即结束 team episode，并把 Success/SPL 判为 0 |
+| `--risk_early_stop_threshold` | `None` | safety early-stop 阈值；默认继承 `--risk_critical_threshold`，可显式设置为 `[0,1]` |
 | `--risk_decay_tau_s` | `20.0` | sensed 物理证据衰减时间常数（s） |
 | `--risk_confidence_decay_tau_s` | `30.0` | sensed confidence 衰减时间常数（s） |
 | `--risk_unknown_risk_prior` | `0.25` | 未观测空间 prior |
@@ -295,8 +297,9 @@ hard region 包围，planner 会先建立一条局部 emergency escape corridor�
 | `--risk_smoke_source` | `appearance_depth` | `appearance_depth` / `privileged_transmittance` |
 | `--risk_geometry_depth_source` | `clean` | `clean` smoke-robust geometry surrogate / `smoke` 退化深度消融 |
 | `--risk_alpha` | `1.0` | FMM 风险速度惩罚强度 |
-| `--risk_frontier_weight` | `0.5` | global frontier utility 的软风险权重；主要绕火责任留给 local planner |
-| `--risk_hard_frontier_threshold` | `0.80` | frontier/approach 最大规划风险硬过滤阈值；运行时至少不低于 danger threshold |
+| `--risk_frontier_weight` | `0.5` | 兼容旧配置与 metadata；当前 value-first assignment 不使用该加权项 |
+| `--risk_frontier_value_tolerance` | `0.10` | 允许风险打破近似平局的相对 normal-value regret |
+| `--risk_hard_frontier_threshold` | `0.80` | frontier/approach 的诊断 severity 阈值，不参与拒绝 |
 | `--risk_dump_dir` | `./outputs/risk_assessment` | 风险 artefact 根目录 |
 | `--risk_save_every` | `10` | 每 N 个导航 step 保存 PNG；`0` 只关闭 PNG，不关闭 JSON trace/summary |
 | `--risk_save_traces` | `1` | `1` 保存逐步 risk/action JSONL 和 `action_list.json`；`0` 只保留最终 `risk_summary.json` |
@@ -393,26 +396,48 @@ obstacle-map panel 会叠加 hazard：淡黄→橙→红表示风险从低到高
 
 Evaluator 在 reset 后先 `prime` 初始位置，但不把 reset 算作 action sample；之后
 每次 `env.step` 对所有 agent 在同一个 fire timestamp 采样一次。令
-`H_a,t=H_GT(x_a,t)`：
+`H_a,t=H_GT(x_a,t)`，`A_t` 为当前联合 step 的 agent 数，`T` 为执行的联合
+step 数：
 
 ```text
-CHE = sum_a sum_t H_a,t
-SafeSuccess = Habitat Success AND critical_violations == 0
+TeamRisk_t = (sum_a H_a,t) / A_t
+CHE_per_step = (sum_t TeamRisk_t) / T
+CriticalSteps = sum_t any_a(H_a,t >= risk_critical_threshold)
+EarlyStop = any(H_a,t >= risk_early_stop_threshold)
+FireSuccess = Habitat Success AND NOT EarlyStop
+FireSPL = Habitat SPL if NOT EarlyStop else 0
+SafeSuccess = FireSuccess * (1 - CHE_per_step)
 ```
 
-`CHE` 对应 VULCAN Eq. (14) 的离散累计形式，越低越好。
-`critical_violations` 定义为 `H >= --risk_critical_threshold` 或采样位置落在
-`M_hard` 的次数；它保留在 `risk_summary.json` 中用于解释 `SafeSuccess`，但不
-作为主表独立列。
+从 `fireworld-risk-v4` 开始，公开键为 `risk/che_per_step`，范围为 `[0,1]`，
+越低越好。它先在每个联合 step 内对 agent 求均值，再对已执行 step 求均值；
+`risk_summary.json` 同时记录 `joint_steps` 和 `exposure_samples`。固定 agent 数时
+它与 v3 的 agent-action 均值数值相同，但键名、SafeSuccess 和 critical 语义已经
+改变，因此 v3/v4 checkpoint 不可混合续跑。reset 后的 prime 仍不计入样本。
 
-推荐主表只报告四项：
+EarlyStop 使用独立 GT evaluator，而不是 planner risk map；因此
+`risk_source=none/oracle/sensed` 使用完全相同的安全裁判。默认阈值继承
+`--risk_critical_threshold=0.80`。任一 agent action 后达到阈值，就立即结束整个
+多智能体 episode，并在聚合前强制 `success=0`、`spl=0`。`soft_spl` 和
+`distance_to_goal` 保留为 early-stop 位置的进度诊断。
+
+`risk/critical_steps` 是显式主表指标：只要任一 agent 的连续 GT 风险达到
+`--risk_critical_threshold`，该联合 step 计一次；同一 step 有多个 agent 触发也
+只计一次。它不再混入 `M_hard`。`critical_agent_steps` 仍保存在 summary 中用于
+诊断每个 agent 的贡献。
+
+EarlyStop 仍是必要的运行控制和内部事件记录，但不再作为独立聚合指标显示：
+它一旦触发就已经令 `success=0`、`spl=0`，并使连续 SafeSuccess 自动为 0。
+
+推荐主表报告五项：
 
 | 指标 | 方向 | 目的 |
 | --- | --- | --- |
 | Habitat `Success` | 越高越好 | 是否完成 ObjectNav 任务 |
 | Habitat `SPL` | 越高越好 | 成功率与路径效率 |
-| `risk/safe_success` | 越高越好 | 成功且全过程无 critical violation |
-| `risk/che` | 越低越好 | 所有 agent、所有执行动作的累计 GT 暴露 |
+| `risk/safe_success` | 越高越好 | 成功率按单位-step平均暴露连续折扣 |
+| `risk/che_per_step` | 越低越好 | 每个联合 step 的平均 GT 暴露 |
+| `risk/critical_steps` | 越低越好 | 出现严重连续风险的联合 step 数量 |
 
 不再公开 `CHE_time`、`CHE_mean`、`path_risk`、`peak_risk`、
 `danger_time_ratio` 等高度相关的 episode 指标，避免同一风险轨迹产生过多可
@@ -420,14 +445,21 @@ SafeSuccess = Habitat Success AND critical_violations == 0
 用于诊断。
 
 `risk_summary.json` 同时给出 `team` 与 `per_agent`，并记录
-`metric_version=fireworld-risk-v2`、run/rank/seed/plan/clock、planner/smoke/
-geometry source（以及 FireScene 可用时的 scene id）。`planner_events` 还报告 safe refusal、emergency escape 和
-trapped step；`main.py` 只把 `risk/che` 与 `risk/safe_success` 加入 episode
+`metric_version=fireworld-risk-v4`、`joint_steps`、`exposure_samples`、
+early-stop 阈值与
+触发事件、run/rank/seed/plan/clock、planner/smoke/
+geometry source（以及 FireScene 可用时的 scene id）。`planner_events` 还报告
+safe refusal、emergency escape 和 trapped step；`main.py` 只把
+`risk/che_per_step`、`risk/critical_steps` 与 `risk/safe_success` 加入 episode
 聚合日志。
+
+导航 `resume_state.json` 同时写入 `metric_contract=fireworld-risk-v4`。
+旧 fire run 没有该字段或仍使用 v2/v3 时，续跑会明确报错；请更换 study/run id
+从 episode 1 重跑。
 
 ### 6.3 与 Habitat Lab metric 的关系
 
-当前实现是在 episode 结束后，把两个风险字段合并进 `main.py` 已取得的 Habitat
+当前实现是在 episode 结束后，把三个风险字段合并进 `main.py` 已取得的 Habitat
 metrics；因此名字和聚合方式稳定，但它们还不是 Habitat registry 中真正的
 `Measure`，也不会直接出现在裸 `env.get_metrics()` 结果中。
 
@@ -465,10 +497,12 @@ metrics；因此名字和聚合方式稳定，但它们还不是 Habitat registr
 7. **Global 直线路径只是一阶提示。** Frontier `route_risk` 是最近机器人到
    frontier 的直线 approach proxy，可能穿过障碍，也不是 robot-specific 实际
    路径。执行安全性以 FMM 轨迹和 GT exposure metrics 为准。
-8. **CHE 依赖动作采样。** `CHE` 随 episode action 数和 agent 数增长；主
-   benchmark 必须固定 agent 数、最大 action budget、动作定义、FireWorld plan/
-   seed 和 step clock。wallclock 只适合作为单列的 latency stress test，不能与
-   step-clock 主表混合。
+8. **CHE 是终止前单位-step均值。** v4 CHE_per_step 不再随 episode action 数或
+   agent 数线性增长，但 early-stop 会缩短观测窗口，所以低 CHE 仍不能单独证明
+   方法更好；主表必须同时保留 SR、SPL、SafeSuccess 与 CriticalSteps，并固定
+   FireWorld plan/seed、动作定义和 step clock。每个 episode 保存整数
+   `critical_steps`；跨 episode 的 `aggregate.json` 显示其 episode 宏平均。
+   wallclock 只适合作为单列 latency stress test。
 9. **入口范围。** 完整 RiskRuntime 当前只接在 `main.py`。`main_vec.py` 与
    `ros_multi_nav.py` 会拒绝 `--risk_enabled=1`，避免生成没有同步风险图/GT
    evaluator 却被误标为 risk-aware 的结果。

@@ -208,12 +208,30 @@ class Global_Map_Proc():
         if clean_diff:
             self.obstacle_map[diff_ob_ex == 1] = 0
         
-        # top_view_map = np.zeros((map_size, map_size, 3), dtype=np.uint8)
-        # z_buffer = np.full((map_size, map_size), -np.inf)
-        for i in range(len(points_explored)):
-            if points_explored[i, 1] > self.z_buffer[exp_i_values[i], exp_j_values[i]]:
-                self.z_buffer[exp_i_values[i], exp_j_values[i]] = points_explored[i, 1]
-                self.top_view_map[exp_i_values[i], exp_j_values[i]] = (colors_explored[i] * 255).astype(np.uint8)
+        # Preserve the highest observed point/color in each XZ map cell. The
+        # former Python loop revisited every point in the accumulated cloud on
+        # every global update and became the dominant benchmark cost. Reduce
+        # the current frame with ``maximum.at`` and update only its winners;
+        # this is equivalent for the normal case of one strict maximum per
+        # cell and keeps the cross-frame z-buffer semantics unchanged.
+        if len(points_explored):
+            flat_cells = exp_i_values * map_size + exp_j_values
+            heights = points_explored[:, 1]
+            frame_max = np.full(map_size * map_size, -np.inf)
+            np.maximum.at(frame_max, flat_cells, heights)
+            winner_indices = np.flatnonzero(
+                heights == frame_max[flat_cells]
+            )
+            winner_cells = flat_cells[winner_indices]
+            z_buffer_flat = self.z_buffer.reshape(-1)
+            top_view_flat = self.top_view_map.reshape(-1, 3)
+            better = heights[winner_indices] > z_buffer_flat[winner_cells]
+            winner_indices = winner_indices[better]
+            winner_cells = winner_cells[better]
+            z_buffer_flat[winner_cells] = heights[winner_indices]
+            top_view_flat[winner_cells] = (
+                colors_explored[winner_indices] * 255
+            ).astype(np.uint8)
         
         return self.obstacle_map, self.explored_map, self.top_view_map
     

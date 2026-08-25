@@ -87,6 +87,11 @@ class RiskConfig:
     # Evaluation thresholds on the normalised composite risk.
     danger_threshold: float = 0.60
     critical_threshold: float = 0.85
+    # A fire-risk run is a team failure as soon as any agent's independent
+    # GT post-action sample reaches this threshold.  This affects evaluation
+    # termination only; the planner still consumes the source selected above.
+    early_stop_enabled: bool = True
+    early_stop_threshold: float = 0.85
 
     # Dynamic sensed-map semantics.
     decay_tau_s: float = 30.0
@@ -132,6 +137,7 @@ class RiskConfig:
             "flame_hard_threshold",
             "danger_threshold",
             "critical_threshold",
+            "early_stop_threshold",
             "unknown_risk_prior",
             "uncertainty_weight",
             "minimum_known_confidence",
@@ -177,6 +183,12 @@ class RiskConfig:
             ),
             smoke=float(value("risk_weight_smoke", defaults.weights.smoke)),
         )
+        critical_threshold = float(value(
+            "risk_critical_threshold", defaults.critical_threshold
+        ))
+        early_stop_threshold = value("risk_early_stop_threshold", None)
+        if early_stop_threshold is None:
+            early_stop_threshold = critical_threshold
         return cls(
             enabled=enabled,
             source=source,
@@ -206,9 +218,11 @@ class RiskConfig:
             danger_threshold=float(value(
                 "risk_danger_threshold", defaults.danger_threshold
             )),
-            critical_threshold=float(value(
-                "risk_critical_threshold", defaults.critical_threshold
-            )),
+            critical_threshold=critical_threshold,
+            early_stop_enabled=bool(int(value(
+                "risk_early_stop_enabled", int(defaults.early_stop_enabled)
+            ))),
+            early_stop_threshold=float(early_stop_threshold),
             decay_tau_s=float(value("risk_decay_tau_s", defaults.decay_tau_s)),
             confidence_decay_tau_s=float(value(
                 "risk_confidence_decay_tau_s", defaults.confidence_decay_tau_s

@@ -96,12 +96,12 @@ Output Example:
 Please give the output based on the following input:\n"""
 
 
-risk_prompt = """You are a safety-aware multi-robot navigation agent equipped with a vision-language model. Your goal is to assign one exploration frontier to every robot so the team can find the requested target object efficiently without sending a robot through a known dynamic hazard.
+risk_prompt = """You are a risk-aware multi-robot navigation agent equipped with a vision-language model. Your goal is to assign one exploration frontier to every robot so the team finds the requested target object as efficiently as possible, using hazard only as a tie-break between similarly valuable choices.
 
 ### Context
 - We have multiple robots (e.g., robot_0, robot_1, …).
 - Each robot perceives the environment and can navigate to explore unknown areas (frontiers).
-- Each candidate top-view map shows:
+- Each candidate global top-view map shows:
   - The positions of each robot masked with #black# robot ID on the map, "R0", "R1", ...
   - Potential frontiers (unknown or partially explored spaces) masked with thick #red# line.
   - The frontier ID masked as a #red# number in the top-left corner on the map.
@@ -111,16 +111,16 @@ risk_prompt = """You are a safety-aware multi-robot navigation agent equipped wi
 ### Hazard Report Semantics
 - `mean_risk`, `p95_risk`, and `max_risk` are normalized frontier risks in [0, 1].
 - `route_risk` and `route_max_risk` summarize the approach route. A short dangerous segment must not be hidden by a low route average.
-- `confidence` is evidence confidence in [0, 1]. Low confidence means uncertain, not safe.
+- `confidence` is evidence confidence in [0, 1] and is diagnostic only; do not subtract uncertainty from frontier value.
 - `severity` is a qualitative summary: safe, moderate, high, or critical.
-- `hard_blocked=true` is an absolute prohibition.
-- `route_is_proxy=true` means the route statistics come from an approximate route and must be treated conservatively.
+- `hard_blocked` is a diagnostic label from the hazard map, not an absolute prohibition.
+- `route_is_proxy=true` means the route statistics come from an approximate route.
 
 ### Your Task
 1. **Analyze** the provided top-view maps, the candidate frontiers, the frontier-direction images, and the corresponding hazard information.
 2. **Understand** the relative positions of each robot, the semantic relevance between the target object and each frontier-direction image, and the potential safety risk of the frontier and its approach route.
-3. **Decide** a frontier assignment policy such that each robot moves toward a safe and useful frontier, prioritizing hazard avoidance while considering target-related semantic cues, travel distance, exploration value, and team coverage.
-4. **Justify** your decision in a concise explanation. Never select a frontier marked as `hard_blocked`, treat uncertain or proxy risk estimates conservatively, and ensure that each selected frontier ID is smaller than the number of top-view maps.
+3. **Decide** primarily from target-related semantic cues, travel distance, exploration value, and team coverage. Do not reject a useful frontier because of hazard. Only when two choices have similar navigation value should you prefer the route with lower continuous risk.
+4. **Justify** your decision in a concise explanation and ensure that each selected frontier ID is smaller than the number of top-view maps.
 
 Let's think step by step.
 
@@ -132,7 +132,7 @@ Output Example:
 {
     "robot_0": "frontier_1",
     "robot_1": "frontier_0",
-    "reason": "Both routes avoid hard hazards while splitting the robots across safe, useful frontiers."
+    "reason": "Both assignments preserve exploration value; the lower-risk route breaks an otherwise close choice."
 }
 
 Please give the output based on the following input:\n"""

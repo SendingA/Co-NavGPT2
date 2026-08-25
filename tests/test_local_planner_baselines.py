@@ -19,6 +19,7 @@ from utils.local_planners import (
     RLGridPlanner,
     RLGridPolicy,
     create_local_planner,
+    resolve_fmm_backend,
     save_rl_checkpoint,
     validate_local_planner_config,
 )
@@ -35,6 +36,26 @@ class LocalPlannerConfigTests(unittest.TestCase):
             args.local_planner, np.ones((5, 5), dtype=np.uint8)
         )
         self.assertIsInstance(planner, FMMPlanner)
+
+    def test_fire_none_and_oracle_resolve_to_the_same_grid_fmm(self) -> None:
+        common = {
+            "fmm_backend": "auto",
+            "fire_world": 1,
+            "risk_enabled": 1,
+        }
+        none = SimpleNamespace(risk_source="none", **common)
+        oracle = SimpleNamespace(risk_source="oracle", **common)
+
+        self.assertEqual(resolve_fmm_backend(none), "grid")
+        self.assertEqual(resolve_fmm_backend(oracle), "grid")
+
+    def test_normal_auto_fmm_keeps_navmesh_backend(self) -> None:
+        args = SimpleNamespace(
+            fmm_backend="auto",
+            fire_world=0,
+            risk_enabled=0,
+        )
+        self.assertEqual(resolve_fmm_backend(args), "navmesh")
 
     def test_local_awareness_follows_effective_risk_source(self) -> None:
         common = {
@@ -276,6 +297,10 @@ class AgentPlannerIntegrationTests(unittest.TestCase):
         agent.risk_alpha = 4.0
         agent.args = SimpleNamespace(
             local_planner=planner_name,
+            fmm_backend="grid",
+            fire_world=1,
+            risk_enabled=1,
+            risk_source="none",
             rl_local_checkpoint=None if checkpoint is None else str(checkpoint),
             rl_local_device="cpu",
             rl_local_deterministic=1,
@@ -283,6 +308,64 @@ class AgentPlannerIntegrationTests(unittest.TestCase):
             rl_local_rollout_steps=3,
         )
         return agent
+
+    def test_fire_none_and_oracle_use_identical_grid_geometry(self) -> None:
+        from agents.vlm_agents import VLM_Agent as SingleProcessAgent
+        from agents.vlm_multi_agents import VLM_Agent as VectorAgent
+
+        class PlannerSpy:
+            calls = []
+
+            def __init__(self, traversible, **kwargs):
+                self.traversible = np.asarray(traversible).copy()
+                self.hard_unsafe_mask = np.zeros_like(
+                    self.traversible, dtype=bool
+                )
+                self.states = []
+                type(self).calls.append(self)
+
+            def set_multi_goal(self, goal):
+                self.goal = np.asarray(goal).copy()
+
+            def get_short_term_goal(self, state):
+                self.states.append(tuple(state))
+                return float(state[0]), float(state[1]), False, False
+
+        for agent_class in (SingleProcessAgent, VectorAgent):
+            module = agent_class.__module__
+            PlannerSpy.calls = []
+            blind = self._agent_fixture(agent_class, "fmm")
+            aware = self._agent_fixture(agent_class, "fmm")
+            aware.risk_navigation_enabled = True
+            aware.risk_map = np.zeros((41, 41), dtype=np.float32)
+            aware.args.risk_source = "oracle"
+
+            with mock.patch(f"{module}.FMMPlanner", PlannerSpy):
+                blind._get_stg(
+                    np.zeros((41, 41), dtype=np.uint8),
+                    [20, 10],
+                    blind.goal_map.copy(),
+                )
+                aware._get_stg(
+                    np.zeros((41, 41), dtype=np.uint8),
+                    [20, 10],
+                    aware.goal_map.copy(),
+                )
+
+            self.assertEqual(len(PlannerSpy.calls), 2)
+            none_planner, oracle_planner = PlannerSpy.calls
+            np.testing.assert_array_equal(
+                none_planner.traversible, oracle_planner.traversible
+            )
+            np.testing.assert_array_equal(
+                none_planner.goal, oracle_planner.goal
+            )
+            self.assertEqual(
+                none_planner.states[0], oracle_planner.states[0]
+            )
+            self.assertEqual(none_planner.states[0], (21, 11))
+            self.assertTrue(np.all(none_planner.traversible[0, :] == 0))
+            self.assertTrue(np.all(none_planner.traversible[-1, :] == 0))
 
     def test_agent_variants_run_astar_in_blind_and_aware_modes(self) -> None:
         from agents.vlm_agents import VLM_Agent as SingleProcessAgent
@@ -307,6 +390,37 @@ class AgentPlannerIntegrationTests(unittest.TestCase):
                     self.assertEqual(len(stg), 2)
                     self.assertFalse(stop)
                     self.assertGreater(len(path), 1)
+
+    def test_fmm_and_astar_ignore_hard_masks_in_soft_risk_mode(self) -> None:
+        from agents.vlm_agents import VLM_Agent as SingleProcessAgent
+        from agents.vlm_multi_agents import VLM_Agent as VectorAgent
+
+        for agent_class in (SingleProcessAgent, VectorAgent):
+            for planner_name in ("fmm", "astar"):
+                with self.subTest(
+                    agent=agent_class.__module__, planner=planner_name
+                ):
+                    agent = self._agent_fixture(agent_class, planner_name)
+                    agent.risk_navigation_enabled = True
+                    agent.risk_map = np.zeros((41, 41), dtype=np.float32)
+                    agent.risk_map[20, 22:29] = 1.0
+                    # If this mask reached the planner, the goal would be
+                    # converted into a safety waypoint or escape action.
+                    agent.hard_unsafe_mask = np.ones(
+                        (41, 41), dtype=bool
+                    )
+
+                    stg, stop, path = agent._get_stg(
+                        np.zeros((41, 41), dtype=np.uint8),
+                        [20, 10],
+                        agent.goal_map.copy(),
+                    )
+
+                    self.assertEqual(len(stg), 2)
+                    self.assertFalse(stop)
+                    self.assertGreater(len(path), 1)
+                    self.assertFalse(agent._risk_escape_active)
+                    self.assertIsNone(agent._risk_escape_reason)
 
     def test_agent_variants_run_rl_in_blind_and_aware_modes(self) -> None:
         from agents.vlm_agents import VLM_Agent as SingleProcessAgent

@@ -542,8 +542,13 @@ safety dilation. Report the following primary benchmark columns:
 success
 spl
 risk/safe_success
-risk/che
+risk/che_per_step
+risk/critical_steps
 ```
+
+The v4 SafeSuccess score is `Success * (1 - CHE_per_step)`. Early stop still
+forces `success=0` and `spl=0`, but is retained only as summary/debug metadata
+rather than a separate aggregate column.
 
 For controlled ablations, keep the scene, episode, seed, plan, agent count,
 clock, and thresholds fixed and change only:
@@ -723,8 +728,9 @@ not standalone experiment scripts.
 | Radar reconstruction diagnostics | `outputs/radar_depth_recon/` and `outputs/radar_vs_depth_ep0/` |
 
 For the risk benchmark, the primary table is Habitat `Success`, Habitat `SPL`,
-`risk/safe_success`, and `risk/che`. Keep diagnostic traces, but do not
-substitute correlated peak/time/path-risk variants into the primary table.
+`risk/safe_success`, `risk/che_per_step`, and `risk/critical_steps`. Keep
+early-stop metadata and diagnostic traces in the episode summary, but do not
+display early stop as a redundant aggregate column.
 
 ## 16. Troubleshooting
 

@@ -6,7 +6,7 @@ import argparse
 import gzip
 import json
 from pathlib import Path
-from typing import Dict
+from typing import Dict, Sequence
 
 
 def _read(path: Path) -> Dict[str, object]:
@@ -20,32 +20,37 @@ def _write(path: Path, payload: Dict[str, object]) -> None:
         json.dump(payload, stream, separators=(",", ":"), sort_keys=True)
 
 
-def package_episode(
+def package_episodes(
     source_shard: Path,
-    episode_id: str,
+    episode_ids: Sequence[str],
     output_dir: Path,
     *,
     object_category: str | None = None,
     fire_plan_id: str | None = None,
 ) -> Path:
     source = _read(source_shard)
+    selected_ids = [str(episode_id) for episode_id in episode_ids]
+    if not selected_ids or len(set(selected_ids)) != len(selected_ids):
+        raise ValueError("episode_ids must be a non-empty unique sequence")
     matches = [
         episode
         for episode in source.get("episodes", [])
-        if str(episode.get("episode_id")) == str(episode_id)
+        if str(episode.get("episode_id")) in set(selected_ids)
         and (
             object_category is None
             or str(episode.get("object_category")) == object_category
         )
     ]
-    if len(matches) != 1:
-        selector = f"episode_id={episode_id!r}"
+    by_id = {str(episode.get("episode_id")): episode for episode in matches}
+    if len(matches) != len(selected_ids) or len(by_id) != len(selected_ids):
+        selector = f"episode_ids={selected_ids!r}"
         if object_category is not None:
             selector += f", object_category={object_category!r}"
         raise ValueError(
-            f"expected one {selector} in {source_shard}, "
+            f"expected one match for every {selector} in {source_shard}, "
             f"found {len(matches)}"
         )
+    matches = [by_id[episode_id] for episode_id in selected_ids]
     episode = matches[0]
     scene_path = str(episode.get("scene_id", ""))
     scene_id = Path(scene_path).name.split(".", 1)[0]
@@ -55,7 +60,7 @@ def package_episode(
     scenario = {
         "schema_version": 1,
         "scene_id": scene_id,
-        "episode_id": str(episode_id),
+        "episode_ids": selected_ids,
         "object_category": episode.get("object_category"),
         "fire_plan_id": fire_plan_id,
     }
@@ -80,10 +85,34 @@ def package_episode(
     return root_path
 
 
+def package_episode(
+    source_shard: Path,
+    episode_id: str,
+    output_dir: Path,
+    *,
+    object_category: str | None = None,
+    fire_plan_id: str | None = None,
+) -> Path:
+    """Backward-compatible one-episode wrapper."""
+
+    return package_episodes(
+        source_shard,
+        [episode_id],
+        output_dir,
+        object_category=object_category,
+        fire_plan_id=fire_plan_id,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-shard", type=Path, required=True)
-    parser.add_argument("--episode-id", required=True)
+    parser.add_argument(
+        "--episode-id",
+        required=True,
+        action="append",
+        help="episode id to package; repeat the flag for a matched subset",
+    )
     parser.add_argument(
         "--object-category",
         default=None,
@@ -92,7 +121,7 @@ def main() -> int:
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--fire-plan-id", default=None)
     args = parser.parse_args()
-    output = package_episode(
+    output = package_episodes(
         args.source_shard,
         args.episode_id,
         args.output_dir,

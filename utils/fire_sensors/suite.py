@@ -142,6 +142,7 @@ class FireSensorSuite:
         agent_state=None,
         robot_step: int = 0,
         t_sim_s: Optional[float] = None,
+        diagnostics: bool = True,
     ) -> Dict[str, np.ndarray]:
         # ---- Voxel RGB + Thermal (single ray-march produces both) ----
         # A bound FireScene is the normal path. With no scene the voxel
@@ -171,38 +172,44 @@ class FireSensorSuite:
             rgb, depth_m,
             transmittance=(voxel_out["transmittance"] if voxel_out is not None else None),
         )
-        # Both radar and lidar consume the **clean** depth/rgb because:
-        #  - mmWave is largely unaffected by smoke (paper Table 3),
-        #  - LIDAR's smoke degradation is modeled inside its own module.
-        radar_out = self.radar_sensor.process(rgb, depth_m)
-        lidar_out = self.lidar_sensor.process(rgb, depth_m, obs=obs)
-
         d_clean_2d = depth_m[..., 0] if depth_m.ndim == 3 else depth_m
         d_smoke = depth_out["depth"]
         d_smoke_2d = d_smoke[..., 0] if d_smoke.ndim == 3 else d_smoke
 
-        title_extra = ""
-        if voxel_out is not None and "t_sim_s" in voxel_out:
-            title_extra = (
-                f"  step={int(voxel_out['robot_step'])}  "
-                f"t_sim={float(voxel_out['t_sim_s']):.1f}s"
+        radar_out = None
+        lidar_out = None
+        dashboard = None
+        if diagnostics:
+            # Both radar and lidar consume the clean depth/rgb because mmWave
+            # is smoke-robust and LiDAR models its own smoke degradation.
+            radar_out = self.radar_sensor.process(rgb, depth_m)
+            lidar_out = self.lidar_sensor.process(rgb, depth_m, obs=obs)
+            title_extra = ""
+            if voxel_out is not None and "t_sim_s" in voxel_out:
+                title_extra = (
+                    f"  step={int(voxel_out['robot_step'])}  "
+                    f"t_sim={float(voxel_out['t_sim_s']):.1f}s"
+                )
+            panels = {
+                "rgb": cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
+                "rgb_smoke": cv2.cvtColor(
+                    rgb_out["image"], cv2.COLOR_RGB2BGR
+                ),
+                "depth": colorize_depth(d_clean_2d, self.cfg.max_depth_m),
+                "depth_smoke": colorize_depth(
+                    d_smoke_2d, self.cfg.max_depth_m
+                ),
+                "thermal": thermal_out["image"],
+                "lidar": lidar_out["image"],
+                "radar": radar_out["image_bev"],
+                "radar_az": radar_out["image_az"],
+            }
+            dashboard = render_dashboard(
+                panels,
+                size=self.cfg.dashboard_size,
+                title=f"Fire-Scene Sensors (FireWorld voxel){title_extra}",
+                extra_panel=radar_out["image_el"],
             )
-        panels = {
-            "rgb":         cv2.cvtColor(rgb, cv2.COLOR_RGB2BGR),
-            "rgb_smoke":   cv2.cvtColor(rgb_out["image"], cv2.COLOR_RGB2BGR),
-            "depth":       colorize_depth(d_clean_2d, self.cfg.max_depth_m),
-            "depth_smoke": colorize_depth(d_smoke_2d, self.cfg.max_depth_m),
-            "thermal":     thermal_out["image"],
-            "lidar":       lidar_out["image"],
-            "radar":       radar_out["image_bev"],
-            "radar_az":    radar_out["image_az"],
-        }
-        dashboard = render_dashboard(
-            panels,
-            size=self.cfg.dashboard_size,
-            title=f"Fire-Scene Sensors (FireWorld voxel){title_extra}",
-            extra_panel=radar_out["image_el"],
-        )
         self.last_dashboard = dashboard
 
         out = {
@@ -218,21 +225,6 @@ class FireSensorSuite:
             "thermal_image": thermal_out["image"],
             "thermal_temperature": thermal_out["temperature_c"],
             "thermal_flame_mask": thermal_out["flame_mask"],
-            # lidar
-            "lidar_points": lidar_out["points"],
-            "lidar_image": lidar_out["image"],
-            # Optional for compatibility with custom/test LiDAR backends
-            # implementing the pre-360 output contract.
-            "lidar_is_360": bool(lidar_out.get("is_360", False)),
-            # radar
-            "radar_heatmap": radar_out["heatmap"],
-            "radar_image_az": radar_out["image_az"],
-            "radar_image_el": radar_out["image_el"],
-            "radar_image_bev": radar_out["image_bev"],
-            "radar_points": radar_out["points"],
-            "radar_points_3d": radar_out["points_3d"],
-            # composite
-            "dashboard": dashboard,
             # renderer diagnostics (useful for benchmark manifests)
             "fire_render_backend": voxel_out.get(
                 "render_backend", "passthrough"
@@ -241,6 +233,19 @@ class FireSensorSuite:
                 "render_device", "cpu"
             ),
         }
+        if diagnostics:
+            out.update({
+                "lidar_points": lidar_out["points"],
+                "lidar_image": lidar_out["image"],
+                "lidar_is_360": bool(lidar_out.get("is_360", False)),
+                "radar_heatmap": radar_out["heatmap"],
+                "radar_image_az": radar_out["image_az"],
+                "radar_image_el": radar_out["image_el"],
+                "radar_image_bev": radar_out["image_bev"],
+                "radar_points": radar_out["points"],
+                "radar_points_3d": radar_out["points_3d"],
+                "dashboard": dashboard,
+            })
         for source_key, output_key in (
             ("render_frame_index", "fire_render_frame_index"),
             ("render_cache_hits", "fire_render_cache_hits"),

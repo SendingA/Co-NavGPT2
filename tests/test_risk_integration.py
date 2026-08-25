@@ -19,6 +19,8 @@ from utils.fire_pipeline import step_fire_observation
 from utils.fire_sensors.sensors.voxel_smoke import VoxelSmokeSensor
 from utils.fire_sensors.suite import FireSensorSuite
 from utils.global_planners import low_risk_fallback_goal
+from utils.risk.metrics import MultiAgentRiskEvaluator
+from utils.risk.model import RiskPointSamples
 from utils.risk.runtime import RiskRuntime
 
 
@@ -45,10 +47,10 @@ class RiskPromptRegressionTests(unittest.TestCase):
             self.assertNotIn("hazard_report", normal_prompt)
         self.assertIn("global top-view", prompts.full_system_prompt)
         self.assertIn("global top-view", prompts.risk_prompt)
-        self.assertIn("hard_blocked=true", prompts.risk_prompt)
+        self.assertIn("not an absolute prohibition", prompts.risk_prompt)
         self.assertIn("route_max_risk", prompts.risk_prompt)
-        self.assertIn("Low confidence means uncertain, not safe", prompts.risk_prompt)
-        self.assertIn("Return a JSON object only", prompts.risk_prompt)
+        self.assertIn("diagnostic only", prompts.risk_prompt)
+        self.assertIn("only respond in JSON", prompts.risk_prompt)
         self.assertNotIn("def _risk_prompt", source)
         self.assertNotIn("_RISK_SAFETY_GUIDANCE", source)
         self.assertFalse(hasattr(prompts, "risk_system_prompt"))
@@ -211,6 +213,36 @@ class SharedFireTimeTests(unittest.TestCase):
         self.assertEqual(suite.voxel_kwargs["t_sim_s"], 42.25)
         self.assertEqual(output["t_sim_s"], 42.25)
         self.assertEqual(output["robot_step"], 3)
+
+    def test_log_only_suite_skips_radar_lidar_and_dashboard(self) -> None:
+        rgb = np.zeros((2, 3, 3), dtype=np.uint8)
+        depth = np.ones((2, 3), dtype=np.float32)
+
+        class ForbiddenDiagnostic:
+            @staticmethod
+            def process(*_args, **_kwargs):
+                raise AssertionError("diagnostic sensor should be skipped")
+
+        suite = object.__new__(FireSensorSuite)
+        suite.cfg = SimpleNamespace(max_depth_m=5.0, dashboard_size=(320, 240))
+        suite.scene = object()
+        suite.voxel_sensor = None
+        suite.depth_sensor = SimpleNamespace(
+            process=lambda _rgb, depth_in, transmittance=None: {
+                "depth": depth_in.copy()
+            }
+        )
+        suite.radar_sensor = ForbiddenDiagnostic()
+        suite.lidar_sensor = ForbiddenDiagnostic()
+        suite.last_dashboard = object()
+
+        output = suite.process(rgb, depth, diagnostics=False)
+
+        self.assertIsNone(suite.last_dashboard)
+        self.assertNotIn("radar_heatmap", output)
+        self.assertNotIn("lidar_points", output)
+        self.assertIn("thermal_temperature", output)
+        self.assertIn("depth_smoke", output)
 
     def test_voxel_sensor_uses_override_without_resampling_clock(self) -> None:
         class FakeScene:
@@ -422,8 +454,15 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
 
             summary = runtime.summary(habitat_success=1.0)
             self.assertEqual(summary["planner_source"], "oracle")
-            self.assertGreater(summary["team"]["CHE"], 0.0)
-            self.assertEqual(summary["safe_success"], 1.0)
+            self.assertGreater(summary["team"]["CHE_per_step"], 0.0)
+            self.assertLessEqual(summary["team"]["CHE_per_step"], 1.0)
+            self.assertEqual(summary["team"]["exposure_samples"], 2)
+            self.assertEqual(summary["team"]["joint_steps"], 1)
+            self.assertFalse(summary["early_stop"]["triggered"])
+            self.assertAlmostEqual(
+                summary["safe_success"],
+                1.0 - summary["team"]["CHE_per_step"],
+            )
             self.assertEqual(summary["team"]["safe_refusal_steps"], 1)
             summary_path = runtime.save_summary(summary)
             self.assertEqual(json.loads(summary_path.read_text()), summary)
@@ -484,6 +523,133 @@ class RiskRuntimeArtifactTests(unittest.TestCase):
                 list(quiet_runtime.episode_dir.glob("risk_step_*.png")),
                 [],
             )
+
+            # Evaluation-side early stop uses GT for every planner source.
+            # One agent crossing the threshold fails the whole team while
+            # retaining SoftSPL as a terminal-progress diagnostic.
+            class OneAgentThresholdProvider:
+                is_privileged = True
+
+                def __init__(self, risk_config):
+                    self.config = risk_config
+
+                @staticmethod
+                def sample_positions(
+                    _timestamp_s,
+                    positions,
+                    floor_y_m=None,
+                ):
+                    del floor_y_m
+                    count = len(positions)
+                    zeros = np.zeros(count, dtype=np.float32)
+                    risks = np.full(count, 0.05, dtype=np.float32)
+                    risks[0] = 0.20
+                    return RiskPointSamples(
+                        flame=zeros,
+                        temperature_c=np.full(
+                            count, 25.0, dtype=np.float32
+                        ),
+                        temperature=zeros,
+                        smoke=zeros,
+                        physical_risk=risks,
+                        hard_unsafe=np.zeros(count, dtype=bool),
+                        confidence=np.ones(count, dtype=np.float32),
+                    )
+
+            for source in ("none", "oracle", "sensed"):
+                stop_runtime = RiskRuntime(
+                    fire_scene=FakeScene(),
+                    reference_agent=reference,
+                    args=SimpleNamespace(
+                        risk_enabled=1,
+                        risk_source=source,
+                        risk_dump_dir=temporary,
+                        risk_run_id=f"early-stop-{source}",
+                        risk_save_every=0,
+                        risk_save_traces=0,
+                        risk_smoke_source="appearance_depth",
+                        risk_early_stop_enabled=1,
+                        risk_early_stop_threshold=0.10,
+                    ),
+                    episode_id=11,
+                )
+                stop_runtime.evaluator = MultiAgentRiskEvaluator(
+                    OneAgentThresholdProvider(stop_runtime.config),
+                    stop_runtime.config,
+                )
+                stop_runtime.evaluator.prime(
+                    0.0,
+                    [state.position for state in states],
+                    floor_y_m=stop_runtime.floor_y_m,
+                )
+                stop_runtime.record_exposure(
+                    1.0,
+                    states,
+                    step=7,
+                    actions=[1, 3],
+                )
+                self.assertTrue(stop_runtime.early_stop_triggered)
+                event = stop_runtime.early_stop_event
+                self.assertIsNotNone(event)
+                self.assertEqual(event["step"], 7)
+                self.assertEqual(event["threshold"], 0.10)
+                self.assertEqual(event["agent_ids"], ["0"])
+                overridden = stop_runtime.apply_early_stop_metric_overrides({
+                    "success": 1.0,
+                    "spl": 0.75,
+                    "soft_spl": 0.80,
+                    "distance_to_goal": 0.1,
+                })
+                self.assertEqual(overridden["success"], 0.0)
+                self.assertEqual(overridden["spl"], 0.0)
+                self.assertEqual(overridden["soft_spl"], 0.80)
+                self.assertEqual(overridden["distance_to_goal"], 0.1)
+                stopped_summary = stop_runtime.summary(
+                    habitat_success=overridden["success"]
+                )
+                self.assertEqual(stopped_summary["safe_success"], 0.0)
+                self.assertEqual(stopped_summary["team"]["early_stop"], 1)
+                self.assertEqual(
+                    stopped_summary["team"]["exposure_samples"], 2
+                )
+
+            disabled_stop_runtime = RiskRuntime(
+                fire_scene=FakeScene(),
+                reference_agent=reference,
+                args=SimpleNamespace(
+                    risk_enabled=1,
+                    risk_source="none",
+                    risk_dump_dir=temporary,
+                    risk_run_id="early-stop-disabled",
+                    risk_save_every=0,
+                    risk_save_traces=0,
+                    risk_smoke_source="appearance_depth",
+                    risk_danger_threshold=0.05,
+                    risk_critical_threshold=0.10,
+                    risk_early_stop_enabled=0,
+                    risk_early_stop_threshold=0.0,
+                ),
+                episode_id=12,
+            )
+            disabled_stop_runtime.evaluator = MultiAgentRiskEvaluator(
+                OneAgentThresholdProvider(disabled_stop_runtime.config),
+                disabled_stop_runtime.config,
+            )
+            disabled_stop_runtime.record_exposure(1.0, states, step=1)
+            self.assertFalse(disabled_stop_runtime.early_stop_triggered)
+            unchanged = disabled_stop_runtime.apply_early_stop_metric_overrides({
+                "success": 1.0,
+                "spl": 0.75,
+            })
+            self.assertEqual(unchanged, {"success": 1.0, "spl": 0.75})
+            relaxed_summary = disabled_stop_runtime.summary(
+                habitat_success=unchanged["success"]
+            )
+            self.assertEqual(relaxed_summary["team"]["critical_steps"], 1)
+            self.assertAlmostEqual(
+                relaxed_summary["team"]["CHE_per_step"], 0.125
+            )
+            self.assertAlmostEqual(relaxed_summary["safe_success"], 0.875)
 
             off_floor = [
                 SimpleNamespace(position=np.array([0.0, 2.0, 0.0])),

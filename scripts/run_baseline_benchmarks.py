@@ -487,6 +487,7 @@ _PROTECTED_MAIN_FLAGS = {
     "--num_agents",
     "--nav_mode",
     "--local_planner",
+    "--fmm_backend",
     "--dump_location",
     "-d",
     "--visualize",
@@ -673,6 +674,8 @@ def build_command(
                 "0",
             ]
         )
+        if run.local_planner == "fmm":
+            command.extend(["--fmm_backend", "grid"])
     if run.local_planner == "pointnav":
         command.extend(
             [

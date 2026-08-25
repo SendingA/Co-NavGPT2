@@ -169,12 +169,7 @@ class RiskAwareGlobalPlanner(GlobalPlanner):
             (np.asarray(agent_map.explored_map) > 0.0)
             & (np.asarray(agent_map.obstacle_map) <= 0.5)
         )
-        if risk is not None:
-            free &= ~np.asarray(risk.hard_unsafe, dtype=bool)
-            free &= (
-                np.asarray(risk.planning_risk, dtype=np.float32)
-                <= float(risk.danger_threshold)
-            )
+        del risk
         for row, col in reserved:
             if 0 <= row < free.shape[0] and 0 <= col < free.shape[1]:
                 free[row, col] = False
@@ -295,7 +290,7 @@ class RiskAwareGlobalPlanner(GlobalPlanner):
         return getattr(self._planner, "_fallback", self._planner)
 
     def plan(self, context: GlobalPlannerContext) -> GlobalPlannerResult:
-        if context.risk is None:
+        if context.risk is None or len(context.target_points) == 0:
             return self._planner.plan(context)
 
         awareness = SharedRiskAwareness(context)

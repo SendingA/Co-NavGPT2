@@ -15,6 +15,7 @@ class MetricResumeState:
     episodes_planned: int
     metric_sums: Dict[str, float]
     precision: str
+    metric_contract: Optional[str] = None
     last_episode_id: Optional[str] = None
     last_scene_id: Optional[str] = None
 
@@ -64,6 +65,11 @@ def load_metric_resume(path) -> MetricResumeState:
         episodes_planned=planned,
         metric_sums=sums,
         precision=precision,
+        metric_contract=(
+            None
+            if payload.get("metric_contract") is None
+            else str(payload["metric_contract"])
+        ),
         last_episode_id=(
             None
             if payload.get("last_episode_id") is None
@@ -84,6 +90,7 @@ def write_metric_resume(
     episodes_planned: int,
     metric_sums,
     precision: str,
+    metric_contract: Optional[str] = None,
     last_episode_id,
     last_scene_id,
 ) -> None:
@@ -104,6 +111,9 @@ def write_metric_resume(
         "metric_sums": sums,
         "metrics": averages,
         "precision": str(precision),
+        "metric_contract": (
+            None if metric_contract is None else str(metric_contract)
+        ),
         "last_episode_id": (
             None if last_episode_id is None else str(last_episode_id)
         ),

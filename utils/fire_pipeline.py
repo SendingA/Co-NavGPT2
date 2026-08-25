@@ -155,6 +155,16 @@ def step_fire_observation(
         "obs": observations,
         "agent_state": agent_state,
         "robot_step": int(robot_step),
+        # Log-only benchmarks consume smoky RGB/depth and thermal fields, not
+        # the rendered radar/LiDAR/dashboard diagnostics. Avoid computing
+        # those image products when every related output is disabled.
+        "diagnostics": bool(
+            int(getattr(args, "fire_save_every", 0)) > 0
+            or int(getattr(args, "fire_show_window", 0))
+            or int(getattr(args, "visualize", 0))
+            or int(getattr(args, "print_images", 0))
+            or int(getattr(args, "lidar_360", 0))
+        ),
     }
     # Risk-enabled multi-agent runs sample one shared FireClock value per
     # outer navigation step.  Omitting this argument preserves the historical

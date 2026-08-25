@@ -611,7 +611,8 @@ python main.py --num_agents 2 --nav_mode co_ut \
 `--risk_flame_safety_distance_m` 显式启用。不要再传 `--risk_weight_flame`。
 
 主 benchmark 报告 Habitat `Success`、Habitat `SPL`、Habitat `num_steps`、
-`risk/safe_success` 和 `risk/che`。完整定义、实验边界和 Habitat 原生
+`risk/safe_success`、`risk/che_per_step` 和 `risk/critical_steps`。Early stop
+仍用于立即终止严重危险 episode，但不再作为独立聚合指标显示。完整定义、实验边界和 Habitat 原生
 metric 的迁移说明见 [Dynamic Risk Assessment](risk_assessment.md)。
 
 ### Local planner baselines

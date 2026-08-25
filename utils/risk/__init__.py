@@ -19,7 +19,11 @@ from .frontier import (
     score_frontiers,
 )
 from .map import DynamicRiskMap
-from .metrics import MultiAgentRiskEvaluator, PRIMARY_BENCHMARK_METRICS
+from .metrics import (
+    MultiAgentRiskEvaluator,
+    PRIMARY_BENCHMARK_METRICS,
+    flatten_benchmark_metrics,
+)
 from .model import GridFrame, RiskEvidence, RiskLayers, RiskPointSamples
 from .projection import (
     combine_normalized_risk,
@@ -55,6 +59,7 @@ __all__ = [
     "dilate_disk",
     "evidence_from_sensor_images",
     "frontier_risk_report",
+    "flatten_benchmark_metrics",
     "guard_frontier_assignments",
     "hard_unsafe_mask",
     "normalize_temperature_c",

@@ -170,6 +170,7 @@ class DatasetAndCommandTests(unittest.TestCase):
         self.assertEqual(value("--fire_clock_mode"), "step")
         self.assertEqual(value("--risk_enabled"), "1")
         self.assertEqual(value("--risk_source"), "none")
+        self.assertEqual(value("--fmm_backend"), "grid")
         self.assertEqual(value("--fire_render_backend"), "torch")
         self.assertEqual(value("--fire_render_device"), "cuda:0")
         self.assertEqual(value("--visualize"), "0")
@@ -498,6 +499,7 @@ class MainEpisodeLimitBoundaryTests(unittest.TestCase):
         self.assertIn('"--max_episodes must be non-negative"', main_source)
         self.assertIn("advance_episode_iterator(", main_source)
         self.assertIn("write_metric_resume(", main_source)
+        self.assertIn("_dataset_content_scene_ids(config)", main_source)
 
 
 if __name__ == "__main__":

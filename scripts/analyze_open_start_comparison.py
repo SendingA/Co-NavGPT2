@@ -117,10 +117,18 @@ def _task_summary(metrics_path: Path, risk_path: Path) -> Mapping[str, object]:
         "safe_success": float(
             risk.get("safe_success", metrics.get("risk/safe_success", 0.0))
         ),
-        "critical_violations": int(team_risk.get("critical_violations", 0)),
+        "critical_steps": int(team_risk.get(
+            "critical_steps", team_risk.get("critical_violations", 0)
+        )),
         "spl": float(metrics.get("spl", 0.0)),
         "num_steps": int(round(float(metrics.get("num_steps", 0.0)))),
-        "CHE": float(team_risk.get("CHE", metrics.get("risk/che", 0.0))),
+        "CHE_per_step": float(team_risk.get(
+            "CHE_per_step",
+            team_risk.get(
+                "CHE",
+                metrics.get("risk/che_per_step", metrics.get("risk/che", 0.0)),
+            ),
+        )),
     }
 
 
@@ -237,7 +245,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         "selection_contract": {
             "dense_native_action_lists_preserved": True,
             "safe_success_required": True,
-            "critical_violations_required": 0,
+            "critical_steps_required": 0,
             "agent_1_near_agent_0_fraction_0_5m_max": 0.15,
             "agent_1_spatial_span_m_min": 4.0,
             "agent_1_straightness_min": 0.65,

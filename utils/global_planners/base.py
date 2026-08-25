@@ -101,6 +101,7 @@ class RiskPlanningContext:
     frontier_weight: float
     map_resolution_cm: float
     route_risk_alpha: float = 4.0
+    frontier_value_tolerance: float = 0.10
 
     def __post_init__(self) -> None:
         shape = np.asarray(self.planning_risk).shape
@@ -119,6 +120,13 @@ class RiskPlanningContext:
             raise ValueError("map_resolution_cm must be positive")
         if float(self.route_risk_alpha) < 0.0:
             raise ValueError("route_risk_alpha must be non-negative")
+        if (
+            not np.isfinite(float(self.frontier_value_tolerance))
+            or float(self.frontier_value_tolerance) < 0.0
+        ):
+            raise ValueError(
+                "frontier_value_tolerance must be finite and non-negative"
+            )
 
 
 def conservative_team_risk_context(
@@ -161,6 +169,9 @@ def conservative_team_risk_context(
         frontier_weight=max(float(item.frontier_weight) for item in risks),
         map_resolution_cm=resolutions[0],
         route_risk_alpha=max(float(item.route_risk_alpha) for item in risks),
+        frontier_value_tolerance=min(
+            float(item.frontier_value_tolerance) for item in risks
+        ),
     )
 
 
