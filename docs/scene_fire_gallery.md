@@ -70,10 +70,10 @@ alpha are retained. The dashboard RGB and exported styled RGB are identical.
 
 ## Commands
 
-Run from the repository root with the `co-nav3` environment:
+Run from the repository root with the `firenav` environment:
 
 ```bash
-PY=/home/liushe10/miniconda3/envs/co-nav3/bin/python
+PY=python
 $PY scripts/capture_scene_fire_gallery.py --stage prepare
 OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 $PY scripts/capture_scene_fire_gallery.py --stage bake --workers 2
 HABITAT_SIM_LOG=error MAGNUM_LOG=quiet OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 $PY scripts/capture_scene_fire_gallery.py --stage render
@@ -109,7 +109,7 @@ complete revised configuration and every view records its reference gallery.
 
 ```bash
 HABITAT_SIM_LOG=error MAGNUM_LOG=quiet OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-  /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/capture_scene_fire_gallery.py \
+  python scripts/capture_scene_fire_gallery.py \
   --stage render --output-dir outputs/fire_gallery_medium_36_stronger_20260912 \
   --reuse-views-from outputs/fire_gallery_medium_36_20260911
 ```
@@ -117,7 +117,7 @@ HABITAT_SIM_LOG=error MAGNUM_LOG=quiet OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 
 Compare the resulting observations with:
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/compare_scene_fire_galleries.py \
+python scripts/compare_scene_fire_galleries.py \
   --reference outputs/fire_gallery_medium_36_20260911 \
   --revised outputs/fire_gallery_medium_36_stronger_20260912
 ```

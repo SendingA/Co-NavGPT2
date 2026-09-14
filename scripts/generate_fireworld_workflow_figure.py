@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Generate the publication workflow figure for Co-NavGPT2 FireWorld.
+"""Generate the publication workflow figure for FireNav FireWorld.
 
 The figure deliberately distinguishes offline fire propagation from online,
 pose-conditioned observation rendering.  It follows the visual theme of the
@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 from typing import Iterable, Optional, Tuple
 
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/conavgpt2-matplotlib")
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/firenav-matplotlib")
 
 import matplotlib
 
@@ -210,7 +210,7 @@ def build_figure():
     ax.text(
         0.5,
         0.972,
-        "Co-NavGPT2 FireWorld Workflow",
+        "FireNav FireWorld Workflow",
         ha="center",
         va="center",
         fontsize=20,
@@ -388,14 +388,14 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
     args.output_dir.mkdir(parents=True, exist_ok=True)
     fig = build_figure()
-    stem = args.output_dir / "conavgpt2_fireworld_workflow"
+    stem = args.output_dir / "firenav_fireworld_workflow"
     fig.savefig(stem.with_suffix(".svg"), facecolor="white")
     fig.savefig(stem.with_suffix(".png"), dpi=args.dpi, facecolor="white")
     fig.savefig(stem.with_suffix(".pdf"), facecolor="white")
     plt.close(fig)
 
     manifest = {
-        "title": "Co-NavGPT2 FireWorld Workflow",
+        "title": "FireNav FireWorld Workflow",
         "design_intent": (
             "Reference-inspired three-column theme with an explicit split "
             "between offline fire propagation and online observation."

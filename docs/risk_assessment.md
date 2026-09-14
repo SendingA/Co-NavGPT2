@@ -1,8 +1,8 @@
 # Dynamic Risk Assessment：火焰、温度与烟雾风险评估
 
-本文说明 `main.py` 中已经接通的动态风险评估与风险感知导航实现。它借鉴
-[VULCAN](2604.12831v1.pdf) 的“感知风险图 → frontier 风险 → 风险调制
-FMM → CHE”分层设计，但以当前仓库代码为准，并不是对论文公式的逐字复现。
+本文说明 `main.py` 中已经接通的动态风险评估与风险感知导航实现，
+按“感知风险图 → frontier 风险 → 风险调制 FMM → CHE”组织，
+具体定义以当前仓库代码为准。
 FireWorld 的生成、传播与多模态渲染另见
 [FireWorld pipeline](fire_world_pipeline.md)。
 
@@ -260,7 +260,7 @@ v(x) = 1 / (1 + alpha · P(x))
 ```
 
 其中 `alpha=--risk_alpha`，默认 `1.0`；风险越高，travel time 越大。
-该形式对应 VULCAN Eq. (11)。FMM/A* 的主运行路径不再接收 `M_hard`，也不会生成
+FMM/A* 的主运行路径不再接收 `M_hard`，也不会生成
 emergency escape、trapped holding point 或目标附近的 safe waypoint；真实任务
 goal 始终保留。每个 action cycle 都用最新连续风险重算 travel time/path，因此
 危险只会让局部单元更昂贵，不会使目标或通道不可达。PointNav 和 RL 的行为不在

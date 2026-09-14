@@ -12,7 +12,7 @@ Three new groups were added in the 2026-07 migration:
 * ``--robot_models_enabled`` / ``--robot_profiles`` for the visible robot
   URDF models loaded by :class:`envs.robot_models.RobotModelManager`.
 * Explicit dataset / scene-dataset overrides so the same task_config can
-  target Co-NavGPTv2's HM3D v2 install or Co-NavGPTv3's demo assets.
+  target an HM3D v2 installation or local demo assets.
 """
 from __future__ import annotations
 
@@ -124,7 +124,7 @@ def get_args() -> argparse.Namespace:
     parser.add_argument("--num_humans", type=int, default=None,
                         help="number of kinematic humanoid pedestrians to "
                              "spawn alongside the robots. If omitted, use "
-                             "conav.num_humans from the task config.")
+                             "firenav.num_humans from the task config.")
 
     # Habitat 3 visible robot URDF models (Fetch / Spot / ...) rendered on
     # top of the classic ObjectNav navigation agents.
@@ -590,7 +590,7 @@ def load_config(args: argparse.Namespace):
     * Replicates the first agent template into ``args.num_agents``
       entries under ``habitat.simulator.agents`` and rewrites
       ``agents_order`` to match. The default agent stays ``main_agent``.
-    * Adds a ``conav`` DictConfig group holding humanoid and robot-model
+    * Adds a ``firenav`` DictConfig group holding humanoid and robot-model
       knobs so envs/random_humanoid.py + envs/robot_models.py can pull
       everything from a single object.
     """
@@ -638,8 +638,8 @@ def load_config(args: argparse.Namespace):
 
             apply_pointnav_simulator_schema(config, args, pointnav_spec)
 
-        _apply_conav_overrides(config, args)
-        _resolve_conav_paths(config)
+        _apply_firenav_overrides(config, args)
+        _resolve_firenav_paths(config)
         _resolve_dataset_paths(config)
 
     # Propagate turn angle back to the CLI namespace so the planners can
@@ -708,26 +708,26 @@ def voxel_smoke_kwargs(args) -> dict:
 def humanoid_kwargs(config, seed: int) -> dict:
     """Bundle up kwargs for :class:`envs.random_humanoid.RandomHumanoidWalker`."""
     return {
-        "num_humans": int(config.conav.num_humans),
+        "num_humans": int(config.firenav.num_humans),
         "urdf_path": (
-            config.conav.human_urdfs
-            if "human_urdfs" in config.conav
-            else config.conav.human_urdf
+            config.firenav.human_urdfs
+            if "human_urdfs" in config.firenav
+            else config.firenav.human_urdf
         ),
         "motion_data_path": (
-            config.conav.human_motion_data_paths
-            if "human_motion_data_paths" in config.conav
-            else config.conav.human_motion_data
+            config.firenav.human_motion_data_paths
+            if "human_motion_data_paths" in config.firenav
+            else config.firenav.human_motion_data
         ),
         "seed": seed,
-        "walk_speed": float(config.conav.human_walk_speed),
-        "turn_speed": float(config.conav.human_turn_speed),
-        "goal_radius": float(config.conav.human_goal_radius),
-        "target_radius": float(config.conav.human_target_radius),
-        "min_spawn_distance": float(config.conav.min_spawn_distance),
-        "motion_dt": float(config.conav.human_motion_dt),
+        "walk_speed": float(config.firenav.human_walk_speed),
+        "turn_speed": float(config.firenav.human_turn_speed),
+        "goal_radius": float(config.firenav.human_goal_radius),
+        "target_radius": float(config.firenav.human_target_radius),
+        "min_spawn_distance": float(config.firenav.min_spawn_distance),
+        "motion_dt": float(config.firenav.human_motion_dt),
         "use_controller_root_motion": bool(
-            config.conav.human_use_controller_root_motion
+            config.firenav.human_use_controller_root_motion
         ),
     }
 
@@ -735,20 +735,20 @@ def humanoid_kwargs(config, seed: int) -> dict:
 def robot_model_kwargs(config, num_agents: int) -> dict:
     """Bundle up kwargs for :class:`envs.robot_models.RobotModelManager`."""
     robot_model_urdfs = (
-        config.conav.robot_model_urdfs
-        if "robot_model_urdfs" in config.conav
-        and len(config.conav.robot_model_urdfs) > 0
+        config.firenav.robot_model_urdfs
+        if "robot_model_urdfs" in config.firenav
+        and len(config.firenav.robot_model_urdfs) > 0
         else None
     )
     return {
         "num_robots": num_agents,
         "profiles": (
-            config.conav.robot_model_profiles
-            if "robot_model_profiles" in config.conav
+            config.firenav.robot_model_profiles
+            if "robot_model_profiles" in config.firenav
             else "fetch"
         ),
         "urdf_paths": robot_model_urdfs,
-        "enabled": bool(config.conav.get("robot_models_enabled", False)),
+        "enabled": bool(config.firenav.get("robot_models_enabled", False)),
     }
 
 
@@ -785,40 +785,40 @@ def _set_num_robot_agents(config, num_robots: int) -> None:
     sim_cfg.default_agent_id = 0
 
 
-def _apply_conav_overrides(config, args: argparse.Namespace) -> None:
-    """CLI values win over conav.* defaults from the yaml."""
-    conav = config.conav
-    conav.num_robots = int(args.num_agents)
+def _apply_firenav_overrides(config, args: argparse.Namespace) -> None:
+    """CLI values win over firenav.* defaults from the yaml."""
+    firenav = config.firenav
+    firenav.num_robots = int(args.num_agents)
     if args.num_humans is not None:
-        conav.num_humans = int(args.num_humans)
+        firenav.num_humans = int(args.num_humans)
 
     if args.robot_models_enabled:
-        conav.robot_models_enabled = bool(args.robot_models_enabled)
+        firenav.robot_models_enabled = bool(args.robot_models_enabled)
     if args.robot_profiles is not None:
-        conav.robot_model_profiles = _csv_items(args.robot_profiles)
+        firenav.robot_model_profiles = _csv_items(args.robot_profiles)
     if args.robot_urdfs is not None:
-        conav.robot_model_urdfs = _csv_items(args.robot_urdfs)
+        firenav.robot_model_urdfs = _csv_items(args.robot_urdfs)
 
 
-def _resolve_conav_paths(config) -> None:
-    conav = config.conav
-    if "human_urdfs" in conav:
-        conav.human_urdfs = _project_paths(conav.human_urdfs)
-    elif "human_urdf" in conav:
-        conav.human_urdf = _project_path(conav.human_urdf)
+def _resolve_firenav_paths(config) -> None:
+    firenav = config.firenav
+    if "human_urdfs" in firenav:
+        firenav.human_urdfs = _project_paths(firenav.human_urdfs)
+    elif "human_urdf" in firenav:
+        firenav.human_urdf = _project_path(firenav.human_urdf)
 
-    if "human_motion_data_paths" in conav:
-        conav.human_motion_data_paths = _project_paths(
-            conav.human_motion_data_paths
+    if "human_motion_data_paths" in firenav:
+        firenav.human_motion_data_paths = _project_paths(
+            firenav.human_motion_data_paths
         )
-    elif "human_motion_data" in conav:
-        conav.human_motion_data = _project_path(conav.human_motion_data)
+    elif "human_motion_data" in firenav:
+        firenav.human_motion_data = _project_path(firenav.human_motion_data)
 
     if (
-        "robot_model_urdfs" in conav
-        and len(conav.robot_model_urdfs) > 0
+        "robot_model_urdfs" in firenav
+        and len(firenav.robot_model_urdfs) > 0
     ):
-        conav.robot_model_urdfs = _project_paths(conav.robot_model_urdfs)
+        firenav.robot_model_urdfs = _project_paths(firenav.robot_model_urdfs)
 
 
 def _resolve_dataset_paths(config) -> None:

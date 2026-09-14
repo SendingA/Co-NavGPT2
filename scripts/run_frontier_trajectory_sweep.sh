@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-python_bin="${CO_NAV_PYTHON:-/home/liushe10/miniconda3/envs/co-nav3/bin/python}"
+python_bin="${FIRENAV_PYTHON:-python}"
 root="${TRAJECTORY_OUTPUT_ROOT:-outputs/fire_cost_experiments/frontier_trajectory_strategy_sweep}"
 torch_device="${TRAJECTORY_TORCH_DEVICE:-cuda:0}"
 print_images="${TRAJECTORY_PRINT_IMAGES:-0}"
@@ -14,7 +14,7 @@ runtime_env=(
   env
   MAGNUM_LOG=quiet
   HABITAT_SIM_LOG=quiet
-  MPLCONFIGDIR=/tmp/conav-matplotlib
+  MPLCONFIGDIR=/tmp/firenav-matplotlib
   PYTHONDONTWRITEBYTECODE=1
 )
 

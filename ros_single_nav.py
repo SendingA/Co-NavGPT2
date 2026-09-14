@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import rclpy
 from rclpy.node import Node
 
@@ -14,7 +15,7 @@ import zmq
 
 context = zmq.Context()
 socket = context.socket(zmq.PUB)
-socket.connect("tcp://192.168.100.1:5557")
+socket.connect(os.environ["FIRENAV_ROBOT_ENDPOINT"])
 print("socket connected(?) to port 5557")
 
 # TF

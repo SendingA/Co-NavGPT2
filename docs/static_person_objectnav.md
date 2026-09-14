@@ -67,7 +67,7 @@ or non-navigable points are never inserted merely to make validation pass.
       --task_config person_objectnav_hm3d.yaml \
       --num_agents 2
 
-configs/person_objectnav_hm3d.yaml enables conav.static_person_goal and
+configs/person_objectnav_hm3d.yaml enables firenav.static_person_goal and
 provides one humanoid by default. At every episode reset, the runtime reads
 the person ObjectGoals and calls the same
 ``KinematicHumanoid.reconfigure()`` path used by the original humanoid demo.

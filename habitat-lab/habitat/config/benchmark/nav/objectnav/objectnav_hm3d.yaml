@@ -13,7 +13,7 @@ habitat:
   simulator:
     turn_angle: 30
     # Keep direct Habitat-Sim look actions aligned with the ObjectNav task
-    # action configuration and legacy Co-Nav camera-angle bookkeeping.
+    # action configuration and legacy FireNav camera-angle bookkeeping.
     tilt_angle: 30
     agents:
       main_agent:

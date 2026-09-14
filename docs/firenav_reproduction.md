@@ -1,6 +1,6 @@
-# Reproducing the VULCAN Branch
+# Reproducing FireNav
 
-This guide reproduces the current `vulcan` branch of Co-NavGPT2: Habitat 3
+This guide reproduces FireNav: Habitat 3
 multi-robot ObjectNav, VLM frontier assignment, FireWorld generation and
 rendering, thermal/radar/LIDAR sensing, static-person ObjectNav, and dynamic
 risk-aware navigation.
@@ -18,7 +18,7 @@ git rev-parse HEAD
 git status --short
 ```
 
-The branch must be `vulcan`. A commit hash identifies only committed files;
+A commit hash identifies only committed files;
 uncommitted changes and generated `outputs/` are not reproducible from Git.
 Commit or archive the final experiment state before publishing results.
 
@@ -31,7 +31,7 @@ The validated software baseline is:
 | torchvision | 0.15.2 + CUDA 11.8 |
 | torchaudio | 2.0.2 + CUDA 11.8 |
 | Habitat-Sim | 0.3.3, Bullet build |
-| Habitat-Lab | tag `v0.3.3`, commit `094d6be2f9d057e4781a68ae792132895fd4d3d0`, plus the VULCAN patch below |
+| Habitat-Lab | tag `v0.3.3`, commit `094d6be2f9d057e4781a68ae792132895fd4d3d0`, plus the FireNav patch below |
 | NumPy | 1.26.4 |
 | OpenCV | 4.10.0 |
 | Open3D | 0.19.0 |
@@ -51,10 +51,9 @@ but not for a full `main.py` episode without code changes.
 
 ## 2. Clone and pin the project
 
-```bash
-git clone --branch vulcan https://github.com/SendingA/Co-NavGPT2.git
-cd Co-NavGPT2
+Clone this repository and open a shell in its root directory.
 
+```bash
 PROJECT_ROOT="$PWD"
 git rev-parse HEAD
 ```
@@ -62,7 +61,7 @@ git rev-parse HEAD
 For a paper artifact, replace the moving branch with the published commit:
 
 ```bash
-git checkout <VULCAN_COMMIT>
+git checkout "${FIRENAV_COMMIT:?Set FIRENAV_COMMIT to the published revision}"
 ```
 
 ## 3. System and Conda environment
@@ -79,8 +78,8 @@ sudo apt-get install -y \
 Create the environment:
 
 ```bash
-conda create -n co-nav3 python=3.9 cmake=3.14.0 -y
-conda activate co-nav3
+conda create -n firenav python=3.9 cmake=3.14.0 -y
+conda activate firenav
 
 conda install -y \
     pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
@@ -128,7 +127,7 @@ git clone https://github.com/facebookresearch/habitat-lab.git \
 git -C "$HABITAT_LAB_ROOT" checkout \
     094d6be2f9d057e4781a68ae792132895fd4d3d0
 git -C "$HABITAT_LAB_ROOT" apply \
-    "$PROJECT_ROOT/ref/habitat_lab_0.3.3_vulcan.patch"
+    "$PROJECT_ROOT/ref/habitat_lab_0.3.3_firenav.patch"
 
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-lab"
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-baselines"
@@ -179,7 +178,7 @@ a6a600277efacf5fd98e293267221185d843eb3012aeff62fabfeee24c2bcdad
 The navigation agent loads both files from the repository root:
 
 ```text
-Co-NavGPT2/
+FireNav/
 ├── mobile_sam.pt
 └── yolov8l-world.pt
 ```
@@ -209,7 +208,7 @@ sha256sum mobile_sam.pt yolov8l-world.pt
 ```
 
 `weights/clip/ViT-B-32.pt` is a historical local artifact and is not read by
-the current VULCAN navigation path.
+the current FireNav navigation path.
 
 ## 5. HM3D scenes and ObjectNav episodes
 
@@ -225,7 +224,7 @@ python -m habitat_sim.utils.datasets_download \
     --data-path data/
 ```
 
-The full VULCAN evaluation requires the HM3D v0.2 scenes used by the selected
+The full FireNav evaluation requires the HM3D v0.2 scenes used by the selected
 ObjectNav split and the ObjectNav HM3D v2 episode files. The expected layout
 is:
 
@@ -251,7 +250,7 @@ data/
             └── content/*.json.gz
 ```
 
-Check the canonical VULCAN scene:
+Check the canonical FireNav scene:
 
 ```bash
 test -f \
@@ -286,11 +285,11 @@ All first-party task configurations under `configs/` are listed below.
 
 | File | Status | Purpose |
 | --- | --- | --- |
-| `configs/multi_objectnav_hm3d.yaml` | Current, required | Habitat 0.3.3 Hydra configuration for multi-agent HM3D ObjectNav. Defines RGB-D sensors, `Sim-v0`, 0.25 m forward steps, 30-degree turns, 0.2 m Success distance, and the `conav` humanoid/robot settings. |
+| `configs/multi_objectnav_hm3d.yaml` | Current, required | Habitat 0.3.3 Hydra configuration for multi-agent HM3D ObjectNav. Defines RGB-D sensors, `Sim-v0`, 0.25 m forward steps, 30-degree turns, 0.2 m Success distance, and the `firenav` humanoid/robot settings. |
 | `configs/person_objectnav_hm3d.yaml` | Current, optional | Extends the multi-agent config with the generated static-person dataset and `static_person_goal=True`. |
 | `configs/rl_local_planner_ppo.yaml` | Current, optional | PPO training defaults for separate risk-blind and risk-aware map-based RL local-planner checkpoints. |
 | `configs/objectnav_hm3d.yaml` | Legacy reference | Habitat 0.2.1 YACS syntax. Do not pass it to the current Hydra `load_config()` path. |
-| `configs/objectnav_gibson.yaml` | Legacy reference | Old Gibson/YACS configuration; not validated with the Habitat 0.3.3 VULCAN runtime. |
+| `configs/objectnav_gibson.yaml` | Legacy reference | Old Gibson/YACS configuration; not validated with the Habitat 0.3.3 FireNav runtime. |
 | `configs/human.yaml` | Legacy reference | Old two-agent YACS configuration; superseded by `multi_objectnav_hm3d.yaml` plus `--num_humans`. |
 
 `arguments.py` applies CLI overrides after Hydra composition. The most
@@ -320,7 +319,7 @@ Run the CPU-capable repository suite before launching Habitat:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 \
-MPLCONFIGDIR=/tmp/conav-matplotlib \
+MPLCONFIGDIR=/tmp/firenav-matplotlib \
 python -m unittest discover -s tests -v
 ```
 
@@ -341,7 +340,7 @@ python main.py \
     --num_agents 1 --num_humans 0 \
     --nav_mode nearest \
     --fire_world 0 \
-    --dump_location /tmp/conav-clean-smoke
+    --dump_location /tmp/firenav-clean-smoke
 ```
 
 ## 8. Reproducing navigation experiments
@@ -736,7 +735,7 @@ display early stop as a redundant aggregate column.
 
 ### `AssertionError: No action 4/5 in action space`
 
-The VULCAN Habitat patch was not applied, or Python imported another Habitat
+The FireNav Habitat patch was not applied, or Python imported another Habitat
 checkout. Repeat Section 3.1 and print `habitat.__file__`.
 
 ### `main.py` returns one observation dict instead of one dict per robot
@@ -792,7 +791,7 @@ Useful capture commands:
 git rev-parse HEAD
 git status --short
 git -C "$HABITAT_LAB_ROOT" rev-parse HEAD
-sha256sum ref/habitat_lab_0.3.3_vulcan.patch
+sha256sum ref/habitat_lab_0.3.3_firenav.patch
 conda env export --no-builds > outputs/conda_environment.yml
 python -m pip freeze > outputs/pip_freeze.txt
 ```

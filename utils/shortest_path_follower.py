@@ -1,4 +1,4 @@
-"""Habitat-3 compatible ShortestPathFollower wrapper for Co-NavGPT2.
+"""Habitat-3 compatible ShortestPathFollower wrapper for FireNav.
 
 Preserves the tiny public surface consumed by :class:`agents.vlm_agents.VLM_Agent`::
 

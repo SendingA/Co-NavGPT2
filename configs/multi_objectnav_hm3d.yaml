@@ -1,6 +1,6 @@
 # @package _global_
 #
-# Multi-agent HM3D ObjectNav config for Co-NavGPT2 on Habitat-Lab 0.3.3.
+# Multi-agent HM3D ObjectNav config for FireNav on Habitat-Lab 0.3.3.
 #
 # The task inherits from Habitat-Lab's stock objectnav_hm3d benchmark,
 # then overrides:
@@ -8,7 +8,7 @@
 #     sensor stacks sitting at 0.88 m for the standard HM3D robot body
 #     (matches the old YACS SIMULATOR.AGENT_0.HEIGHT=0.88 setup)
 #   * the HM3D v2 ObjectNav split shipped with this repo
-#   * a small ``conav`` section that holds the humanoid + robot-model
+#   * a small ``firenav`` section that holds the humanoid + robot-model
 #     knobs consumed by envs/random_humanoid.py and envs/robot_models.py.
 #
 # arguments.py replicates ``main_agent`` into as many agents as
@@ -72,11 +72,11 @@ habitat:
     scenes_dir: data/scene_datasets
 
 # ---------------------------------------------------------------------------
-# Co-NavGPT specific knobs (humanoids + visible robot URDF models). These
+# FireNav specific knobs (humanoids + visible robot URDF models). These
 # live outside the ``habitat`` namespace so they do not collide with the
 # habitat-lab structured config schema.
 # ---------------------------------------------------------------------------
-conav:
+firenav:
   # Filled in by arguments.load_config from --num_agents / --num_humans.
   num_robots: 2
   num_humans: 0

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 scenario="${1:-all}"
-python_bin="${CO_NAV_PYTHON:-/home/liushe10/miniconda3/envs/co-nav3/bin/python}"
+python_bin="${FIRENAV_PYTHON:-python}"
 root="outputs/fire_cost_experiments/fork_detour_nfv"
 dataset="data/processed/fire_route_scenarios/Nfvxx8J5NCo_fork_detour_stable_separated_agents/val.json.gz"
 plan_id="Nfvxx8J5NCo_route_contrast_stable_0ddce73046be"

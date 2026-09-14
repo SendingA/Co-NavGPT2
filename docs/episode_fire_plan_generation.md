@@ -43,7 +43,7 @@ HM3D shard 中的 `episode_id` 经常在不同 category 之间重复，因此建
 `--object-category`：
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+python \
   scripts/generate_episode_fire_plan.py \
   --source-shard data/datasets/objectnav_hm3d_v2/val/content/<SCENE>.json.gz \
   --episode-id <EPISODE_ID> \
@@ -70,7 +70,7 @@ data/processed/fire_route_scenarios/<plan-id>/val.json.gz
 符合预期后再 bake：
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+python \
   scripts/generate_episode_fire_plan.py \
   --source-shard data/datasets/objectnav_hm3d_v2/val/content/<SCENE>.json.gz \
   --episode-id <EPISODE_ID> \
@@ -91,7 +91,7 @@ data/processed/fire_route_scenarios/<plan-id>/val.json.gz
 Person episode 10 使用稍大的实火源半径，以匹配已验证案例：
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+python \
   scripts/generate_episode_fire_plan.py \
   --source-shard data/datasets/objectnav_hm3d_person_v1/val/content/Nfvxx8J5NCo.json.gz \
   --episode-id 10 \
@@ -104,7 +104,7 @@ Person episode 10 使用稍大的实火源半径，以匹配已验证案例：
 Bed episode 5 使用 stable profile 默认半径：
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+python \
   scripts/generate_episode_fire_plan.py \
   --source-shard data/datasets/objectnav_hm3d_v2/val/content/Nfvxx8J5NCo.json.gz \
   --episode-id 5 \

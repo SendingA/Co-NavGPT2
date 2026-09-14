@@ -60,7 +60,7 @@ class DockerPackagingTests(unittest.TestCase):
         payload = yaml.safe_load(
             (ROOT / "compose.yaml").read_text(encoding="utf-8")
         )
-        service = payload["services"]["conav"]
+        service = payload["services"]["firenav"]
         self.assertEqual(service["gpus"], "all")
         self.assertEqual(service["command"][-1], "--strict")
         targets = {
@@ -99,7 +99,7 @@ class DockerPackagingTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertTrue(payload["ok"])
         statuses = {row["name"]: row["status"] for row in payload["checks"]}
-        self.assertEqual(statuses["habitat_vulcan_patch"], "ok")
+        self.assertEqual(statuses["habitat_firenav_patch"], "ok")
         self.assertEqual(statuses["habitat-sim"], "ok")
 
 

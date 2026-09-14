@@ -4,6 +4,15 @@
 .codex
 .history
 .env
+.env.*
+!docker/.env.example
+.ssh
+.vscode
+.idea
+*.key
+*.pem
+id_rsa*
+id_ed25519*
 .venv
 __pycache__
 **/__pycache__

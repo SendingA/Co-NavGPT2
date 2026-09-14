@@ -14,7 +14,7 @@ habitat:
     data_path: data/datasets/objectnav_hm3d_person_v1/{split}/{split}.json.gz
     scenes_dir: data/scene_datasets
 
-conav:
+firenav:
   # Random-walker default; static avatar count comes from episode goals.
   num_humans: 1
   static_person_goal: True

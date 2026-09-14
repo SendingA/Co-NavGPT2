@@ -1,6 +1,6 @@
 """Repeat saved person/bed fork cases with smoky depth or no fire; export MP4s.
 
-Run with the co-nav3 Python environment. Inputs are reused without rebuilding
+Run with the firenav Python environment. Inputs are reused without rebuilding
 datasets or fire timelines. --dry-run validates arguments and records commands.
 --no-fire uses clean normal observations with FireWorld and risk disabled.
 """

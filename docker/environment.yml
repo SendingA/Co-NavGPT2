@@ -1,4 +1,4 @@
-name: conav
+name: firenav
 channels:
   - conda-forge
   - aihabitat

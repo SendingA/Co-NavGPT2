@@ -31,7 +31,7 @@ from utils.global_planners import (
 )
 
 
-def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
+def FireNav_env(args, config, rank, dataset, send_queue, receive_queue):
     if int(getattr(args, "risk_enabled", 0)):
         raise RuntimeError(
             "dynamic risk assessment is wired through main.py only; "
@@ -59,7 +59,7 @@ def CoNav_env(args, config, rank, dataset, send_queue, receive_queue):
     receive_queue.put(num_episodes)
     assert num_episodes > 0, "num_episodes should be greater than 0"
 
-    num_agents = int(config.conav.num_robots)
+    num_agents = int(config.firenav.num_robots)
     agent = []
     for i in range(num_agents):
         follower = ShortestPathFollowerCompat(env.sim, 0.1, False, i)
@@ -495,7 +495,7 @@ def main():
             proc_config.habitat.simulator.scene = proc_dataset.episodes[0].scene_id
 
         proc = mp_ctx.Process(
-            target=CoNav_env,
+            target=FireNav_env,
             args=(args, proc_config, i, proc_dataset, send_queue, receive_queue),
         )
         processes.append(proc)

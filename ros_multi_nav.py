@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 
+import os
 import rclpy
 from rclpy.node import Node
 
@@ -151,10 +152,7 @@ class FspNode(Node):
         for i in range(self.args.num_agents):
             context = zmq.Context()
             socket = context.socket(zmq.PUB)
-            if i == 0:
-                socket.connect("tcp://192.168.100.1:5557")
-            else:
-                socket.connect("tcp://192.168.100.4:5557")
+            socket.connect(os.environ[f"FIRENAV_ROBOT_{i}_ENDPOINT"])
             self.socket_list.append(socket)
             
             print("socket_" + str(i) + " connected(?) to port 5557")

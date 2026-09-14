@@ -1,7 +1,5 @@
 # Fire-World Pipeline — Handoff Notes
 
-> Branch: **`vulcan`** (pushed to `origin`).
-> Remote: https://github.com/SendingA/Co-NavGPT2.git
 > Latest HEAD: `74f7c44 scripts: keyboard teleop with FireWorld overlay`
 
 This doc explains what is in the repo, why each piece exists, and the
@@ -12,7 +10,7 @@ who picks the work up.
 
 ## 1. What problem are we solving?
 
-Co-NavGPT2 navigates HM3D scenes. The original "fire scenario" was a
+FireNav navigates HM3D scenes. The original "fire scenario" was a
 post-processing layer (`SmokeRGBSensor`) that multiplied the agent's
 RGB by a global smoke density. That has two large limitations:
 
@@ -187,7 +185,7 @@ and the dehaze path have been removed.
 
 ## 4. Standard recipes (commands you'll actually run)
 
-All commands below assume the `co-nav` conda env. Replace
+All commands below assume the `firenav` conda env. Replace
 `Nfvxx8J5NCo` with any HM3D scene short id you have on disk.
 
 ### A) Build inventory + plan + propagation + top-down video for a scene

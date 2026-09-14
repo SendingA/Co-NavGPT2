@@ -1570,7 +1570,7 @@ def run(args: argparse.Namespace) -> None:
             encoding="utf-8",
         )
         command_parts = [
-            "/home/liushe10/miniconda3/envs/co-nav3/bin/python",
+            "python",
             "scripts/capture_fire_type_gallery.py",
             "--device",
             str(args.device),

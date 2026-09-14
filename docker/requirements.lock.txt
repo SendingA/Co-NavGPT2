@@ -1,4 +1,4 @@
-# Direct runtime dependencies validated in the co-nav3 environment.
+# Direct runtime dependencies validated in the firenav environment.
 # PyTorch CUDA wheels and Habitat-Sim are installed separately by Dockerfile.
 attrs==25.3.0
 cmake==3.25.0

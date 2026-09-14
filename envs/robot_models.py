@@ -1,6 +1,4 @@
-"""Visible Habitat3 robot models for the classic Co-NavGPT2 ObjectNav agents.
-
-Ported from ``Co-NavGPTv3/envs/robot_models.py`` (reference implementation).
+"""Visible Habitat3 robot models for the classic FireNav ObjectNav agents.
 
 The ObjectNav agents themselves remain plain navigation agents.  This
 helper loads Habitat3 articulated robot URDFs as kinematic visual models
@@ -194,7 +192,7 @@ class RobotModelManager:
         raise FileNotFoundError(
             f"Robot profile '{profile_name}' needs URDF asset: {urdf_path}\n"
             "Place Habitat robot assets under data/robots, or set "
-            "conav.robot_model_urdfs (or --robot_urdfs) to an existing URDF path."
+            "firenav.robot_model_urdfs (or --robot_urdfs) to an existing URDF path."
         )
 
     @staticmethod

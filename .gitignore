@@ -36,3 +36,16 @@ weights/
 # Backup files from text editors.
 *.swp
 *.swo
+
+# Local credentials, editor state and host-specific configuration.
+.env.*
+!.env.example
+.ssh/
+.vscode/
+.idea/
+.agents/
+.codex/
+*.key
+*.pem
+id_rsa*
+id_ed25519*

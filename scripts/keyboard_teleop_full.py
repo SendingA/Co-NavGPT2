@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""All-in-one keyboard teleop for Co-NavGPT2 on Habitat-Lab 0.3.3.
+"""All-in-one keyboard teleop for FireNav on Habitat-Lab 0.3.3.
 
 Combines everything the migrated project ships:
 
@@ -230,7 +230,7 @@ def compose_view(*,
                  status_lines: Optional[List[str]] = None,
                  max_d: float = 5.0,
                  dashboard_size=(2000, 900),
-                 title: str = "Co-NavGPT2 Teleoperation") -> np.ndarray:
+                 title: str = "FireNav Teleoperation") -> np.ndarray:
     """Compose the same multimodal dashboard used by ``main.py``.
 
     The 2x4 grid contains both clean/smoke camera products and the radar
@@ -545,7 +545,7 @@ def main() -> None:
         env.current_episode = matching[0]
         print(f"[teleop] scene={args.scene_id} ep={env.current_episode.episode_id}")
 
-    num_agents = int(config.conav.num_robots)
+    num_agents = int(config.firenav.num_robots)
     active_agent = max(0, min(args.agent_id, num_agents - 1))
 
     # ---------- humanoid walker + visible robot models ----------
@@ -574,7 +574,7 @@ def main() -> None:
     )
 
     # ---------- window setup ----------
-    main_window = "Co-NavGPT2 Teleop - Unified Sensor Dashboard"
+    main_window = "FireNav Teleop - Unified Sensor Dashboard"
     cv2.namedWindow(main_window, cv2.WINDOW_NORMAL)
     ui_state = {
         "snapshot_requested": False,
@@ -762,9 +762,9 @@ def main() -> None:
                     if fire_suites is not None else (2000, 900)
                 ),
                 title=(
-                    "Co-NavGPT2 Teleoperation | Fire-Scene Sensors"
+                    "FireNav Teleoperation | Fire-Scene Sensors"
                     if fire_scene is not None
-                    else "Co-NavGPT2 Teleoperation"
+                    else "FireNav Teleoperation"
                 ),
             )
 

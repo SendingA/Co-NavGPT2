@@ -14,7 +14,7 @@ import numpy as np
 import habitat
 from habitat import Env
 
-# Co-NavGPT2 modules
+# FireNav modules
 from utils.shortest_path_follower import ShortestPathFollowerCompat
 from utils.explored_map_utils import Global_Map_Proc
 from utils.global_planners import (
@@ -328,7 +328,7 @@ def main(args, send_queue, receive_queue):
             f"(precision={metric_precision})"
         )
 
-    num_agents = int(config.conav.num_robots)
+    num_agents = int(config.firenav.num_robots)
     agent = []
     for i in range(num_agents):
         follower = ShortestPathFollowerCompat(env.sim, 0.1, False, i)
@@ -451,7 +451,7 @@ def main(args, send_queue, receive_queue):
     target_edge_map = None
     target_score = None
     log_start = time.time()
-    static_person_goal = bool(config.conav.get("static_person_goal", False))
+    static_person_goal = bool(config.firenav.get("static_person_goal", False))
 
     while count_episodes < num_episodes:
         observations = env.reset()

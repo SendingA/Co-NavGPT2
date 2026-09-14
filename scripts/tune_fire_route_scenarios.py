@@ -194,7 +194,7 @@ def _make_simulator(
         import habitat_sim
     except ImportError as exc:
         raise RuntimeError(
-            "habitat_sim is required; activate the Co-Nav Habitat environment"
+            "habitat_sim is required; activate the FireNav Habitat environment"
         ) from exc
 
     backend = habitat_sim.SimulatorConfiguration()

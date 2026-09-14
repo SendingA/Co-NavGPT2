@@ -48,7 +48,7 @@ Use the project's Habitat environment:
 
 ```bash
 MAGNUM_LOG=quiet HABITAT_SIM_LOG=quiet \
-  /home/liushe10/miniconda3/envs/co-nav3/bin/python \
+  python \
   scripts/tune_fire_route_scenarios.py \
   --scenarios Nfvxx8J5NCo:stable TEEsavR23oF:dynamic \
   --max-episodes 20 --top-k 8 \
@@ -60,7 +60,7 @@ overlays without running the voxel solver:
 
 ```bash
 MAGNUM_LOG=quiet HABITAT_SIM_LOG=quiet \
-  /home/liushe10/miniconda3/envs/co-nav3/bin/python \
+  python \
   scripts/tune_fire_route_scenarios.py \
   --scenarios Nfvxx8J5NCo:stable TEEsavR23oF:dynamic \
   --max-episodes 20 --top-k 8 \

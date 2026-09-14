@@ -33,12 +33,12 @@ EXPECTED_VERSIONS = {
 
 MODEL_HASHES = {
     "mobile_sam": (
-        "CONAV_MOBILE_SAM_PATH",
+        "FIRENAV_MOBILE_SAM_PATH",
         "mobile_sam.pt",
         "6dbb90523a35330fedd7f1d3dfc66f995213d81b29a5ca8108dbcdd4e37d6c2f",
     ),
     "yolo_world": (
-        "CONAV_YOLO_WORLD_PATH",
+        "FIRENAV_YOLO_WORLD_PATH",
         "yolov8l-world.pt",
         "8bdfaef999116760247d6fb0b0f8fca064b43e94598b3d4a807ebae9bcf0cdd5",
     ),
@@ -88,7 +88,7 @@ def _check_versions(checks: Checks) -> None:
             checks.require(package, False, "not installed")
             continue
         checks.require(package, actual == expected, f"{actual}; expected {expected}")
-    if os.environ.get("CONAV_CONTAINER") == "1":
+    if os.environ.get("FIRENAV_CONTAINER") == "1":
         try:
             headless_version = importlib.metadata.version(
                 "opencv-python-headless"
@@ -110,12 +110,12 @@ def _check_habitat_patch(checks: Checks) -> None:
 
         config = SimulatorConfig()
         checks.require(
-            "habitat_vulcan_patch",
+            "habitat_firenav_patch",
             hasattr(config, "tilt_angle"),
             f"habitat={habitat.__file__}; tilt_angle={getattr(config, 'tilt_angle', None)}",
         )
     except Exception as error:  # pragma: no cover - diagnostic boundary
-        checks.require("habitat_vulcan_patch", False, repr(error))
+        checks.require("habitat_firenav_patch", False, repr(error))
 
 
 def _check_gpu(checks: Checks) -> None:
@@ -150,7 +150,7 @@ def _check_models(checks: Checks, workspace: Path) -> None:
 
 def _check_data(checks: Checks, workspace: Path) -> None:
     data_root = Path(
-        os.environ.get("CONAV_DATA_ROOT", str(workspace / "data"))
+        os.environ.get("FIRENAV_DATA_ROOT", str(workspace / "data"))
     )
     required = {
         "hm3d_scene_config": data_root
@@ -176,7 +176,7 @@ def _check_data(checks: Checks, workspace: Path) -> None:
 
 def _check_output(checks: Checks, workspace: Path) -> None:
     output_root = Path(
-        os.environ.get("CONAV_OUTPUT_ROOT", str(workspace / "outputs"))
+        os.environ.get("FIRENAV_OUTPUT_ROOT", str(workspace / "outputs"))
     )
     try:
         output_root.mkdir(parents=True, exist_ok=True)

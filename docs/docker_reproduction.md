@@ -1,6 +1,6 @@
 # Docker reproduction
 
-This workflow packages the complete Co-NavGPT2 software stack while keeping
+This workflow packages the complete FireNav software stack while keeping
 licensed datasets, model weights, credentials and generated artifacts outside
 the image.
 
@@ -11,7 +11,7 @@ The resulting image contains:
 - PyTorch 2.0.1, torchvision 0.15.2 and torchaudio 2.0.2 CUDA 11.8 wheels;
 - Habitat-Sim 0.3.3 with Bullet;
 - Habitat-Lab commit `094d6be2f9d057e4781a68ae792132895fd4d3d0`;
-- the required `ref/habitat_lab_0.3.3_vulcan.patch` applied during build;
+- the required `ref/habitat_lab_0.3.3_firenav.patch` applied during build;
 - the current project source and committed FireWorld plans.
 
 HM3D cannot be redistributed inside the image because it is license-controlled.
@@ -35,7 +35,7 @@ docker run --rm --gpus all \
 ```
 
 The full navigation agent is not CPU-compatible: YOLO-World, MobileSAM and
-Habitat rendering require the GPU/EGL path. The `conav-test` service remains
+Habitat rendering require the GPU/EGL path. The `firenav-test` service remains
 useful on CPU-only hosts.
 
 ## 2. Prepare host assets
@@ -43,7 +43,7 @@ useful on CPU-only hosts.
 From the repository root, the minimum navigation layout is:
 
 ```text
-Co-NavGPT2/
+FireNav/
 ├── data/
 │   ├── datasets/objectnav_hm3d_v2/val/val.json.gz
 │   └── scene_datasets/hm3d_v0.2/
@@ -55,7 +55,7 @@ Co-NavGPT2/
 
 The HM3D scene files and ObjectNav content shards below those roots are also
 required for the episodes being evaluated. Follow the official Habitat/HM3D
-download flow described in [vulcan_reproduction.md](vulcan_reproduction.md).
+download flow described in [firenav_reproduction.md](firenav_reproduction.md).
 
 Validate detector hashes:
 
@@ -82,13 +82,13 @@ or refresh this dataset with a temporary write-enabled mount before running a
 person benchmark:
 
 ```bash
-CONAV_PERSON_DATA_DIR="${CONAV_DATA_DIR:-$PWD/data}"
+FIRENAV_PERSON_DATA_DIR="${FIRENAV_DATA_DIR:-$PWD/data}"
 docker compose run --rm \
-  --volume "$CONAV_PERSON_DATA_DIR:/workspace/data:rw" \
-  conav python scripts/build_person_objectnav_dataset.py --split val
+  --volume "$FIRENAV_PERSON_DATA_DIR:/workspace/data:rw" \
+  firenav python scripts/build_person_objectnav_dataset.py --split val
 docker compose run --rm \
-  --volume "$CONAV_PERSON_DATA_DIR:/workspace/data:rw" \
-  conav python scripts/build_person_objectnav_dataset.py \
+  --volume "$FIRENAV_PERSON_DATA_DIR:/workspace/data:rw" \
+  firenav python scripts/build_person_objectnav_dataset.py \
     --split val --validate-only
 ```
 
@@ -106,12 +106,12 @@ cp docker/.env.example .env
 mkdir -p outputs/docker
 ```
 
-Set `CONAV_HOST_UID` and `CONAV_HOST_GID` to the user that owns the output
+Set `FIRENAV_HOST_UID` and `FIRENAV_HOST_GID` to the user that owns the output
 directory. On a normal Linux host:
 
 ```bash
-sed -i "s/^CONAV_HOST_UID=.*/CONAV_HOST_UID=$(id -u)/" .env
-sed -i "s/^CONAV_HOST_GID=.*/CONAV_HOST_GID=$(id -g)/" .env
+sed -i "s/^FIRENAV_HOST_UID=.*/FIRENAV_HOST_UID=$(id -u)/" .env
+sed -i "s/^FIRENAV_HOST_GID=.*/FIRENAV_HOST_GID=$(id -g)/" .env
 ```
 
 Do not commit `.env`. Prefer exporting `OPENAI_API_KEY` only in the shell that
@@ -120,26 +120,26 @@ runs a GPT experiment instead of saving it in a file.
 If assets live outside the repository, set the corresponding absolute paths:
 
 ```text
-CONAV_DATA_DIR=/datasets/conav/data
-CONAV_OUTPUT_DIR=/experiments/conav
-CONAV_MOBILE_SAM_PATH=/models/mobile_sam.pt
-CONAV_YOLO_WORLD_PATH=/models/yolov8l-world.pt
+FIRENAV_DATA_DIR=/datasets/firenav/data
+FIRENAV_OUTPUT_DIR=/experiments/firenav
+FIRENAV_MOBILE_SAM_PATH=/models/mobile_sam.pt
+FIRENAV_YOLO_WORLD_PATH=/models/yolov8l-world.pt
 ```
 
-The data and model mounts are read-only. Only `CONAV_OUTPUT_DIR` is writable.
+The data and model mounts are read-only. Only `FIRENAV_OUTPUT_DIR` is writable.
 
 ## 4. Build and verify
 
 Build the pinned image and record the project revision in its OCI metadata:
 
 ```bash
-CONAV_VCS_REF="$(git rev-parse HEAD)" docker compose build conav
+FIRENAV_VCS_REF="$(git rev-parse HEAD)" docker compose build firenav
 ```
 
 Run the CPU-capable software-stack tests without datasets, weights or a GPU:
 
 ```bash
-docker compose --profile test run --rm conav-test
+docker compose --profile test run --rm firenav-test
 ```
 
 This runs the Docker contract, global/risk planner, local-planner and benchmark
@@ -149,10 +149,10 @@ test-specific assets, override the command with `python -m unittest discover`.
 Run the strict navigation preflight with all runtime mounts and GPU forwarding:
 
 ```bash
-docker compose run --rm conav
+docker compose run --rm firenav
 ```
 
-The preflight checks exact core versions, the Habitat VULCAN patch, CUDA,
+The preflight checks exact core versions, the Habitat FireNav patch, CUDA,
 checkpoint hashes, required dataset roots and output writability. It exits
 nonzero on a missing required component. Optional humanoid and PointNav assets
 are warnings.
@@ -160,7 +160,7 @@ are warnings.
 To inspect the software layer only:
 
 ```bash
-docker compose --profile test run --rm conav-test \
+docker compose --profile test run --rm firenav-test \
   preflight --mode base --strict
 ```
 
@@ -169,7 +169,7 @@ docker compose --profile test run --rm conav-test \
 Clean two-robot `co_ut` baseline:
 
 ```bash
-docker compose run --rm conav python main.py \
+docker compose run --rm firenav python main.py \
   --task_config multi_objectnav_hm3d.yaml \
   --num_agents 2 --num_humans 0 \
   --nav_mode co_ut --cost_utility_lambda 0.5 \
@@ -182,14 +182,14 @@ Risk-aware FireWorld run:
 ```bash
 # First bake the generated timeline into the mounted output directory. This is
 # required once per plan/solver configuration and can produce a large file.
-docker compose run --rm conav python -m utils.fire_world.propagation \
+docker compose run --rm firenav python -m utils.fire_world.propagation \
   --scene Nfvxx8J5NCo \
   --plan_id Nfvxx8J5NCo_bedroom_textile_severe_83679a07b632 \
   --scenes_root /workspace/scenes \
   --out_root /workspace/outputs/fire_world \
   --voxel_m 0.15 --dt 0.5 --save_dt 1.0
 
-docker compose run --rm conav python main.py \
+docker compose run --rm firenav python main.py \
   --task_config multi_objectnav_hm3d.yaml \
   --num_agents 2 --nav_mode co_ut --seed 1 \
   --fire_world 1 \
@@ -205,10 +205,10 @@ GPT run:
 
 ```bash
 export OPENAI_API_KEY="<YOUR_KEY>"
-docker compose run --rm conav \
+docker compose run --rm firenav \
   preflight --mode gpt --strict
 
-docker compose run --rm conav python main.py \
+docker compose run --rm firenav python main.py \
   --task_config multi_objectnav_hm3d.yaml \
   --num_agents 2 --nav_mode gpt --seed 1 \
   --fire_world 0 \
@@ -216,7 +216,7 @@ docker compose run --rm conav python main.py \
 ```
 
 All relative configuration paths resolve under `/workspace`. Results appear in
-the host directory configured by `CONAV_OUTPUT_DIR`.
+the host directory configured by `FIRENAV_OUTPUT_DIR`.
 
 ## 6. Interactive windows
 
@@ -228,7 +228,7 @@ xhost +si:localuser:$(id -un)
 docker compose run --rm \
   -e DISPLAY="$DISPLAY" \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-  conav python scripts/keyboard_teleop_full.py --help
+  firenav python scripts/keyboard_teleop_full.py --help
 ```
 
 Revoke the temporary X11 permission afterwards. Remote servers should use EGL,
@@ -239,8 +239,8 @@ VirtualGL or an explicitly configured virtual display instead.
 The software image can be transferred independently of licensed assets:
 
 ```bash
-docker save "${CONAV_IMAGE:-conavgpt2:vulcan}" | gzip \
-  > conavgpt2-vulcan-image.tar.gz
+docker save "${FIRENAV_IMAGE:-firenav:latest}" | gzip \
+  > firenav-image.tar.gz
 ```
 
 Recipients load it with `docker load`, obtain HM3D through their own license,

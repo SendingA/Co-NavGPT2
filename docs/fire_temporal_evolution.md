@@ -39,11 +39,11 @@ not invent an extinction stage or adjust times to manufacture extra spread.
 
 ## Reproduce
 
-Run from the project root with the co-nav3 environment and GPU access:
+Run from the project root with the firenav environment and GPU access:
 
 ```bash
 HABITAT_SIM_LOG=error MAGNUM_LOG=quiet OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1 \
-  /home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/capture_fire_temporal_evolution.py \
+  python scripts/capture_fire_temporal_evolution.py \
   --stage all
 ```
 
@@ -66,10 +66,10 @@ Each hold lasts 1.48 s. Labels and per-video metadata use the revised speed.
 With `inputs.json` and the `scenes` / `timelines` links prepared in that folder:
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/capture_fire_temporal_evolution.py \
+python scripts/capture_fire_temporal_evolution.py \
   --stage encode --output-dir outputs/fire_temporal_evolution_medium_15s_20260912 \
   --fps 25 --hold-frames 37
-/home/liushe10/miniconda3/envs/co-nav3/bin/python scripts/capture_fire_temporal_evolution.py \
+python scripts/capture_fire_temporal_evolution.py \
   --stage validate --output-dir outputs/fire_temporal_evolution_medium_15s_20260912
 ```
 

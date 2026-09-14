@@ -1,4 +1,4 @@
-"""Environment-side helpers for Co-NavGPT2 on Habitat-Lab 0.3.3.
+"""Environment-side helpers for FireNav on Habitat-Lab 0.3.3.
 
 * :class:`RandomHumanoidWalker` spawns kinematic humanoids as random
   pedestrians alongside the classic ObjectNav navigation agents.

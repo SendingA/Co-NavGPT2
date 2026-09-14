@@ -1,15 +1,14 @@
 # Habitat 0.2.1 → 0.3.3 Migration
 
 > Historical migration note. For a clean installation, use
-> [`vulcan_reproduction.md`](vulcan_reproduction.md). The final VULCAN runtime
-> requires `ref/habitat_lab_0.3.3_vulcan.patch`; stock Habitat-Lab 0.3.3 does
+> [`firenav_reproduction.md`](firenav_reproduction.md). The final FireNav runtime
+> requires `ref/habitat_lab_0.3.3_firenav.patch`; stock Habitat-Lab 0.3.3 does
 > not provide the exact classic `Sim-v0` multi-agent and LOOK action contract
 > used by this repository.
 
 > Date: 2026-07-04
 > Scope: whole repository
 > Target: **habitat-sim 0.3.3 + habitat-lab 0.3.3**, Python 3.9
-> Reference: `Co-NavGPTv3/` (self-contained demo of a Habitat 3 multi-robot + humanoid ObjectNav rollout)
 
 The main project used to depend on a monkey-patched fork of habitat-lab
 0.2.1 shipped under `multi-robot-setting/habitat/` — that fork bolted
@@ -32,15 +31,14 @@ changed.
 | --- | --- |
 | `multi-robot-setting/` (whole tree) | H2-patched habitat-lab package superseded by upstream 0.3.3 multi-agent support. |
 | `utils/shortest_path_follower.py` (H2 version) | Rewritten below. |
-| `=0.29.1`, `Co-NavGPTv3(1).zip`, `data.zip` | Stray build artefacts at the repo root. |
 
 ## 2. Files added
 
 | Path | Purpose |
 | --- | --- |
 | `envs/__init__.py` | Re-exports `RandomHumanoidWalker` + `RobotModelManager`. |
-| `envs/random_humanoid.py` | Habitat 3 humanoid pedestrians (KinematicHumanoid + HumanoidRearrangeController) spawned as random walkers. Ported from `Co-NavGPTv3/envs/random_humanoid.py`. |
-| `envs/robot_models.py` | Loads visible Habitat 3 robot URDFs (Fetch / Spot / Stretch) as kinematic models synced to each nav agent. Ported from `Co-NavGPTv3/envs/robot_models.py`. |
+| `envs/random_humanoid.py` | Habitat 3 humanoid pedestrians (KinematicHumanoid + HumanoidRearrangeController) spawned as random walkers. |
+| `envs/robot_models.py` | Loads visible Habitat 3 robot URDFs (Fetch / Spot / Stretch) as kinematic models synced to each nav agent. |
 | `docs/habitat3_migration.md` | This document. |
 
 ## 3. Files rewritten
@@ -48,8 +46,8 @@ changed.
 | Path | What changed |
 | --- | --- |
 | `arguments.py` | New `load_config(args)` composes a Hydra `DictConfig` via `habitat.config.default.get_config`, replicates the template agent into `--num_agents` entries, applies CLI overrides on top. Adds humanoid + robot-model + dataset-path flags. All existing flags kept for backwards compatibility. |
-| `configs/multi_objectnav_hm3d.yaml` | YACS → Hydra `@package _global_` config that inherits `/benchmark/nav/objectnav/objectnav_hm3d` and overrides two agents at 0.88 m with the RGB + Depth stack we've been using. Adds a `conav` group with humanoid and robot-model knobs. |
-| `main.py` | Config load through `arguments.load_config`; sim-agents count read from `config.conav.num_robots`; humanoid + robot-model managers wired in; per-frame flow tolerates the H3 sim returning a single dict for single-agent runs and a list for multi-agent runs. |
+| `configs/multi_objectnav_hm3d.yaml` | YACS → Hydra `@package _global_` config that inherits `/benchmark/nav/objectnav/objectnav_hm3d` and overrides two agents at 0.88 m with the RGB + Depth stack we've been using. Adds a `firenav` group with humanoid and robot-model knobs. |
+| `main.py` | Config load through `arguments.load_config`; sim-agents count read from `config.firenav.num_robots`; humanoid + robot-model managers wired in; per-frame flow tolerates the H3 sim returning a single dict for single-agent runs and a list for multi-agent runs. |
 | `main_vec.py` | Same edits as `main.py`, plus per-worker `content_scenes` + `scene` overrides via `habitat.config.read_write`. Uses `make_dataset` on the DictConfig-native dataset spec. |
 | `utils/shortest_path_follower.py` | Rewritten as an H3.3 compat wrapper: same public API (`get_next_action(goal_pos, current_grid_pose, angle, stg_x, stg_y)` + `get_path_points`) but talks to `sim.habitat_config.forward_step_size`, `sim.habitat_config.turn_angle`, and `HabitatSimActions.{stop,move_forward,turn_left,turn_right}` singletons. |
 | `utils/fire_pipeline.py` | `step_fire_observation` now resolves the depth-sensor max_depth / normalize_depth from either the H3 DictConfig or the legacy YACS config so unit tests keep passing. |
@@ -102,7 +100,7 @@ exactly like the H2 version once the environment is upgraded.
   when the current one is reached, (b) asks the pathfinder for a
   waypoint, (c) drives the controller one motion frame, (d) applies
   the resulting joint pose + root transform back onto the humanoid.
-  Cycles through `conav.human_urdfs` if `N > len(list)`.
+  Cycles through `firenav.human_urdfs` if `N > len(list)`.
 
 * **Visible robot URDF models** (`--robot_models_enabled 1
   --robot_profiles spot,fetch`) via `envs.robot_models.RobotModelManager`.
@@ -142,13 +140,12 @@ python scripts/keyboard_teleop.py --task-config configs/multi_objectnav_hm3d.yam
 
 ## 8. Verification
 
-The workstation used to draft this migration has habitat-lab 0.2.1
-installed under `/home/liushe10/miniconda3/envs/co-nav/` and no
-habitat-sim/lab 0.3.3, so I could not launch `main.py` end-to-end
-before shipping the change. The following static checks passed:
+The original migration was checked statically in a Habitat-Lab 0.2.1
+environment; an end-to-end Habitat 0.3.3 run was not performed at that stage.
+The following static checks passed:
 
 * `python -m py_compile arguments.py main.py main_vec.py envs/*.py utils/shortest_path_follower.py utils/fire_pipeline.py utils/fire_world/scene.py utils/fire_world/controller.py utils/fire_sensors/lidar_360.py scripts/keyboard_teleop.py scripts/keyboard_teleop_fire.py`
-  (see `todo/todo.json::T034` for details).
+
 * `grep` sweep confirms no remaining `config.SIMULATOR.*` / `config.TASK.*`
   / `config.DATASET.*` / `config.ENVIRONMENT.*` reads outside of the
   legacy-YACS fallback branches in `utils/fire_*/*.py`.
@@ -161,7 +158,7 @@ recommended smoke test is:
 
 ```bash
 python main.py --num_agents 1 --num_humans 0 --nav_mode nearest \
-    --fire_world 0 --dump_location /tmp/conav_smoke
+    --fire_world 0 --dump_location /tmp/firenav_smoke
 ```
 
 which should reset an episode, take a few `env.step()` calls, and

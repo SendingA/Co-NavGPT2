@@ -84,7 +84,7 @@ git rev-parse HEAD
 For a paper artifact, replace the moving branch with the published commit:
 
 ```bash
-git checkout <FIRENAV_COMMIT>
+git checkout "${FIRENAV_COMMIT:?Set FIRENAV_COMMIT to the published revision}"
 ```
 
 ## 3. System and Conda environment
@@ -150,7 +150,7 @@ git clone https://github.com/facebookresearch/habitat-lab.git \
 git -C "$HABITAT_LAB_ROOT" checkout \
     094d6be2f9d057e4781a68ae792132895fd4d3d0
 git -C "$HABITAT_LAB_ROOT" apply \
-    "$PROJECT_ROOT"/ref/habitat_lab_0.3.3_*.patch
+    "$PROJECT_ROOT"/ref/habitat_lab_0.3.3_firenav.patch
 
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-lab"
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-baselines"
@@ -879,7 +879,7 @@ Useful capture commands:
 git rev-parse HEAD
 git status --short
 git -C "$HABITAT_LAB_ROOT" rev-parse HEAD
-sha256sum ref/habitat_lab_0.3.3_*.patch
+sha256sum ref/habitat_lab_0.3.3_firenav.patch
 conda env export --no-builds > outputs/conda_environment.yml
 python -m pip freeze > outputs/pip_freeze.txt
 ```

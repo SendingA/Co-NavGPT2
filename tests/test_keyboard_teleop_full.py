@@ -314,8 +314,9 @@ class FirePipelineCleanRgbTests(unittest.TestCase):
                 *,
                 agent_state=None,
                 robot_step=0,
+                diagnostics=False,
             ):
-                del obs, agent_state, robot_step
+                del obs, agent_state, robot_step, diagnostics
                 self.rgb_inputs.append(np.asarray(rgb).copy())
                 smoke_value = 80 + 40 * len(self.rgb_inputs)
                 smoke = np.full_like(rgb, smoke_value)

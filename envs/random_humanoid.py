@@ -1,11 +1,11 @@
-"""Random walking humanoids for the Co-NavGPT2 ObjectNav task.
+"""Random walking humanoids for the FireNav ObjectNav task.
 
 The humanoids run as plain kinematic articulated objects inserted into
 the active Habitat-Sim scene and advanced once per env.step().  They do
 not participate in the ObjectNav task at all — they simply occupy the
 navmesh as pedestrians.
 
-Ported from ``Co-NavGPTv3/envs/random_humanoid.py`` and extended so an
+Integrated with the environment lifecycle so an
 episode can place a static humanoid at an explicit ObjectNav goal position.
 """
 

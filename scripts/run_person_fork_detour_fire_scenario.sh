@@ -2,7 +2,7 @@
 set -euo pipefail
 
 scenario="${1:-all}"
-python_bin="${CO_NAV_PYTHON:-/home/liushe10/miniconda3/envs/co-nav3/bin/python}"
+python_bin="${FIRENAV_PYTHON:-python}"
 root="outputs/fire_cost_experiments/person_fork_detour_nfv_three_source"
 candidate="outputs/fire_person_route_tuning/Nfvxx8J5NCo_stable/rank_03_ep_10_obj_47.json"
 person_shard="data/datasets/objectnav_hm3d_person_v1/val/content/Nfvxx8J5NCo.json.gz"

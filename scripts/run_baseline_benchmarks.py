@@ -917,7 +917,7 @@ def execute_run(
         shutil.copy2(log_path, archive_path)
     environment = os.environ.copy()
     environment["PYTHONUNBUFFERED"] = "1"
-    environment.setdefault("MPLCONFIGDIR", "/tmp/conav-matplotlib")
+    environment.setdefault("MPLCONFIGDIR", "/tmp/firenav-matplotlib")
     start_time = time.monotonic()
     return_code = None
     interrupted = False

@@ -18,6 +18,7 @@ Controls:
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 import sys
 import traceback
 
@@ -29,7 +30,7 @@ from habitat import Env
 
 # Reuse the main project's Hydra config loader so all flags stay
 # consistent with main.py.
-sys.path.insert(0, "/home/liushe10/Co-NavGPT2")
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from arguments import get_args, load_config  # noqa: E402  after sys.path fix
 
 
@@ -55,7 +56,7 @@ def _override_num_agents(config, num_agents: int) -> None:
             sim_cfg.agents[name] = OmegaConf.create(template)
             sim_cfg.agents_order.append(name)
         sim_cfg.default_agent_id = 0
-        config.conav.num_robots = int(num_agents)
+        config.firenav.num_robots = int(num_agents)
 
 
 def main() -> None:
@@ -88,7 +89,7 @@ def main() -> None:
     fake.scene_dataset = None
     config = load_config(fake)
 
-    if args.num_agents != int(config.conav.num_robots):
+    if args.num_agents != int(config.firenav.num_robots):
         _override_num_agents(config, args.num_agents)
 
     # Discrete action map — H3.3 uses lowercase singleton names.

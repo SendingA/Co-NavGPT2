@@ -2,7 +2,7 @@
 set -euo pipefail
 
 scenario="${1:-all}"
-python_bin="${CO_NAV_PYTHON:-/home/liushe10/miniconda3/envs/co-nav3/bin/python}"
+python_bin="${FIRENAV_PYTHON:-python}"
 
 common=(
   --max_episodes 1
