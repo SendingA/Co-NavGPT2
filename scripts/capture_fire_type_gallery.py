@@ -93,6 +93,69 @@ def parse_scenario(value: str) -> Scenario:
     return scenario
 
 
+def parse_preferred_source(value: str) -> Tuple[str, str]:
+    """Parse ``FIRE_TYPE:CATEGORY`` for room-aware camera selection."""
+
+    parts = value.split(":", 1)
+    if len(parts) != 2 or any(not item.strip() for item in parts):
+        raise argparse.ArgumentTypeError(
+            "preferred source must be FIRE_TYPE:CATEGORY"
+        )
+    fire_type, category = (item.strip() for item in parts)
+    if fire_type not in FIRE_TYPE_LABELS:
+        raise argparse.ArgumentTypeError(
+            f"unknown fire type {fire_type!r}; expected one of "
+            f"{', '.join(FIRE_TYPE_LABELS)}"
+        )
+    return fire_type, category
+
+
+def parse_preferred_object(value: str) -> Tuple[str, int]:
+    """Parse ``FIRE_TYPE:OBJECT_ID`` for an exact semantic target."""
+
+    parts = value.split(":", 1)
+    if len(parts) != 2 or any(not item.strip() for item in parts):
+        raise argparse.ArgumentTypeError(
+            "preferred object must be FIRE_TYPE:OBJECT_ID"
+        )
+    fire_type, raw_object_id = (item.strip() for item in parts)
+    if fire_type not in FIRE_TYPE_LABELS:
+        raise argparse.ArgumentTypeError(
+            f"unknown fire type {fire_type!r}; expected one of "
+            f"{', '.join(FIRE_TYPE_LABELS)}"
+        )
+    try:
+        object_id = int(raw_object_id)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("OBJECT_ID must be an integer") from exc
+    if object_id < 0:
+        raise argparse.ArgumentTypeError("OBJECT_ID must be non-negative")
+    return fire_type, object_id
+
+
+def parse_preferred_camera(value: str) -> Tuple[str, Tuple[float, float, float]]:
+    """Parse ``FIRE_TYPE:X,Y,Z`` for a reproducible publication view."""
+
+    parts = value.split(":", 1)
+    if len(parts) != 2 or any(not item.strip() for item in parts):
+        raise argparse.ArgumentTypeError(
+            "preferred camera must be FIRE_TYPE:X,Y,Z"
+        )
+    fire_type, raw_position = (item.strip() for item in parts)
+    if fire_type not in FIRE_TYPE_LABELS:
+        raise argparse.ArgumentTypeError(
+            f"unknown fire type {fire_type!r}; expected one of "
+            f"{', '.join(FIRE_TYPE_LABELS)}"
+        )
+    try:
+        position = tuple(float(item.strip()) for item in raw_position.split(","))
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("X,Y,Z must be finite numbers") from exc
+    if len(position) != 3 or not all(math.isfinite(value) for value in position):
+        raise argparse.ArgumentTypeError("X,Y,Z must be three finite numbers")
+    return fire_type, position
+
+
 def balanced_visibility_score(outputs: Mapping[str, np.ndarray]) -> Dict[str, float]:
     """Score a preview that shows flame and smoke without hiding the room."""
 
@@ -117,11 +180,18 @@ def balanced_visibility_score(outputs: Mapping[str, np.ndarray]) -> Dict[str, fl
     # only as a sliver very highly.  Require actual orange/yellow emissive
     # pixels in the RGB observation as the publication view's primary signal.
     red, green, blue = rgb[..., 0], rgb[..., 1], rgb[..., 2]
+    # A thermal flame voxel can sit behind opaque Habitat geometry.  Warm
+    # walls and wood beneath that mask are not evidence that the flame is
+    # actually visible in RGB, so require a saturated emissive orange/yellow
+    # pixel rather than a weak red-channel ordering.
     fire_colored = (
         visible
-        & (red > green + 5.0)
-        & (green > blue + 8.0)
-        & (red > 90.0)
+        & (red > 140.0)
+        & (green > 60.0)
+        & (blue < 140.0)
+        & (red > green + 15.0)
+        & (green > blue + 5.0)
+        & (red > blue + 55.0)
     )
     rgb_fire_fraction = float(np.mean(fire_colored))
     rgb_fire_ratio = float(
@@ -161,12 +231,16 @@ def balanced_visibility_score(outputs: Mapping[str, np.ndarray]) -> Dict[str, fl
         + 1.5 * central_flame_ratio
         - 4.5 * center_distance
         - 3.0 * max(0.0, 0.78 - central_flame_ratio)
-        - 9.0 * near_obstacle_fraction
-        - 25.0 * max(0.0, flame_fraction - 0.16)
+        - 14.0 * near_obstacle_fraction
+        - 60.0 * max(0.0, near_obstacle_fraction - 0.28)
+        - 90.0 * max(0.0, flame_fraction - 0.18)
+        - 50.0 * max(0.0, rgb_fire_fraction - 0.16)
         - 12.0 * max(0.0, attenuation - 0.58)
     )
     if flame_fraction < 0.0002:
         score -= 8.0
+    if rgb_fire_fraction < 0.001:
+        score -= 12.0
     return {
         "score": float(score),
         "flame_fraction": flame_fraction,
@@ -197,7 +271,8 @@ def _save_pose_search_preview(
         tile[42:] = image_bgr
         cv2.putText(
             tile,
-            f"{ignition.get('category')}  score={score:.2f}",
+            f"{ignition.get('category')} #{ignition.get('object_id')} "
+            f"r{ignition.get('region_id')} score={score:.2f}",
             (8, 17),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.42,
@@ -362,7 +437,13 @@ def _candidate_positions(pathfinder, source: Sequence[float]) -> List[np.ndarray
             float(np.linalg.norm(point[[0, 2]] - source[[0, 2]])) - 2.1
         )
     )
-    return candidates[:18]
+    # Publication views benefit from the complete 2.8 m ring when a counter,
+    # bed footboard or sofa blocks the 2.1 m view.  The former 36-pose limit
+    # retained only the nearest rings after sorting and could discard a clear
+    # head-on view (notably the kitchen stove).  Sixty-four poses preserve
+    # angular coverage through the 2.8 m ring while keeping preview cost
+    # bounded for unconstrained source searches.
+    return candidates[:64]
 
 
 def _yaw_quaternion_facing(
@@ -406,6 +487,15 @@ def _make_suite(
     render_scale: float,
     device: str,
     procedural: bool,
+    smoke_density: float,
+    smoke_noise_strength: float,
+    flame_noise_strength: float,
+    flame_edge_break: float,
+    flame_color_jitter: float,
+    flame_glow_ksize: int,
+    flame_glow_gain: float,
+    flame_surface_reveal: float,
+    flame_highlight_compression: float,
 ):
     from utils.fire_sensors import FireSensorConfig, FireSensorSuite
     from utils.fire_sensors.config import VoxelSmokeConfig
@@ -417,16 +507,22 @@ def _make_suite(
         render_device=str(device),
         render_dtype="float16",
         max_sample_points=2_000_000,
-        flame_noise_strength=0.75 if procedural else 0.0,
-        flame_edge_break=1.05 if procedural else 0.0,
-        flame_color_jitter=0.32 if procedural else 0.0,
+        flame_noise_strength=(float(flame_noise_strength) if procedural else 0.0),
+        flame_edge_break=float(flame_edge_break) if procedural else 0.0,
+        flame_color_jitter=(float(flame_color_jitter) if procedural else 0.0),
         flame_time_speed=12.0,
-        smoke_noise_strength=0.24 if procedural else 0.0,
+        flame_glow_ksize=int(flame_glow_ksize),
+        flame_glow_gain=float(flame_glow_gain),
+        flame_surface_reveal=float(flame_surface_reveal),
+        flame_highlight_compression=float(flame_highlight_compression),
+        smoke_noise_strength=(
+            float(smoke_noise_strength) if procedural else 0.0
+        ),
     )
     config = FireSensorConfig(
         max_depth_m=float(max_depth_m),
         hfov_deg=float(hfov_deg),
-        smoke_density=0.6,
+        smoke_density=float(smoke_density),
         save_npz=False,
         save_dashboard=True,
         dashboard_size=(2000, 900),
@@ -484,6 +580,19 @@ def _search_pose_and_time(
     device: str,
     preview_steps: int,
     preview_scale: float,
+    smoke_density: float,
+    smoke_noise_strength: float,
+    flame_noise_strength: float,
+    flame_edge_break: float,
+    flame_color_jitter: float,
+    flame_glow_ksize: int,
+    flame_glow_gain: float,
+    flame_surface_reveal: float,
+    flame_highlight_compression: float,
+    preferred_source_category: str | None,
+    preferred_source_object_id: int | None,
+    preferred_camera_position: Sequence[float] | None,
+    preferred_view_target_position: Sequence[float] | None,
 ) -> Tuple[np.ndarray, Mapping[str, Any], float, Dict[str, float]]:
     preview = _make_suite(
         scene=scene,
@@ -496,11 +605,44 @@ def _search_pose_and_time(
         render_scale=preview_scale,
         device=device,
         procedural=False,
+        smoke_density=smoke_density,
+        smoke_noise_strength=smoke_noise_strength,
+        flame_noise_strength=flame_noise_strength,
+        flame_edge_break=flame_edge_break,
+        flame_color_jitter=flame_color_jitter,
+        flame_glow_ksize=flame_glow_ksize,
+        flame_glow_gain=flame_glow_gain,
+        flame_surface_reveal=flame_surface_reveal,
+        flame_highlight_compression=flame_highlight_compression,
     )
     timeline_end = float(scene.fw.times[-1])
     preview_time = min(90.0, timeline_end * 0.4)
     best: Tuple[float, np.ndarray, Mapping[str, Any], Dict[str, float]] | None = None
-    representatives = _cluster_ignitions(plan["ignitions"])
+    source_pool = list(plan["ignitions"])
+    if preferred_source_object_id is not None:
+        source_pool = [
+            item
+            for item in source_pool
+            if int(item.get("object_id", -1)) == preferred_source_object_id
+        ]
+        if not source_pool:
+            raise ValueError(
+                f"plan has no preferred source object "
+                f"{preferred_source_object_id}"
+            )
+    elif preferred_source_category is not None:
+        wanted = preferred_source_category.casefold()
+        source_pool = [
+            item
+            for item in source_pool
+            if str(item.get("category", "")).casefold() == wanted
+        ]
+        if not source_pool:
+            raise ValueError(
+                f"plan has no preferred source category "
+                f"{preferred_source_category!r}"
+            )
+    representatives = _cluster_ignitions(source_pool)
     print(
         f"[gallery] previewing {len(representatives)} ignition cluster(s) "
         f"at t={preview_time:.1f}s"
@@ -509,13 +651,25 @@ def _search_pose_and_time(
         Tuple[float, np.ndarray, Mapping[str, Any], float, Mapping[str, float]]
     ] = []
     for source_index, ignition in enumerate(representatives):
-        candidates = _candidate_positions(sim.pathfinder, ignition["position"])
+        if preferred_camera_position is None:
+            candidates = _candidate_positions(
+                sim.pathfinder, ignition["position"]
+            )
+        else:
+            candidates = [
+                np.asarray(preferred_camera_position, dtype=np.float64)
+            ]
+        view_target = (
+            ignition["position"]
+            if preferred_view_target_position is None
+            else preferred_view_target_position
+        )
         for candidate in candidates:
             outputs, _ = _process_pose(
                 sim=sim,
                 suite=preview,
                 position=candidate,
-                source=ignition["position"],
+                source=view_target,
                 time_s=preview_time,
                 max_depth_m=max_depth_m,
             )
@@ -541,10 +695,15 @@ def _search_pose_and_time(
         raise RuntimeError("no navigable camera pose found near any ignition")
 
     _, best_position, best_ignition, _ = best
+    best_view_target = (
+        best_ignition["position"]
+        if preferred_view_target_position is None
+        else preferred_view_target_position
+    )
     time_candidates = sorted(
         {
             min(timeline_end, max(0.0, value))
-            for value in (30.0, 60.0, 90.0, 150.0, 240.0)
+            for value in (10.0, 20.0, 30.0, 60.0, 90.0, 150.0, 240.0)
         }
     )
     best_time = preview_time
@@ -554,7 +713,7 @@ def _search_pose_and_time(
             sim=sim,
             suite=preview,
             position=best_position,
-            source=best_ignition["position"],
+            source=best_view_target,
             time_s=time_s,
             max_depth_m=max_depth_m,
         )
@@ -593,6 +752,15 @@ def _search_sequence_pose(
     device: str,
     preview_steps: int,
     preview_scale: float,
+    smoke_density: float,
+    smoke_noise_strength: float,
+    flame_noise_strength: float,
+    flame_edge_break: float,
+    flame_color_jitter: float,
+    flame_glow_ksize: int,
+    flame_glow_gain: float,
+    flame_surface_reveal: float,
+    flame_highlight_compression: float,
 ) -> Tuple[
     np.ndarray,
     np.ndarray,
@@ -620,6 +788,15 @@ def _search_sequence_pose(
         render_scale=preview_scale,
         device=device,
         procedural=False,
+        smoke_density=smoke_density,
+        smoke_noise_strength=smoke_noise_strength,
+        flame_noise_strength=flame_noise_strength,
+        flame_edge_break=flame_edge_break,
+        flame_color_jitter=flame_color_jitter,
+        flame_glow_ksize=flame_glow_ksize,
+        flame_glow_gain=flame_glow_gain,
+        flame_surface_reveal=flame_surface_reveal,
+        flame_highlight_compression=flame_highlight_compression,
     )
     candidates = _candidate_positions(sim.pathfinder, target)
     if not candidates:
@@ -936,6 +1113,28 @@ def run(args: argparse.Namespace) -> None:
         FIRE_TYPE_LABELS
     ):
         raise ValueError("select exactly one scenario for each of the four fire types")
+    preferred_sources: Dict[str, str] = {}
+    for fire_type, category in args.preferred_source or ():
+        if fire_type in preferred_sources:
+            raise ValueError(f"duplicate preferred source for {fire_type}")
+        preferred_sources[fire_type] = category
+    preferred_objects: Dict[str, int] = {}
+    for fire_type, object_id in args.preferred_object or ():
+        if fire_type in preferred_objects:
+            raise ValueError(f"duplicate preferred object for {fire_type}")
+        preferred_objects[fire_type] = int(object_id)
+    preferred_cameras: Dict[str, Tuple[float, float, float]] = {}
+    for fire_type, position in args.preferred_camera or ():
+        if fire_type in preferred_cameras:
+            raise ValueError(f"duplicate preferred camera for {fire_type}")
+        preferred_cameras[fire_type] = tuple(float(value) for value in position)
+    preferred_view_targets: Dict[str, Tuple[float, float, float]] = {}
+    for fire_type, position in args.preferred_view_target or ():
+        if fire_type in preferred_view_targets:
+            raise ValueError(f"duplicate preferred view target for {fire_type}")
+        preferred_view_targets[fire_type] = tuple(
+            float(value) for value in position
+        )
 
     scenes_root = Path(args.scenes_root).resolve()
     fire_root = Path(args.fire_world_root).resolve()
@@ -977,11 +1176,22 @@ def run(args: argparse.Namespace) -> None:
             "ray_march_samples": int(args.n_steps),
             "render_dtype": "float16",
             "procedural_flame_texture": True,
-            "flame_noise_strength": 0.75,
-            "flame_edge_break": 1.05,
-            "flame_color_jitter": 0.32,
-            "smoke_noise_strength": 0.24,
+            "flame_noise_strength": float(args.flame_noise_strength),
+            "flame_edge_break": float(args.flame_edge_break),
+            "flame_color_jitter": float(args.flame_color_jitter),
+            "flame_glow_ksize": int(args.flame_glow_ksize),
+            "flame_glow_gain": float(args.flame_glow_gain),
+            "flame_surface_reveal": float(args.flame_surface_reveal),
+            "flame_highlight_compression": float(
+                args.flame_highlight_compression
+            ),
+            "smoke_density": float(args.smoke_density),
+            "smoke_noise_strength": float(args.smoke_noise_strength),
         },
+        "preferred_sources": preferred_sources,
+        "preferred_objects": preferred_objects,
+        "preferred_cameras": preferred_cameras,
+        "preferred_view_targets": preferred_view_targets,
         "scenarios": [],
     }
     rgb_tiles = []
@@ -995,6 +1205,19 @@ def run(args: argparse.Namespace) -> None:
                 f"scene={scenario.scene_id} plan={scenario.plan_id}"
             )
             plan = _load_plan(scenario, scenes_root)
+            preferred_source_category = preferred_sources.get(
+                scenario.fire_type,
+                plan.get("gallery_preferred_source_category"),
+            )
+            preferred_source_object_id = preferred_objects.get(
+                scenario.fire_type
+            )
+            preferred_camera_position = preferred_cameras.get(
+                scenario.fire_type
+            )
+            preferred_view_target_position = preferred_view_targets.get(
+                scenario.fire_type
+            )
             timeline = fire_root / scenario.scene_id / scenario.plan_id / "timeline.npz"
             if not timeline.exists():
                 raise FileNotFoundError(
@@ -1044,6 +1267,17 @@ def run(args: argparse.Namespace) -> None:
                     device=args.device,
                     preview_steps=args.preview_steps,
                     preview_scale=args.preview_scale,
+                    smoke_density=args.smoke_density,
+                    smoke_noise_strength=args.smoke_noise_strength,
+                    flame_noise_strength=args.flame_noise_strength,
+                    flame_edge_break=args.flame_edge_break,
+                    flame_color_jitter=args.flame_color_jitter,
+                    flame_glow_ksize=args.flame_glow_ksize,
+                    flame_glow_gain=args.flame_glow_gain,
+                    flame_surface_reveal=args.flame_surface_reveal,
+                    flame_highlight_compression=(
+                        args.flame_highlight_compression
+                    ),
                 )
                 time_s = float(sequence_times[-1])
             else:
@@ -1059,8 +1293,30 @@ def run(args: argparse.Namespace) -> None:
                     device=args.device,
                     preview_steps=args.preview_steps,
                     preview_scale=args.preview_scale,
+                    smoke_density=args.smoke_density,
+                    smoke_noise_strength=args.smoke_noise_strength,
+                    flame_noise_strength=args.flame_noise_strength,
+                    flame_edge_break=args.flame_edge_break,
+                    flame_color_jitter=args.flame_color_jitter,
+                    flame_glow_ksize=args.flame_glow_ksize,
+                    flame_glow_gain=args.flame_glow_gain,
+                    flame_surface_reveal=args.flame_surface_reveal,
+                    flame_highlight_compression=(
+                        args.flame_highlight_compression
+                    ),
+                    preferred_source_category=preferred_source_category,
+                    preferred_source_object_id=preferred_source_object_id,
+                    preferred_camera_position=preferred_camera_position,
+                    preferred_view_target_position=(
+                        preferred_view_target_position
+                    ),
                 )
-                view_target = np.asarray(source["position"], dtype=np.float64)
+                view_target = np.asarray(
+                    source["position"]
+                    if preferred_view_target_position is None
+                    else preferred_view_target_position,
+                    dtype=np.float64,
+                )
                 sequence_times = [float(time_s)]
             print(
                 f"[gallery] selected category={source.get('category')} "
@@ -1080,6 +1336,15 @@ def run(args: argparse.Namespace) -> None:
                 render_scale=args.render_scale,
                 device=args.device,
                 procedural=True,
+                smoke_density=args.smoke_density,
+                smoke_noise_strength=args.smoke_noise_strength,
+                flame_noise_strength=args.flame_noise_strength,
+                flame_edge_break=args.flame_edge_break,
+                flame_color_jitter=args.flame_color_jitter,
+                flame_glow_ksize=args.flame_glow_ksize,
+                flame_glow_gain=args.flame_glow_gain,
+                flame_surface_reveal=args.flame_surface_reveal,
+                flame_highlight_compression=args.flame_highlight_compression,
             )
             stage_names = (
                 ["early", "middle", "late"]
@@ -1223,6 +1488,12 @@ def run(args: argparse.Namespace) -> None:
                 ),
                 "ignitions": plan["ignitions"],
                 "selected_visible_source": source,
+                "preferred_source_category": preferred_source_category,
+                "preferred_source_object_id": preferred_source_object_id,
+                "preferred_camera_position": preferred_camera_position,
+                "preferred_view_target_position": (
+                    preferred_view_target_position
+                ),
                 "view_target_position": [
                     float(value) for value in view_target
                 ],
@@ -1298,11 +1569,64 @@ def run(args: argparse.Namespace) -> None:
             json.dumps(gallery_manifest, indent=2) + "\n",
             encoding="utf-8",
         )
-        command = (
-            "/home/liushe10/miniconda3/envs/co-nav3/bin/python "
-            "scripts/capture_fire_type_gallery.py --device cuda:0 "
-            f"--n-steps {args.n_steps} --render-scale {args.render_scale}"
-        )
+        command_parts = [
+            "/home/liushe10/miniconda3/envs/co-nav3/bin/python",
+            "scripts/capture_fire_type_gallery.py",
+            "--device",
+            str(args.device),
+            "--n-steps",
+            str(args.n_steps),
+            "--render-scale",
+            str(args.render_scale),
+            "--smoke-density",
+            str(args.smoke_density),
+            "--smoke-noise-strength",
+            str(args.smoke_noise_strength),
+            "--flame-noise-strength",
+            str(args.flame_noise_strength),
+            "--flame-edge-break",
+            str(args.flame_edge_break),
+            "--flame-color-jitter",
+            str(args.flame_color_jitter),
+            "--flame-glow-ksize",
+            str(args.flame_glow_ksize),
+            "--flame-glow-gain",
+            str(args.flame_glow_gain),
+            "--flame-surface-reveal",
+            str(args.flame_surface_reveal),
+            "--flame-highlight-compression",
+            str(args.flame_highlight_compression),
+        ]
+        for scenario in scenarios:
+            command_parts.extend(
+                [
+                    "--scenario",
+                    f"{scenario.fire_type}:{scenario.scene_id}:{scenario.plan_id}",
+                ]
+            )
+        for fire_type, category in sorted(preferred_sources.items()):
+            command_parts.extend(
+                ["--preferred-source", f"{fire_type}:{category}"]
+            )
+        for fire_type, object_id in sorted(preferred_objects.items()):
+            command_parts.extend(
+                ["--preferred-object", f"{fire_type}:{object_id}"]
+            )
+        for fire_type, position in sorted(preferred_cameras.items()):
+            command_parts.extend(
+                [
+                    "--preferred-camera",
+                    f"{fire_type}:{position[0]},{position[1]},{position[2]}",
+                ]
+            )
+        for fire_type, position in sorted(preferred_view_targets.items()):
+            command_parts.extend(
+                [
+                    "--preferred-view-target",
+                    f"{fire_type}:{position[0]},{position[1]},{position[2]}",
+                ]
+            )
+        command = " ".join(command_parts)
         (output_root / "README.md").write_text(
             "# FireWorld staged-spread paper gallery\n\n"
             "Each numbered directory contains fixed-camera early, middle and "
@@ -1334,12 +1658,60 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--render-scale", type=float, default=1.0)
     parser.add_argument("--preview-steps", type=int, default=10)
     parser.add_argument("--preview-scale", type=float, default=0.25)
+    parser.add_argument(
+        "--smoke-density",
+        type=float,
+        default=0.6,
+        help="volumetric smoke density multiplier (lower preserves texture)",
+    )
+    parser.add_argument(
+        "--smoke-noise-strength",
+        type=float,
+        default=0.24,
+        help="procedural smoke texture strength used by final renders",
+    )
+    parser.add_argument("--flame-noise-strength", type=float, default=0.75)
+    parser.add_argument("--flame-edge-break", type=float, default=1.05)
+    parser.add_argument("--flame-color-jitter", type=float, default=0.32)
+    parser.add_argument("--flame-glow-ksize", type=int, default=21)
+    parser.add_argument("--flame-glow-gain", type=float, default=0.18)
+    parser.add_argument("--flame-surface-reveal", type=float, default=0.13)
+    parser.add_argument(
+        "--flame-highlight-compression", type=float, default=1.0
+    )
     parser.add_argument("--lidar-resolution", type=int, default=320)
     parser.add_argument(
         "--scenario",
         action="append",
         type=parse_scenario,
         help="override with FIRE_TYPE:SCENE_ID:PLAN_ID; pass exactly four times",
+    )
+    parser.add_argument(
+        "--preferred-source",
+        action="append",
+        type=parse_preferred_source,
+        help="prefer FIRE_TYPE:CATEGORY while selecting a camera viewpoint",
+    )
+    parser.add_argument(
+        "--preferred-object",
+        action="append",
+        type=parse_preferred_object,
+        help="prefer the exact FIRE_TYPE:OBJECT_ID semantic ignition",
+    )
+    parser.add_argument(
+        "--preferred-camera",
+        action="append",
+        type=parse_preferred_camera,
+        help="use exact FIRE_TYPE:X,Y,Z camera position and face its source",
+    )
+    parser.add_argument(
+        "--preferred-view-target",
+        action="append",
+        type=parse_preferred_camera,
+        help=(
+            "use exact FIRE_TYPE:X,Y,Z look-at target independently of the "
+            "selected ignition source"
+        ),
     )
     args = parser.parse_args(argv)
     if args.n_steps < 32:
@@ -1348,6 +1720,24 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         parser.error("--render-scale must be in [0.05, 1.0]")
     if args.preview_steps < 2:
         parser.error("--preview-steps must be at least 2")
+    if not 0.0 <= args.smoke_density <= 2.0:
+        parser.error("--smoke-density must be in [0, 2]")
+    if not 0.0 <= args.smoke_noise_strength <= 1.0:
+        parser.error("--smoke-noise-strength must be in [0, 1]")
+    if not 0.0 <= args.flame_noise_strength <= 1.5:
+        parser.error("--flame-noise-strength must be in [0, 1.5]")
+    if not 0.0 <= args.flame_edge_break <= 1.5:
+        parser.error("--flame-edge-break must be in [0, 1.5]")
+    if not 0.0 <= args.flame_color_jitter <= 1.0:
+        parser.error("--flame-color-jitter must be in [0, 1]")
+    if args.flame_glow_ksize < 3:
+        parser.error("--flame-glow-ksize must be at least 3")
+    if not 0.0 <= args.flame_glow_gain <= 1.0:
+        parser.error("--flame-glow-gain must be in [0, 1]")
+    if not 0.0 <= args.flame_surface_reveal <= 0.75:
+        parser.error("--flame-surface-reveal must be in [0, 0.75]")
+    if args.flame_highlight_compression < 0.0:
+        parser.error("--flame-highlight-compression must be non-negative")
     return args
 
 

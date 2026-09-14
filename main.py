@@ -599,7 +599,20 @@ def main(args, send_queue, receive_queue):
                         # perception chain as chair/bed/etc. Projecting the
                         # known goal position into thermal created an oracle
                         # person:0.95 box even when a wall occluded the model.
-                        walker=(None if static_person_goal else walker),
+                        walker=(
+                            walker
+                            if (
+                                not static_person_goal
+                                or bool(
+                                    int(getattr(
+                                        args,
+                                        "fire_render_static_person_thermal",
+                                        0,
+                                    ))
+                                )
+                            )
+                            else None
+                        ),
                         t_sim_s=shared_risk_t,
                     )
                     fire_sensor_outputs[i] = sensors

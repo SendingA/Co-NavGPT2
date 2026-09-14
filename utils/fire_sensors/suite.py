@@ -302,6 +302,15 @@ class FireSensorSuite:
 
         cv2.imwrite(os.path.join(sub, f"{tag}_thermal.png"),
                     outputs["thermal_image"])
+        thermal_human_mask = outputs.get("thermal_human_mask")
+        if thermal_human_mask is not None:
+            human_mask_image = (
+                np.asarray(thermal_human_mask, dtype=np.float32) > 0.5
+            ).astype(np.uint8) * 255
+            cv2.imwrite(
+                os.path.join(sub, f"{tag}_thermal_human_mask.png"),
+                human_mask_image,
+            )
         cv2.imwrite(os.path.join(sub, f"{tag}_lidar_bev.png"),
                     outputs["lidar_image"])
         cv2.imwrite(os.path.join(sub, f"{tag}_radar_bev.png"),
@@ -317,16 +326,24 @@ class FireSensorSuite:
             )
 
         if self.cfg.save_npz:
+            arrays = {
+                "rgb": outputs["rgb"],
+                "rgb_smoke": outputs["rgb_smoke"],
+                "depth_clean": d_clean,
+                "depth_smoke": d_smoke,
+                "lidar_points": outputs["lidar_points"],
+                "radar_heatmap": outputs["radar_heatmap"],
+                "radar_points": outputs["radar_points"],
+                "radar_points_3d": outputs["radar_points_3d"],
+                "thermal_temperature": outputs["thermal_temperature"],
+                "thermal_flame_mask": outputs["thermal_flame_mask"],
+            }
+            if thermal_human_mask is not None:
+                arrays["thermal_human_mask"] = np.asarray(
+                    thermal_human_mask,
+                    dtype=np.float32,
+                )
             np.savez_compressed(
                 os.path.join(sub, f"{tag}_arrays.npz"),
-                rgb=outputs["rgb"],
-                rgb_smoke=outputs["rgb_smoke"],
-                depth_clean=d_clean,
-                depth_smoke=d_smoke,
-                lidar_points=outputs["lidar_points"],
-                radar_heatmap=outputs["radar_heatmap"],
-                radar_points=outputs["radar_points"],
-                radar_points_3d=outputs["radar_points_3d"],
-                thermal_temperature=outputs["thermal_temperature"],
-                thermal_flame_mask=outputs["thermal_flame_mask"],
+                **arrays,
             )

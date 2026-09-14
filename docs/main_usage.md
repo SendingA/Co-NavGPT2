@@ -95,6 +95,7 @@ python scripts/keyboard_teleop_fire.py --task-config configs/multi_objectnav_hm3
 | `--fire_dump_dir` | str, `./outputs/fire_sensors` | 每步传感器图像输出目录 |
 | `--fire_save_every` | int, `1` | 每 N 步保存一次（`1` 每步都存，`0` 完全关闭传感器帧落盘） |
 | `--fire_save_npz` | int, `0` | `1` 同时 dump 原始 numpy `.npz` |
+| `--fire_render_static_person_thermal` | int, `0` | `1` 在固定 PersonNav 人物真实进入相机且通过 depth silhouette/遮挡检查时，将其加入 thermal 图像并保存 `thermal_human_mask`；默认关闭，不改变正式 PersonNav benchmark |
 | `--fire_show_window` | int, `0` | `1` 打开 OpenCV 2x4 实时仪表盘 |
 | `--lidar_360` | int, `0` | `1` 给每个 agent 安装 4 个偏航深度相机（前/左/后/右），由 LIDAR 模块拼接 360° 点云（仅在 `--fire_world=1` 时生效） |
 | `--lidar_resolution` | int, `320` | 每片深度图分辨率（HxW，越小越快） |

@@ -5,6 +5,20 @@ multi-robot ObjectNav, VLM frontier assignment, FireWorld generation and
 rendering, thermal/radar/LIDAR sensing, static-person ObjectNav, and dynamic
 risk-aware navigation.
 
+## Paper status and project resources
+
+**Submission status:** This work has been submitted anonymously to
+**ACM MobiCom 2027**.
+
+- **Project website:** [firenav.github.io](https://firenav.github.io/)
+- **Datasets and embodied assets:** [Download from Google Drive](https://drive.google.com/drive/folders/1CXMR67kMRdj6dJoohCUBJ_WgjwU3BPbQ)
+- **Scene inventories and fire plans:** Available under [`scenes/`](scenes/),
+  organized by scene ID. Inventories are stored in
+  `scenes/<scene_id>/inventory.json`, and fire plans in
+  `scenes/<scene_id>/plans/<plan_id>.json`. See
+  [Reproducing FireWorld](#9-reproducing-fireworld) for the file layout and
+  generation workflow.
+
 The commands assume Linux x86-64, a Bash-compatible shell, and that they are
 run from the repository root unless stated otherwise.
 
@@ -218,6 +232,11 @@ sha256sum mobile_sam.pt yolov8l-world.pt
 the current VULCAN navigation path.
 
 ## 5. HM3D scenes and ObjectNav episodes
+
+The project's datasets and embodied assets are available in the
+[Google Drive resource folder](https://drive.google.com/drive/folders/1CXMR67kMRdj6dJoohCUBJ_WgjwU3BPbQ).
+The following sections describe the local scene, episode and embodied-asset
+setup used by this repository.
 
 HM3D is license-controlled and is not distributed by this repository. Follow
 the Habitat HM3D download instructions and place the v0.2 assets under
@@ -434,6 +453,29 @@ HM3D semantic scene
   -> scenes/<scene>/plans/<plan_id>.json
   -> outputs/fire_world/<scene>/<plan_id>/timeline.npz
 ```
+
+### Inventory and fire-plan locations
+
+Scene metadata and fire-plan definitions are organized under [`scenes/`](scenes/).
+Here, `<scene_id>` is the short HM3D scene ID, such as `Nfvxx8J5NCo`.
+
+| Resource | Location | Contents |
+| --- | --- | --- |
+| Semantic inventory | `scenes/<scene_id>/inventory.json` | Semantic instances, categories, object geometry, region/floor associations, and material properties such as flammability and smoke yield. |
+| Structural masks | `scenes/<scene_id>/structural/` | `walls.npy`, `floors.npy`, and `ceilings.npy`, referenced by the inventory. |
+| Fire plans | `scenes/<scene_id>/plans/<plan_id>.json` | Initial ignitions, source parameters, fire template, intensity, random seed, duration, and propagation rules. |
+| Baked fire timeline | `outputs/fire_world/<scene_id>/<plan_id>/timeline.npz` | Time-indexed flame, smoke, and temperature fields generated from an inventory and a plan. |
+
+For a concrete example, see the
+[`Nfvxx8J5NCo` inventory](scenes/Nfvxx8J5NCo/inventory.json) and its
+[fire-plan directory](scenes/Nfvxx8J5NCo/plans/), including the
+[medium multi-origin plan](scenes/Nfvxx8J5NCo/plans/Nfvxx8J5NCo_multi_origin_medium_24e63421b9fa.json).
+The four template names are `kitchen_grease_fire`, `bedroom_textile`,
+`living_room_electric`, and `multi_origin`.
+
+Inventories and plans are JSON inputs; `timeline.npz` is the baked simulation
+output consumed at runtime. After changing an inventory, a plan, or the
+propagation solver, regenerate the corresponding timeline before using it.
 
 ### 9.1 Build the semantic inventory
 

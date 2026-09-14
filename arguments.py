@@ -311,6 +311,17 @@ def get_args() -> argparse.Namespace:
     )
     parser.add_argument("--fire_save_npz", type=int, default=0)
     parser.add_argument("--fire_show_window", type=int, default=0)
+    parser.add_argument(
+        "--fire_render_static_person_thermal",
+        type=int,
+        default=0,
+        help=(
+            "1: include the fixed PersonNav humanoid in thermal fire-sensor "
+            "outputs. The existing depth-silhouette gate rejects off-screen "
+            "or occluded targets. Disabled by default so standard PersonNav "
+            "runs retain their current RGB-only target perception."
+        ),
+    )
     parser.add_argument("--lidar_360", type=int, default=0)
     parser.add_argument("--lidar_resolution", type=int, default=320)
 
