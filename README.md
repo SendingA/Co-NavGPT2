@@ -1,9 +1,9 @@
-# Reproducing the VULCAN Branch
+# FireNav: A Physics-Grounded Benchmark for Cooperative Multi-Agent Navigation in Dynamic Indoor Fire Environments
 
-This guide reproduces the current `vulcan` branch of Co-NavGPT2: Habitat 3
-multi-robot ObjectNav, VLM frontier assignment, FireWorld generation and
-rendering, thermal/radar/LIDAR sensing, static-person ObjectNav, and dynamic
-risk-aware navigation.
+This repository provides the implementation and reproduction guide for
+**FireNav**. It includes Habitat 3 multi-robot ObjectNav, VLM frontier
+assignment, FireWorld generation and rendering, thermal/radar/LIDAR sensing,
+static-person ObjectNav, and dynamic risk-aware navigation.
 
 ## Paper status and project resources
 
@@ -32,8 +32,9 @@ git rev-parse HEAD
 git status --short
 ```
 
-The branch must be `vulcan`. A commit hash identifies only committed files;
-uncommitted changes and generated `outputs/` are not reproducible from Git.
+Use the branch selected by the clone command below. A commit hash identifies
+only committed files; uncommitted changes and generated `outputs/` are not
+reproducible from Git.
 Commit or archive the final experiment state before publishing results.
 
 The validated software baseline is:
@@ -45,7 +46,7 @@ The validated software baseline is:
 | torchvision | 0.15.2 + CUDA 11.8 |
 | torchaudio | 2.0.2 + CUDA 11.8 |
 | Habitat-Sim | 0.3.3, Bullet build |
-| Habitat-Lab | tag `v0.3.3`, commit `094d6be2f9d057e4781a68ae792132895fd4d3d0`, plus the VULCAN patch below |
+| Habitat-Lab | tag `v0.3.3`, commit `094d6be2f9d057e4781a68ae792132895fd4d3d0`, plus the FireNav patch below |
 | NumPy | 1.26.4 |
 | OpenCV | 4.10.0 |
 | Open3D | 0.19.0 |
@@ -67,7 +68,7 @@ but not for a full `main.py` episode without code changes.
 
 For a pinned CUDA 11.8/Habitat 0.3.3 image, use the Docker workflow in
 [`docs/docker_reproduction.md`](docs/docker_reproduction.md). The image applies
-the required VULCAN Habitat patch automatically. Licensed HM3D assets, model
+the required FireNav Habitat patch automatically. Licensed HM3D assets, model
 weights, API keys and generated outputs remain host-mounted rather than being
 embedded in the image.
 
@@ -84,7 +85,7 @@ git rev-parse HEAD
 For a paper artifact, replace the moving branch with the published commit:
 
 ```bash
-git checkout <VULCAN_COMMIT>
+git checkout <FIRENAV_COMMIT>
 ```
 
 ## 3. System and Conda environment
@@ -229,7 +230,7 @@ sha256sum mobile_sam.pt yolov8l-world.pt
 ```
 
 `weights/clip/ViT-B-32.pt` is a historical local artifact and is not read by
-the current VULCAN navigation path.
+the current FireNav navigation path.
 
 ## 5. HM3D scenes and ObjectNav episodes
 
@@ -250,7 +251,7 @@ python -m habitat_sim.utils.datasets_download \
     --data-path data/
 ```
 
-The full VULCAN evaluation requires the HM3D v0.2 scenes used by the selected
+The full FireNav evaluation requires the HM3D v0.2 scenes used by the selected
 ObjectNav split and the ObjectNav HM3D v2 episode files. The expected layout
 is:
 
@@ -276,7 +277,7 @@ data/
             └── content/*.json.gz
 ```
 
-Check the canonical VULCAN scene:
+Check the canonical FireNav scene:
 
 ```bash
 test -f \
@@ -314,7 +315,7 @@ All first-party task configurations under `configs/` are listed below.
 | `configs/multi_objectnav_hm3d.yaml` | Current, required | Habitat 0.3.3 Hydra configuration for multi-agent HM3D ObjectNav. Defines RGB-D sensors, `Sim-v0`, 0.25 m forward steps, 30-degree turns, 0.2 m Success distance, and the `conav` humanoid/robot settings. |
 | `configs/person_objectnav_hm3d.yaml` | Current, optional | Extends the multi-agent config with the generated static-person dataset and `static_person_goal=True`. |
 | `configs/objectnav_hm3d.yaml` | Legacy reference | Habitat 0.2.1 YACS syntax. Do not pass it to the current Hydra `load_config()` path. |
-| `configs/objectnav_gibson.yaml` | Legacy reference | Old Gibson/YACS configuration; not validated with the Habitat 0.3.3 VULCAN runtime. |
+| `configs/objectnav_gibson.yaml` | Legacy reference | Old Gibson/YACS configuration; not validated with the Habitat 0.3.3 FireNav runtime. |
 | `configs/human.yaml` | Legacy reference | Old two-agent YACS configuration; superseded by `multi_objectnav_hm3d.yaml` plus `--num_humans`. |
 
 `arguments.py` applies CLI overrides after Hydra composition. The most
@@ -825,7 +826,7 @@ aggregate metric.
 
 ### `AssertionError: No action 4/5 in action space`
 
-The VULCAN Habitat patch was not applied, or Python imported another Habitat
+The FireNav Habitat patch was not applied, or Python imported another Habitat
 checkout. Repeat Section 3.1 and print `habitat.__file__`.
 
 ### `main.py` returns one observation dict instead of one dict per robot
