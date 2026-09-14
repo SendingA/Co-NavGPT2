@@ -32,7 +32,7 @@ git rev-parse HEAD
 git status --short
 ```
 
-Use the branch selected by the clone command below. A commit hash identifies
+Use the repository checkout described below. A commit hash identifies
 only committed files; uncommitted changes and generated `outputs/` are not
 reproducible from Git.
 Commit or archive the final experiment state before publishing results.
@@ -74,10 +74,9 @@ embedded in the image.
 
 ## 2. Clone and pin the project
 
-```bash
-git clone --branch vulcan https://github.com/SendingA/Co-NavGPT2.git
-cd Co-NavGPT2
+Clone this repository and open a shell in its root directory.
 
+```bash
 PROJECT_ROOT="$PWD"
 git rev-parse HEAD
 ```
@@ -102,8 +101,8 @@ sudo apt-get install -y \
 Create the environment:
 
 ```bash
-conda create -n co-nav3 python=3.9 cmake=3.14.0 -y
-conda activate co-nav3
+conda create -n firenav python=3.9 cmake=3.14.0 -y
+conda activate firenav
 
 conda install -y \
     pytorch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 \
@@ -151,7 +150,7 @@ git clone https://github.com/facebookresearch/habitat-lab.git \
 git -C "$HABITAT_LAB_ROOT" checkout \
     094d6be2f9d057e4781a68ae792132895fd4d3d0
 git -C "$HABITAT_LAB_ROOT" apply \
-    "$PROJECT_ROOT/ref/habitat_lab_0.3.3_vulcan.patch"
+    "$PROJECT_ROOT"/ref/habitat_lab_0.3.3_*.patch
 
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-lab"
 python -m pip install -e "$HABITAT_LAB_ROOT/habitat-baselines"
@@ -200,7 +199,7 @@ a6a600277efacf5fd98e293267221185d843eb3012aeff62fabfeee24c2bcdad
 The navigation agent loads both files from the repository root:
 
 ```text
-Co-NavGPT2/
+FireNav/
 ├── mobile_sam.pt
 └── yolov8l-world.pt
 ```
@@ -312,7 +311,7 @@ All first-party task configurations under `configs/` are listed below.
 
 | File | Status | Purpose |
 | --- | --- | --- |
-| `configs/multi_objectnav_hm3d.yaml` | Current, required | Habitat 0.3.3 Hydra configuration for multi-agent HM3D ObjectNav. Defines RGB-D sensors, `Sim-v0`, 0.25 m forward steps, 30-degree turns, 0.2 m Success distance, and the `conav` humanoid/robot settings. |
+| `configs/multi_objectnav_hm3d.yaml` | Current, required | Habitat 0.3.3 Hydra configuration for multi-agent HM3D ObjectNav. Defines RGB-D sensors, `Sim-v0`, 0.25 m forward steps, 30-degree turns, 0.2 m Success distance, and humanoid/robot settings. |
 | `configs/person_objectnav_hm3d.yaml` | Current, optional | Extends the multi-agent config with the generated static-person dataset and `static_person_goal=True`. |
 | `configs/objectnav_hm3d.yaml` | Legacy reference | Habitat 0.2.1 YACS syntax. Do not pass it to the current Hydra `load_config()` path. |
 | `configs/objectnav_gibson.yaml` | Legacy reference | Old Gibson/YACS configuration; not validated with the Habitat 0.3.3 FireNav runtime. |
@@ -345,7 +344,7 @@ Run the CPU-capable repository suite before launching Habitat:
 
 ```bash
 PYTHONDONTWRITEBYTECODE=1 \
-MPLCONFIGDIR=/tmp/conav-matplotlib \
+MPLCONFIGDIR=/tmp/firenav-matplotlib \
 python -m unittest discover -s tests -v
 ```
 
@@ -366,7 +365,7 @@ python main.py \
     --num_agents 1 --num_humans 0 \
     --nav_mode nearest \
     --fire_world 0 \
-    --dump_location /tmp/conav-clean-smoke
+    --dump_location /tmp/firenav-clean-smoke
 ```
 
 ## 8. Reproducing navigation experiments
@@ -428,11 +427,11 @@ all global planners with FMM fixed and all benchmark-ready local planners
 with `co_ut` fixed:
 
 ```bash
-/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+python \
     scripts/run_baseline_benchmarks.py --episodes 200 --dry-run
 
 export OPENAI_API_KEY="<YOUR_KEY>"
-/home/liushe10/miniconda3/envs/co-nav3/bin/python \
+python \
     scripts/run_baseline_benchmarks.py \
     --episodes 200 --study-id normal_primary_200ep
 ```
@@ -880,7 +879,7 @@ Useful capture commands:
 git rev-parse HEAD
 git status --short
 git -C "$HABITAT_LAB_ROOT" rev-parse HEAD
-sha256sum ref/habitat_lab_0.3.3_vulcan.patch
+sha256sum ref/habitat_lab_0.3.3_*.patch
 conda env export --no-builds > outputs/conda_environment.yml
 python -m pip freeze > outputs/pip_freeze.txt
 ```
