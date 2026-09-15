@@ -45,6 +45,7 @@ weights/
 .idea/
 .agents/
 .codex/
+[Aa][Gg][Ee][Nn][Tt][Ss].[Mm][Dd]
 *.key
 *.pem
 id_rsa*

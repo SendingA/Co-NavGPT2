@@ -35,3 +35,25 @@ embedded in the source.
 Generated experiment manifests and logs can contain resolved filesystem paths
 and runtime configuration. Review them separately before sharing; the source
 snapshot excludes them.
+
+## Dataset archive
+
+After cleaning the local dataset, package its runtime contents with:
+
+```bash
+python scripts/package_anonymous_dataset.py \
+  --data-dir data \
+  --output outputs/clean_dataset_release/FireNav-data-clean.zip
+```
+
+The command creates a ZIP64 archive and a per-file SHA-256 manifest. It omits
+Git metadata and local download installation lists, uses relative archive names
+and fixed timestamps, and materializes valid internal asset aliases as ordinary
+files. External, broken or cyclic aliases cause the command to fail. The output
+must be outside the dataset and must not already exist.
+
+Extract the archive into the project root to obtain `data/`. The packager
+preserves file contents; it does not scrub arbitrary new identifiers embedded
+in future datasets, so audit each new release. Publishing the archive does not
+change the ownership information exposed by a hosting account or remove old
+files already shared online.
